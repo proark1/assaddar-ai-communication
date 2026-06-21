@@ -160,3 +160,5 @@ GitHub Actions runs `pnpm test`, `pnpm typecheck`, and `pnpm build` on pushes to
 - OpenAI integration is represented through provider interfaces and environment variables, but the local MVP does not require an API key.
 
 See [docs/architecture.md](docs/architecture.md), [docs/api.md](docs/api.md), [docs/security-gdpr.md](docs/security-gdpr.md), [docs/integrations.md](docs/integrations.md), and [docs/supabase.md](docs/supabase.md).
+
+Deployment setup is documented in [docs/deployment.md](docs/deployment.md).

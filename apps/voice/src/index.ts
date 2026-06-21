@@ -1,5 +1,9 @@
 import { config } from "dotenv";
-import { createTwiMLGather, createTwiMLSay, TwilioVoiceAdapter } from "@assaddar/channels";
+import {
+  createTwiMLGather,
+  createTwiMLSay,
+  TwilioVoiceAdapter,
+} from "@assaddar/channels";
 import { createAnswerEngine, InboundMessageSchema } from "@assaddar/core";
 import { createDbClient, TenantRepository } from "@assaddar/db";
 import formBody from "@fastify/formbody";
@@ -9,15 +13,15 @@ import { z } from "zod";
 config({ path: new URL("../../../.env", import.meta.url) });
 
 const VoiceQuerySchema = z.object({
-  assistantId: z.string().min(8)
+  assistantId: z.string().min(8),
 });
 
-const port = Number(process.env.VOICE_PORT ?? 4100);
+const port = Number(process.env.VOICE_PORT ?? process.env.PORT ?? 4100);
 const client = createDbClient();
 const store = new TenantRepository(client.db);
 const engine = createAnswerEngine({
   dataStore: store,
-  handoffStore: store
+  handoffStore: store,
 });
 const adapter = new TwilioVoiceAdapter();
 const app = Fastify({ logger: true });
@@ -26,7 +30,7 @@ await app.register(formBody);
 
 app.get("/health", async () => ({
   ok: true,
-  service: "assaddar-ai-communication-voice"
+  service: "assaddar-ai-communication-voice",
 }));
 
 app.post("/twilio/voice", async (request, reply) => {
@@ -34,27 +38,41 @@ app.post("/twilio/voice", async (request, reply) => {
   if (!query.success) {
     return reply
       .type("text/xml")
-      .send(createTwiMLSay("This assistant is not configured. Please contact the business directly."));
+      .send(
+        createTwiMLSay(
+          "This assistant is not configured. Please contact the business directly.",
+        ),
+      );
   }
 
   const tenant = await store.getTenantByPublicId(query.data.assistantId);
   if (!tenant) {
     return reply
       .type("text/xml")
-      .send(createTwiMLSay("This assistant is not available. Please contact the business directly."));
+      .send(
+        createTwiMLSay(
+          "This assistant is not available. Please contact the business directly.",
+        ),
+      );
   }
 
   const [event] = adapter.normalizeInbound(request.body, tenant.id);
   if (!event) {
     return reply
       .type("text/xml")
-      .send(createTwiMLGather("Hello. Please tell me how I can help with this business."));
+      .send(
+        createTwiMLGather(
+          "Hello. Please tell me how I can help with this business.",
+        ),
+      );
   }
 
-  const conversationInput: Parameters<TenantRepository["findOrCreateConversation"]>[0] = {
+  const conversationInput: Parameters<
+    TenantRepository["findOrCreateConversation"]
+  >[0] = {
     tenantId: tenant.id,
     channel: "telephone",
-    locale: tenant.defaultLocale
+    locale: tenant.defaultLocale,
   };
   if (event.externalConversationId) {
     conversationInput.publicConversationId = event.externalConversationId;
@@ -71,7 +89,7 @@ app.post("/twilio/voice", async (request, reply) => {
     channel: "telephone",
     direction: "inbound",
     role: "user",
-    content: event.text
+    content: event.text,
   });
 
   const answer = await engine.answer(
@@ -83,9 +101,9 @@ app.post("/twilio/voice", async (request, reply) => {
       text: event.text,
       locale: tenant.defaultLocale,
       metadata: {
-        provider: "twilio"
-      }
-    })
+        provider: "twilio",
+      },
+    }),
   );
 
   await store.addMessage({
@@ -95,7 +113,7 @@ app.post("/twilio/voice", async (request, reply) => {
     direction: "outbound",
     role: "assistant",
     content: answer.text,
-    trace: { answer }
+    trace: { answer },
   });
 
   await store.logUsage({
@@ -105,8 +123,8 @@ app.post("/twilio/voice", async (request, reply) => {
     credits: answer.usage.estimatedCredits,
     metadata: {
       intent: answer.intent,
-      confidence: answer.confidence
-    }
+      confidence: answer.confidence,
+    },
   });
 
   return reply.type("text/xml").send(createTwiMLSay(answer.text));
@@ -114,7 +132,9 @@ app.post("/twilio/voice", async (request, reply) => {
 
 app.setErrorHandler(async (error, request, reply) => {
   request.log.error(error);
-  return reply.type("text/xml").send(createTwiMLSay("I cannot answer right now. Please try again later."));
+  return reply
+    .type("text/xml")
+    .send(createTwiMLSay("I cannot answer right now. Please try again later."));
 });
 
 process.on("SIGTERM", async () => {
@@ -124,5 +144,5 @@ process.on("SIGTERM", async () => {
 
 await app.listen({
   host: "0.0.0.0",
-  port
+  port,
 });
