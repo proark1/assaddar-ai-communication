@@ -1,4 +1,7 @@
 import postgres from "postgres";
+import { loadRootEnv } from "./load-env";
+
+loadRootEnv();
 
 async function main() {
   const connectionString = process.env.DATABASE_URL;

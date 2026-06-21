@@ -1,5 +1,8 @@
+import { config } from "dotenv";
 import { Worker } from "bullmq";
 import { jobSchemas, type WorkerJobName } from "./jobs";
+
+config({ path: new URL("../../../.env", import.meta.url) });
 
 const redisUrl = process.env.REDIS_URL ?? "redis://localhost:6379";
 const parsedRedisUrl = new URL(redisUrl);

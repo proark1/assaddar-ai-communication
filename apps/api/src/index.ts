@@ -1,6 +1,9 @@
+import { config } from "dotenv";
 import { createDbClient, TenantRepository } from "@assaddar/db";
 import { loadEnv } from "./env";
 import { buildServer, type BuildServerOptions } from "./server";
+
+config({ path: new URL("../../../.env", import.meta.url) });
 
 async function main() {
   const env = loadEnv();

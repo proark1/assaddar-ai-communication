@@ -1,9 +1,12 @@
+import { config } from "dotenv";
 import { createTwiMLGather, createTwiMLSay, TwilioVoiceAdapter } from "@assaddar/channels";
 import { createAnswerEngine, InboundMessageSchema } from "@assaddar/core";
 import { createDbClient, TenantRepository } from "@assaddar/db";
 import formBody from "@fastify/formbody";
 import Fastify from "fastify";
 import { z } from "zod";
+
+config({ path: new URL("../../../.env", import.meta.url) });
 
 const VoiceQuerySchema = z.object({
   assistantId: z.string().min(8)

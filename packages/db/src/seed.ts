@@ -1,4 +1,7 @@
 import { createDbClient } from "./client";
+import { loadRootEnv } from "./load-env";
+
+loadRootEnv();
 import { TenantRepository } from "./repository";
 
 async function main() {
