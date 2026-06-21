@@ -10,6 +10,8 @@ const requestTimeoutMs = Number(process.env.SMOKE_REQUEST_TIMEOUT_MS ?? 10_000);
 const tenantSlug = process.env.SMOKE_TENANT_SLUG ?? "demo-business";
 const smokeMessage = process.env.SMOKE_MESSAGE ?? "When are you open?";
 
+class SmokeError extends Error {}
+
 await loadDotenvIfPresent();
 
 const apiBaseUrl = normalizeBaseUrl(
@@ -232,5 +234,3 @@ function waitForExit(childProcess) {
     setTimeout(resolve, 3_000);
   });
 }
-
-class SmokeError extends Error {}
