@@ -61,6 +61,38 @@ describe("AnswerEngine", () => {
     expect(result.citations).toHaveLength(1);
   });
 
+  it("answers German AI consultancy questions from approved tenant knowledge", async () => {
+    const engine = createAnswerEngine({
+      dataStore: new MemoryAnswerStore(
+        {
+          [tenantA]: {
+            ...createDefaultTenantPolicy(tenantA),
+            defaultLocale: "de"
+          }
+        },
+        [
+          faqChunk(
+            tenantA,
+            "Was ist die ASDAR Method?",
+            "Die ASDAR Method ist ein strukturierter Ansatz: Analysieren, Strukturieren, Digitalisieren, Automatisieren und Realisieren."
+          )
+        ]
+      )
+    });
+
+    const result = await engine.answer({
+      tenantId: tenantA,
+      channel: "website",
+      text: "Was ist die ASDAR Method?",
+      locale: "de",
+      metadata: {}
+    });
+
+    expect(result.status).toBe("answered");
+    expect(result.text).toContain("Analysieren");
+    expect(result.citations).toHaveLength(1);
+  });
+
   it("refuses unknown business questions", async () => {
     const engine = createAnswerEngine({
       dataStore: new MemoryAnswerStore(

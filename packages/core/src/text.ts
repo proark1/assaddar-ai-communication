@@ -28,17 +28,83 @@ const STOP_WORDS = new Set([
   "your"
 ]);
 
+const GERMAN_STOP_WORDS = [
+  "aber",
+  "als",
+  "am",
+  "an",
+  "auch",
+  "auf",
+  "aus",
+  "bei",
+  "bin",
+  "bis",
+  "das",
+  "dem",
+  "den",
+  "der",
+  "des",
+  "die",
+  "ein",
+  "eine",
+  "einen",
+  "einer",
+  "eines",
+  "er",
+  "es",
+  "fur",
+  "fuer",
+  "hat",
+  "ich",
+  "im",
+  "in",
+  "ist",
+  "mit",
+  "oder",
+  "sie",
+  "sind",
+  "und",
+  "vom",
+  "von",
+  "warum",
+  "was",
+  "welche",
+  "welchem",
+  "welchen",
+  "welcher",
+  "welches",
+  "wer",
+  "wie",
+  "wir",
+  "wo",
+  "zu"
+];
+
+for (const word of GERMAN_STOP_WORDS) {
+  STOP_WORDS.add(word);
+}
+
 export function normalizeText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
 export function tokenize(value: string): string[] {
-  return normalizeText(value)
+  return normalizeForTokenization(value)
     .toLowerCase()
     .replace(/['’]/g, "")
     .split(/[^a-z0-9]+/i)
     .map(stemToken)
     .filter((token) => token.length > 1 && !STOP_WORDS.has(token));
+}
+
+function normalizeForTokenization(value: string): string {
+  return normalizeText(value)
+    .replace(/[äÄ]/g, "ae")
+    .replace(/[öÖ]/g, "oe")
+    .replace(/[üÜ]/g, "ue")
+    .replace(/ß/g, "ss")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "");
 }
 
 export function containsPhrase(haystack: string, phrases: string[]): string | null {

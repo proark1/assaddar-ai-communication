@@ -39,6 +39,8 @@ type TestAnswer = {
 };
 
 const defaultApiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:4000";
+const defaultWidgetUrl =
+  process.env.NEXT_PUBLIC_WIDGET_URL ?? "https://assaddar-widget-production.up.railway.app/widget.js";
 
 export default function DashboardPage() {
   const [apiBase, setApiBase] = useState(defaultApiBase);
@@ -61,7 +63,7 @@ export default function DashboardPage() {
   );
 
   const embedSnippet = selectedTenant
-    ? `<script src="https://chat.example.com/widget.js" data-assistant-id="${selectedTenant.publicId}" async></script>`
+    ? `<script src="${defaultWidgetUrl}" data-assistant-id="${selectedTenant.publicId}" data-api-url="${apiBase}" async></script>`
     : "";
 
   useEffect(() => {
