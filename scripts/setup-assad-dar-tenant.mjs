@@ -27,49 +27,49 @@ const faqs = [
   {
     question: "Was macht Assad Dar?",
     answer:
-      "Assad Dar hilft Unternehmen, sinnvolle KI- und Automatisierungspotenziale zu erkennen, zu priorisieren und umzusetzen. Der Fokus liegt auf weniger manueller Arbeit, besseren Prozessen, nutzbaren Daten und pragmatischen Ergebnissen im Arbeitsalltag.",
+      "Assad Dar hilft Unternehmen, sinnvolle KI- und Automatisierungspotenziale zu erkennen, zu priorisieren und umzusetzen. Der Fokus liegt auf weniger manueller Arbeit, besseren Prozessen, nutzbaren Daten und pragmatischen Ergebnissen im täglichen Arbeitsalltag.",
     tags: ["assad-dar", "consultancy", "de", "services"]
   },
   {
     question: "Was ist die ASDAR Method?",
     answer:
-      "Die ASDAR Method ist ein strukturierter Ansatz fuer KI- und Prozessvorhaben: Analysieren, Strukturieren, Digitalisieren, Automatisieren und Realisieren. Sie startet mit den bestehenden Ablaeufen und fuehrt zu einer konkreten Roadmap mit umsetzbaren Automatisierungsfaellen.",
+      "Die ASDAR Method ist ein strukturierter Ansatz für KI- und Prozessvorhaben: Analysieren, Strukturieren, Digitalisieren, Automatisieren und Realisieren. Sie startet mit den bestehenden Abläufen und führt zu einer konkreten Roadmap mit umsetzbaren Automatisierungsfällen.",
     tags: ["assad-dar", "consultancy", "de", "method"]
   },
   {
-    question: "Fuer wen ist das Angebot gedacht?",
+    question: "Für wen ist das Angebot gedacht?",
     answer:
-      "Das Angebot richtet sich an Unternehmen mit gewachsenen oder manuellen Prozessen, vielen E-Mails, Excel-Dateien, Dokumenten, wiederkehrenden Anfragen oder verteiltem Wissen. Es passt besonders fuer Mittelstand, regulierte Umfelder und Organisationen, die messbare Effizienz statt KI-Demos suchen.",
+      "Das Angebot richtet sich an Unternehmen mit gewachsenen oder manuellen Prozessen, vielen E-Mails, Excel-Dateien, Dokumenten, wiederkehrenden Anfragen oder verteiltem Wissen. Es passt besonders für Mittelstand, regulierte Umfelder und Organisationen, die messbare Effizienz statt KI-Demos suchen.",
     tags: ["assad-dar", "consultancy", "de", "audience"]
   },
   {
     question: "Welche Ergebnisse liefert eine ASDAR Analyse?",
     answer:
-      "Eine ASDAR Analyse liefert Klarheit ueber den Ist-Zustand, eine strukturierte Prozessuebersicht, eine digitale Grundlage fuer Daten und Dokumente, eine priorisierte Liste von Automatisierungsfaellen sowie eine Roadmap mit naechsten Umsetzungsschritten.",
+      "Eine ASDAR Analyse liefert Klarheit über den Ist-Zustand, eine strukturierte Prozessübersicht, eine digitale Grundlage für Daten und Dokumente, eine priorisierte Liste von Automatisierungsfällen sowie eine Roadmap mit nächsten Umsetzungsschritten.",
     tags: ["assad-dar", "consultancy", "de", "outcomes"]
   },
   {
-    question: "Welche Beispiele fuer KI und Automatisierung gibt es?",
+    question: "Welche Beispiele für KI und Automatisierung gibt es?",
     answer:
-      "Typische Beispiele sind Angebots- und Proposal-Prozesse, Rechnungsverarbeitung, Sortierung von Anfragen und E-Mails, Wochenreports, Wissens- und Onboarding-Assistenten, Vertrags- und AGB-Pruefungen sowie Recruiting-Vorsortierung.",
+      "Typische Beispiele sind Angebots- und Proposal-Prozesse, Rechnungsverarbeitung, Sortierung von Anfragen und E-Mails, Wochenreports, Wissens- und Onboarding-Assistenten, Vertrags- und AGB-Prüfungen sowie Recruiting-Vorsortierung.",
     tags: ["assad-dar", "consultancy", "de", "examples"]
   },
   {
     question: "Welche Erfahrung bringt Assad Dar mit?",
     answer:
-      "Assad Dar bringt 19 Jahre internationale Fuehrungserfahrung an der Schnittstelle von IT und Business mit. Seine Erfahrung umfasst Rollen als Digital Lead bei Bayer, Director Global Digital Transformation bei Bionorica sowie Gruendung und Fuehrung von OYA Play und MoonGaming. Er hat mehr als 14 Millionen US-Dollar Kapital eingeworben und verbindet Konzern-Disziplin, Mittelstands-Pragmatismus und Gruender-Mentalitaet.",
+      "Assad Dar bringt 19 Jahre internationale Führungserfahrung an der Schnittstelle von IT und Business mit. Seine Erfahrung umfasst Rollen als Digital Lead bei Bayer, Director Global Digital Transformation bei Bionorica sowie Gründung und Führung von OYA Play und MoonGaming. Er hat mehr als 14 Millionen US-Dollar Kapital eingeworben und verbindet Konzern-Disziplin, Mittelstands-Pragmatismus und Gründer-Mentalität.",
     tags: ["assad-dar", "consultancy", "de", "experience"]
   },
   {
-    question: "Welche Sprachen unterstuetzt Assad Dar?",
+    question: "Welche Sprachen unterstützt Assad Dar?",
     answer:
-      "Assad Dar arbeitet auf Deutsch und Englisch. Deutsch ist seine Muttersprache, Englisch spricht er fliessend.",
+      "Assad Dar arbeitet auf Deutsch und Englisch. Deutsch ist seine Muttersprache, Englisch spricht er fließend.",
     tags: ["assad-dar", "consultancy", "de", "languages"]
   },
   {
     question: "Wie kann ich Assad Dar kontaktieren?",
     answer:
-      "Interessenten koennen Assad Dar per E-Mail unter assad.dar@gmail.com kontaktieren oder ueber die Website einen Termin beziehungsweise ein Erstgespraech anfragen.",
+      "Interessenten können Assad Dar per E-Mail unter assad.dar@gmail.com kontaktieren oder über die Website einen Termin beziehungsweise ein Erstgespräch anfragen.",
     tags: ["assad-dar", "consultancy", "de", "contact"]
   },
   {
