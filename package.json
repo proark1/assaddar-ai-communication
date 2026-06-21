@@ -19,6 +19,7 @@
     "db:migrate": "pnpm --filter @assaddar/db migrate",
     "db:seed": "pnpm --filter @assaddar/db seed",
     "format": "prettier --write .",
+    "smoke:api": "node scripts/smoke-api.mjs",
     "test": "pnpm -r --if-present test",
     "typecheck": "pnpm -r --if-present typecheck"
   },

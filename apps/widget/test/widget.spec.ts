@@ -1,6 +1,16 @@
 import { expect, test } from "@playwright/test";
 
-test("widget renders inside a shadow root and sends a grounded message", async ({ page }) => {
+test("widget renders inside a shadow root and sends a grounded message", async ({
+  page,
+}) => {
+  const browserMessages: string[] = [];
+  page.on("console", (message) => {
+    browserMessages.push(`${message.type()}: ${message.text()}`);
+  });
+  page.on("pageerror", (error) => {
+    browserMessages.push(`pageerror: ${error.message}`);
+  });
+
   await page.route("**/widget/config/**", async (route) => {
     await route.fulfill({
       json: {
@@ -9,12 +19,12 @@ test("widget renders inside a shadow root and sends a grounded message", async (
         defaultLocale: "en",
         theme: {
           primaryColor: "#155eef",
-          openingMessage: "Hi from test"
+          openingMessage: "Hi from test",
         },
         limits: {
-          maxMessageLength: 1200
-        }
-      }
+          maxMessageLength: 1200,
+        },
+      },
     });
   });
 
@@ -24,25 +34,42 @@ test("widget renders inside a shadow root and sends a grounded message", async (
         conversationId: "conv_test",
         status: "answered",
         reply: "We are open from 09:00 to 18:00.",
-        handoffRecommended: false
-      }
+        handoffRecommended: false,
+      },
     });
   });
 
-  await page.goto("about:blank");
-  await page.addScriptTag({
-    url: "http://localhost:5174/src/widget.ts",
-    type: "module"
-  });
+  await page.goto("http://127.0.0.1:5174/__widget-test__");
+  await page.setContent("<!doctype html><html><body></body></html>");
 
-  await page.evaluate(() => {
-    const script = document.createElement("script");
-    script.src = "http://localhost:5174/src/widget.ts";
-    script.dataset.assistantId = "asst_test";
-    script.dataset.apiUrl = "http://localhost:4000";
-    document.body.appendChild(script);
+  const scriptLoaded = await page.evaluate(() => {
+    return new Promise((resolve) => {
+      const script = document.createElement("script");
+      script.src = "http://127.0.0.1:5174/src/widget.ts";
+      script.dataset.assistantId = "asst_test";
+      script.dataset.apiUrl = "http://127.0.0.1:5174";
+      script.onload = () => resolve(true);
+      script.onerror = () => resolve(false);
+      document.body.appendChild(script);
+    });
   });
+  expect(scriptLoaded, browserMessages.join("\n")).toBe(true);
 
   const root = page.locator('[data-assaddar-widget-root="asst_test"]');
-  await expect(root).toBeVisible();
+  await expect(root, browserMessages.join("\n")).toBeAttached();
+
+  await page.getByRole("button", { name: "Chat" }).click();
+  await expect(page.locator(".bubble.assistant").first()).toContainText(
+    "Hi from test",
+  );
+
+  await page.locator(".composer input").fill("When are you open?");
+  await page.getByRole("button", { name: "Send message" }).click();
+
+  await expect(page.locator(".bubble.user")).toContainText(
+    "When are you open?",
+  );
+  await expect(page.locator(".bubble.assistant").last()).toContainText(
+    "09:00 to 18:00",
+  );
 });

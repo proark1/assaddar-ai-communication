@@ -95,7 +95,11 @@ The seed command creates a sample tenant with approved FAQ knowledge. The seed o
 Production builds output `apps/widget/dist/widget.js`, which should be served from the widget host:
 
 ```html
-<script src="https://chat.example.com/widget.js" data-assistant-id="PUBLIC_ID" async></script>
+<script
+  src="https://chat.example.com/widget.js"
+  data-assistant-id="PUBLIC_ID"
+  async
+></script>
 ```
 
 ## API Smoke Test
@@ -131,6 +135,7 @@ curl -H "x-admin-token: change-me-dev-admin-token" \
 pnpm test
 pnpm typecheck
 pnpm build
+pnpm smoke:api
 ```
 
 The default test suite covers:
@@ -140,6 +145,10 @@ The default test suite covers:
 - Cross-tenant data isolation.
 - API widget/admin integration using Fastify injection.
 - Tenant-scope helpers and table metadata.
+
+`pnpm smoke:api` uses `.env`, starts the API if it is not already running, loads the seeded `demo-business` tenant, fetches widget config, and sends a real widget chat request. It writes a conversation/message/usage event to the configured database, so run `pnpm db:seed` first.
+
+GitHub Actions runs `pnpm test`, `pnpm typecheck`, and `pnpm build` on pushes to `main` and pull requests.
 
 ## Important Defaults
 
