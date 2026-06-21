@@ -4,6 +4,7 @@ dist
 coverage
 .env
 .env.local
+.railway-admin-token
 *.log
 *.tsbuildinfo
 .DS_Store

@@ -6,17 +6,21 @@ export default defineConfig({
       entry: "src/widget.ts",
       name: "AssaddarWidget",
       formats: ["iife"],
-      fileName: () => "widget.js"
+      fileName: () => "widget.js",
     },
     rollupOptions: {
       output: {
-        inlineDynamicImports: true
-      }
-    }
+        inlineDynamicImports: true,
+      },
+    },
+  },
+  preview: {
+    allowedHosts: true,
   },
   server: {
+    allowedHosts: true,
     fs: {
-      allow: ["."]
-    }
-  }
+      allow: ["."],
+    },
+  },
 });
