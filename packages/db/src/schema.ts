@@ -46,6 +46,13 @@ export type WidgetTheme = {
   launcherLabel?: string;
   openingMessage?: string;
   language?: string;
+  position?: "bottom-right" | "bottom-left";
+  assistantName?: string;
+  leadCaptureEnabled?: boolean;
+  leadCaptureIntro?: string;
+  leadCaptureFields?: string[];
+  ctaLabel?: string;
+  ctaUrl?: string;
 };
 
 export const tenants = pgTable("tenants", {

@@ -9,8 +9,10 @@ import {
   type KnowledgeChunk,
   type TenantPolicy,
 } from "@assaddar/core";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildServer, type PlatformStore } from "../src/server";
+
+const originalFetch = globalThis.fetch;
 
 class MemoryPlatformStore
   implements PlatformStore, AnswerDataStore, HandoffStore
@@ -21,6 +23,11 @@ class MemoryPlatformStore
     name: string;
     slug: string;
     defaultLocale: string;
+    tone?: "friendly" | "neutral" | "formal";
+    theme?: Record<string, unknown>;
+    confidenceThreshold?: number;
+    maxMessageLength?: number;
+    retentionDays?: number;
   }> = [];
   chunks: KnowledgeChunk[] = [];
   conversations: Array<{
@@ -49,8 +56,42 @@ class MemoryPlatformStore
       name: input.name,
       slug: input.slug,
       defaultLocale: "en",
+      tone: "friendly" as const,
+      theme: {
+        primaryColor: "#155eef",
+        openingMessage: "Hi",
+      },
+      maxMessageLength: 1200,
     };
     this.tenants.push(tenant);
+    return tenant;
+  }
+
+  async updateTenant(
+    tenantId: string,
+    input: {
+      name?: string;
+      slug?: string;
+      defaultLocale?: string;
+      tone?: "friendly" | "neutral" | "formal";
+      confidenceThreshold?: number;
+      maxMessageLength?: number;
+      retentionDays?: number;
+      theme?: Record<string, unknown>;
+    },
+  ) {
+    const tenant = this.tenants.find((item) => item.id === tenantId);
+    if (!tenant) {
+      throw new Error("Tenant not found.");
+    }
+
+    Object.assign(tenant, {
+      ...input,
+      theme: {
+        ...(tenant.theme ?? {}),
+        ...(input.theme ?? {}),
+      },
+    });
     return tenant;
   }
 
@@ -76,9 +117,9 @@ class MemoryPlatformStore
       assistantId: tenant.publicId,
       tenantName: tenant.name,
       defaultLocale: tenant.defaultLocale,
-      theme: {
-        primaryColor: "#155eef",
-        openingMessage: "Hi",
+      theme: tenant.theme,
+      limits: {
+        maxMessageLength: tenant.maxMessageLength ?? 1200,
       },
     };
   }
@@ -289,6 +330,11 @@ class MemoryPlatformStore
 }
 
 describe("API", () => {
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
   it("creates a tenant, adds knowledge, and answers via widget endpoint", async () => {
     const store = new MemoryPlatformStore();
     const app = await buildServer({
@@ -333,6 +379,168 @@ describe("API", () => {
     expect(chatResponse.json<{ reply: string }>().reply).toContain("09:00");
     expect(store.messages).toHaveLength(2);
 
+    await app.close();
+  });
+
+  it("updates tenant settings and returns them through widget config", async () => {
+    const store = new MemoryPlatformStore();
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+    });
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+
+    const updateResponse = await app.inject({
+      method: "PATCH",
+      url: `/admin/tenants/${tenant.id}`,
+      headers: { "x-admin-token": "test-token" },
+      payload: {
+        defaultLocale: "de",
+        tone: "formal",
+        theme: {
+          primaryColor: "#0f766e",
+          launcherLabel: "KI Chat",
+          leadCaptureEnabled: true,
+          leadCaptureFields: ["name", "email", "company"],
+        },
+      },
+    });
+
+    expect(updateResponse.statusCode).toBe(200);
+    expect(
+      updateResponse.json<{
+        defaultLocale: string;
+        theme: { launcherLabel: string };
+      }>(),
+    ).toMatchObject({
+      defaultLocale: "de",
+      theme: {
+        launcherLabel: "KI Chat",
+      },
+    });
+
+    const configResponse = await app.inject({
+      method: "GET",
+      url: `/widget/config/${tenant.publicId}`,
+    });
+
+    expect(configResponse.statusCode).toBe(200);
+    expect(
+      configResponse.json<{
+        defaultLocale: string;
+        theme: { leadCaptureEnabled: boolean };
+      }>(),
+    ).toMatchObject({
+      defaultLocale: "de",
+      theme: {
+        leadCaptureEnabled: true,
+      },
+    });
+    await app.close();
+  });
+
+  it("imports website content into suggested FAQs and checks widget install", async () => {
+    globalThis.fetch = vi.fn(async () => {
+      return new Response(
+        `<!doctype html>
+        <title>Assaddar AI Consultancy</title>
+        <meta name="description" content="AI consulting and automation for German SMEs.">
+        <main>
+          <h1>KI Beratung fuer KMU</h1>
+          <p>Wir helfen Unternehmen mit KI Beratung, Automatisierung, Workshops und Roadmaps fuer bessere Prozesse.</p>
+          <p>Kontaktieren Sie uns fuer ein Beratungsgespraech und eine konkrete Umsetzungsplanung.</p>
+          <script src="https://assaddar-widget-production.up.railway.app/widget.js" data-assistant-id="asst_1234567890"></script>
+        </main>`,
+        {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        },
+      );
+    }) as typeof fetch;
+
+    const store = new MemoryPlatformStore();
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+    });
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+
+    const importResponse = await app.inject({
+      method: "POST",
+      url: `/admin/tenants/${tenant.id}/knowledge/import-website`,
+      headers: { "x-admin-token": "test-token" },
+      payload: {
+        url: "https://assad-dar.de",
+      },
+    });
+
+    expect(importResponse.statusCode).toBe(200);
+    expect(
+      importResponse.json<{ suggestedFaqs: Array<{ question: string }> }>()
+        .suggestedFaqs.length,
+    ).toBeGreaterThan(0);
+
+    const checkResponse = await app.inject({
+      method: "POST",
+      url: `/admin/tenants/${tenant.id}/install-check`,
+      headers: { "x-admin-token": "test-token" },
+      payload: {
+        url: "https://assad-dar.de",
+        assistantId: "asst_1234567890",
+        widgetUrl: "https://assaddar-widget-production.up.railway.app/widget.js",
+      },
+    });
+
+    expect(checkResponse.statusCode).toBe(200);
+    expect(checkResponse.json<{ installed: boolean }>()).toMatchObject({
+      installed: true,
+    });
+    await app.close();
+  });
+
+  it("captures widget leads as conversations and handoffs", async () => {
+    const store = new MemoryPlatformStore();
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+    });
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/widget/leads",
+      payload: {
+        assistantId: tenant.publicId,
+        visitorId: "visitor-one",
+        pageUrl: "https://assad-dar.de/de",
+        fields: {
+          name: "Ada",
+          email: "ada@example.com",
+          company: "Example GmbH",
+          projectType: "Support automation",
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(store.conversations).toHaveLength(1);
+    expect(store.messages[0]?.content).toContain("ada@example.com");
+    expect(store.handoffs[0]).toMatchObject({
+      reason: "lead_capture",
+      status: "open",
+    });
     await app.close();
   });
 

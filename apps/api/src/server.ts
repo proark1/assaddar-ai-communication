@@ -65,6 +65,38 @@ const CreateTenantSchema = z.object({
     .optional(),
 });
 
+const WidgetThemeSchema = z.object({
+  primaryColor: z.string().min(3).max(32).optional(),
+  backgroundColor: z.string().min(3).max(32).optional(),
+  textColor: z.string().min(3).max(32).optional(),
+  launcherLabel: z.string().min(1).max(40).optional(),
+  openingMessage: z.string().min(1).max(500).optional(),
+  language: z.string().min(2).max(16).optional(),
+  position: z.enum(["bottom-right", "bottom-left"]).optional(),
+  assistantName: z.string().min(1).max(80).optional(),
+  leadCaptureEnabled: z.boolean().optional(),
+  leadCaptureIntro: z.string().min(1).max(500).optional(),
+  leadCaptureFields: z.array(z.string().min(1).max(40)).max(10).optional(),
+  ctaLabel: z.string().min(1).max(80).optional(),
+  ctaUrl: z.string().url().max(500).optional(),
+});
+
+const UpdateTenantSchema = z.object({
+  name: z.string().min(2).max(120).optional(),
+  slug: z
+    .string()
+    .min(2)
+    .max(120)
+    .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
+    .optional(),
+  defaultLocale: z.string().min(2).max(16).optional(),
+  tone: z.enum(["friendly", "neutral", "formal"]).optional(),
+  confidenceThreshold: z.number().min(0.05).max(0.95).optional(),
+  maxMessageLength: z.number().int().min(200).max(4000).optional(),
+  retentionDays: z.number().int().min(1).max(3650).optional(),
+  theme: WidgetThemeSchema.optional(),
+});
+
 const AddFaqSchema = z.object({
   question: z.string().min(3).max(500),
   answer: z.string().min(3).max(4000),
@@ -89,13 +121,39 @@ const WidgetChatSchema = z.object({
   locale: z.string().min(2).max(16).optional(),
 });
 
+const WidgetLeadSchema = z.object({
+  assistantId: z.string().min(8),
+  conversationId: z.string().min(8).max(80).optional(),
+  visitorId: z.string().min(1).max(120).optional(),
+  pageUrl: z.string().url().max(500).optional(),
+  fields: z
+    .record(z.string().max(1000))
+    .refine(
+      (fields) => Object.values(fields).some((value) => value.trim()),
+      "At least one lead field is required.",
+    ),
+});
+
+const WebsiteImportSchema = z.object({
+  url: z.string().url().max(500),
+  maxFaqs: z.number().int().min(1).max(12).default(6),
+});
+
+const InstallCheckSchema = z.object({
+  url: z.string().url().max(500),
+  assistantId: z.string().min(8),
+  widgetUrl: z.string().url().max(500).optional(),
+});
+
 type CreateTenantInput = z.infer<typeof CreateTenantSchema>;
+type UpdateTenantInput = z.infer<typeof UpdateTenantSchema>;
 type AddFaqInput = z.infer<typeof AddFaqSchema>;
 type UpdateHandoffInput = z.infer<typeof UpdateHandoffSchema>;
 
 export type PlatformStore = AnswerDataStore &
   HandoffStore & {
     createTenant(input: CreateTenantInput): Promise<unknown>;
+    updateTenant(tenantId: string, input: UpdateTenantInput): Promise<unknown>;
     listTenants(): Promise<unknown[]>;
     getTenant(
       tenantId: string,
@@ -240,6 +298,16 @@ export async function buildServer(
     },
   );
 
+  app.patch(
+    "/admin/tenants/:tenantId",
+    { preHandler: requireAdmin(options.adminToken) },
+    async (request) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      const body = UpdateTenantSchema.parse(request.body);
+      return options.store.updateTenant(tenantId, body);
+    },
+  );
+
   app.post(
     "/admin/tenants/:tenantId/knowledge/faqs",
     { preHandler: requireAdmin(options.adminToken) },
@@ -257,6 +325,26 @@ export async function buildServer(
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       return options.store.listKnowledge(tenantId);
+    },
+  );
+
+  app.post(
+    "/admin/tenants/:tenantId/knowledge/import-website",
+    { preHandler: requireAdmin(options.adminToken) },
+    async (request, reply) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      const body = WebsiteImportSchema.parse(request.body);
+      const tenant = await options.store.getTenant(tenantId);
+      if (!tenant) {
+        return reply.code(404).send({ error: "Tenant not found." });
+      }
+
+      const document = await fetchTextDocument(body.url);
+      return {
+        sourceUrl: document.finalUrl,
+        statusCode: document.status,
+        ...buildWebsiteImport(document.html, document.finalUrl, body.maxFaqs),
+      };
     },
   );
 
@@ -413,6 +501,26 @@ export async function buildServer(
     },
   );
 
+  app.post(
+    "/admin/tenants/:tenantId/install-check",
+    { preHandler: requireAdmin(options.adminToken) },
+    async (request, reply) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      const body = InstallCheckSchema.parse(request.body);
+      const tenant = await options.store.getTenant(tenantId);
+      if (!tenant) {
+        return reply.code(404).send({ error: "Tenant not found." });
+      }
+
+      const document = await fetchTextDocument(body.url);
+      return {
+        checkedUrl: document.finalUrl,
+        statusCode: document.status,
+        ...inspectWidgetInstall(document.html, body.assistantId, body.widgetUrl),
+      };
+    },
+  );
+
   app.get("/widget/config/:assistantId", async (request, reply) => {
     const { assistantId } = ParamsAssistantSchema.parse(request.params);
     const config = await options.store.getWidgetConfig(assistantId);
@@ -510,6 +618,70 @@ export async function buildServer(
     };
   });
 
+  app.post("/widget/leads", async (request, reply) => {
+    const body = WidgetLeadSchema.parse(request.body);
+    const tenant = await options.store.getTenantByPublicId(body.assistantId);
+    if (!tenant) {
+      return reply.code(404).send({ error: "Assistant not found." });
+    }
+
+    const conversationInput: Parameters<
+      PlatformStore["findOrCreateConversation"]
+    >[0] = {
+      tenantId: tenant.id,
+      channel: "website",
+      locale: tenant.defaultLocale,
+    };
+    if (body.conversationId) {
+      conversationInput.publicConversationId = body.conversationId;
+    }
+    if (body.visitorId) {
+      conversationInput.externalUserId = body.visitorId;
+    }
+
+    const conversation =
+      await options.store.findOrCreateConversation(conversationInput);
+    const message = formatLeadCaptureMessage(body.fields, body.pageUrl);
+
+    await options.store.addMessage({
+      tenantId: tenant.id,
+      conversationId: conversation.id,
+      channel: "website",
+      direction: "inbound",
+      role: "user",
+      content: message,
+      trace: {
+        type: "lead_capture",
+        fields: body.fields,
+        pageUrl: body.pageUrl,
+      },
+    });
+
+    await options.store.createHandoff({
+      tenantId: tenant.id,
+      conversationId: conversation.id,
+      channel: "website",
+      reason: "lead_capture",
+      message,
+    });
+
+    await options.store.logUsage({
+      tenantId: tenant.id,
+      channel: "website",
+      eventType: "lead_capture",
+      credits: 1,
+      metadata: {
+        fields: Object.keys(body.fields),
+        pageUrl: body.pageUrl,
+      },
+    });
+
+    return reply.code(201).send({
+      conversationId: conversation.publicId,
+      status: "captured",
+    });
+  });
+
   app.get("/webhooks/meta/:channel", async (request, reply) => {
     const { channel } = ParamsMetaChannelSchema.parse(request.params);
     const query = z
@@ -577,4 +749,253 @@ function requireAdmin(adminToken: string) {
       return reply.code(401).send({ error: "Unauthorized." });
     }
   };
+}
+
+async function fetchTextDocument(url: string) {
+  const parsed = new URL(url);
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("Only HTTP and HTTPS URLs can be scanned.");
+  }
+
+  const response = await fetch(parsed.toString(), {
+    headers: {
+      accept: "text/html,application/xhtml+xml,text/plain;q=0.8,*/*;q=0.5",
+      "user-agent": "AssaddarAI-WebsiteScanner/1.0",
+    },
+    redirect: "follow",
+    signal: AbortSignal.timeout(10_000),
+  });
+  const html = (await response.text()).slice(0, 900_000);
+
+  return {
+    finalUrl: response.url || parsed.toString(),
+    status: response.status,
+    html,
+  };
+}
+
+function buildWebsiteImport(html: string, sourceUrl: string, maxFaqs: number) {
+  const title = extractTitle(html) || new URL(sourceUrl).hostname;
+  const description = extractMetaDescription(html);
+  const text = htmlToReadableText(html);
+  const language = detectLanguage(text);
+  const snippets = extractReadableSnippets(text);
+  const services = snippets
+    .filter((snippet) =>
+      /(ki|ai|beratung|consult|automation|automatis|prozess|service|leistung|workshop|strategie|strategy)/i.test(
+        snippet,
+      ),
+    )
+    .slice(0, 3);
+  const contact = snippets.find((snippet) =>
+    /(kontakt|contact|termin|call|email|mail|beratungsgespräch|consultation)/i.test(
+      snippet,
+    ),
+  );
+  const privacy = snippets.find((snippet) =>
+    /(dsgvo|gdpr|privacy|datenschutz|daten)/i.test(snippet),
+  );
+  const overview = [description, ...snippets.slice(0, 2)]
+    .filter(Boolean)
+    .join(" ")
+    .slice(0, 950);
+
+  const faqs = [
+    {
+      question:
+        language === "de"
+          ? `Was bietet ${title}?`
+          : `What does ${title} offer?`,
+      answer:
+        overview ||
+        `${title} presents its business information on ${sourceUrl}.`,
+      tags: ["website", "company"],
+    },
+    {
+      question:
+        language === "de"
+          ? "Welche KI- und Automatisierungsleistungen werden angeboten?"
+          : "Which AI and automation services are offered?",
+      answer:
+        services.join(" ") ||
+        "The website should be reviewed and expanded with the approved AI consultancy services before launch.",
+      tags: ["website", "services"],
+    },
+    {
+      question:
+        language === "de"
+          ? "Wie kann ein Beratungsgespräch angefragt werden?"
+          : "How can someone request a consultation?",
+      answer:
+        contact ||
+        `Visitors can use the contact options on ${sourceUrl} to request a consultation.`,
+      tags: ["website", "lead-capture"],
+    },
+    {
+      question:
+        language === "de"
+          ? "Wie wird mit Datenschutz und Unternehmensdaten umgegangen?"
+          : "How are privacy and business data handled?",
+      answer:
+        privacy ||
+        "Only approved business information should be used by the assistant. Privacy, GDPR, and data handling details should be confirmed before publishing.",
+      tags: ["website", "privacy"],
+    },
+  ];
+
+  const uniqueFaqs = faqs
+    .filter((faq) => faq.answer.trim().length > 24)
+    .filter(
+      (faq, index, all) =>
+        all.findIndex((item) => item.question === faq.question) === index,
+    )
+    .slice(0, maxFaqs);
+
+  return {
+    title,
+    detectedLanguage: language,
+    summary: overview,
+    suggestedFaqs: uniqueFaqs,
+  };
+}
+
+function inspectWidgetInstall(
+  html: string,
+  assistantId: string,
+  widgetUrl?: string,
+) {
+  const lowerHtml = html.toLowerCase();
+  const hasAssistantId = html.includes(assistantId);
+  const hasDataAttribute = new RegExp(
+    `data-assistant-id=["']${escapeRegExp(assistantId)}["']`,
+  ).test(html);
+  const hasWidgetUrl = widgetUrl ? html.includes(widgetUrl) : false;
+  const hasWidgetScript =
+    hasWidgetUrl ||
+    /assaddar[^<>"']*widget|widget-production[^<>"']*widget|\/widget\.js/i.test(
+      html,
+    );
+  const hasApiUrl =
+    lowerHtml.includes("data-api-url") ||
+    lowerHtml.includes("assaddar-api-production");
+  const evidence = [
+    hasDataAttribute ? "assistant id data attribute found" : "",
+    hasWidgetScript ? "widget script found" : "",
+    hasApiUrl ? "api url found" : "",
+  ].filter(Boolean);
+
+  return {
+    installed: hasAssistantId && hasWidgetScript,
+    hasAssistantId,
+    hasWidgetScript,
+    hasApiUrl,
+    evidence,
+  };
+}
+
+function formatLeadCaptureMessage(
+  fields: Record<string, string>,
+  pageUrl?: string,
+) {
+  const labelMap: Record<string, string> = {
+    name: "Name",
+    email: "Email",
+    company: "Company",
+    projectType: "Project type",
+    budget: "Budget",
+    timeline: "Timeline",
+    message: "Message",
+  };
+  const lines = Object.entries(fields)
+    .filter(([, value]) => value.trim())
+    .map(([key, value]) => `${labelMap[key] ?? titleCase(key)}: ${value.trim()}`);
+
+  if (pageUrl) {
+    lines.push(`Page: ${pageUrl}`);
+  }
+
+  return `Lead captured\n${lines.join("\n")}`;
+}
+
+function extractTitle(html: string) {
+  const title = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1];
+  return cleanText(title ?? "").slice(0, 140);
+}
+
+function extractMetaDescription(html: string) {
+  const match =
+    html.match(
+      /<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["'][^>]*>/i,
+    ) ??
+    html.match(
+      /<meta[^>]+content=["']([^"']+)["'][^>]+name=["']description["'][^>]*>/i,
+    );
+  return cleanText(match?.[1] ?? "").slice(0, 500);
+}
+
+function htmlToReadableText(html: string) {
+  return cleanText(
+    html
+      .replace(/<script[\s\S]*?<\/script>/gi, " ")
+      .replace(/<style[\s\S]*?<\/style>/gi, " ")
+      .replace(/<svg[\s\S]*?<\/svg>/gi, " ")
+      .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<\/(p|div|section|article|li|h[1-6])>/gi, "\n")
+      .replace(/<[^>]+>/g, " "),
+  );
+}
+
+function extractReadableSnippets(text: string) {
+  return text
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map(cleanText)
+    .filter((sentence) => sentence.length >= 45 && sentence.length <= 420)
+    .filter(
+      (sentence, index, all) =>
+        all.findIndex((item) => item.toLowerCase() === sentence.toLowerCase()) ===
+        index,
+    )
+    .slice(0, 16);
+}
+
+function detectLanguage(text: string) {
+  const lower = text.toLowerCase();
+  const germanMatches = (
+    lower.match(/\b(und|der|die|das|beratung|kontakt|leistungen|daten|für)\b/g) ??
+    []
+  ).length;
+  const englishMatches = (
+    lower.match(/\b(and|the|consulting|contact|services|data|for)\b/g) ?? []
+  ).length;
+  return germanMatches > englishMatches ? "de" : "en";
+}
+
+function cleanText(value: string) {
+  return decodeHtmlEntities(value)
+    .replace(/\s+/g, " ")
+    .replace(/\s+([.,!?;:])/g, "$1")
+    .trim();
+}
+
+function decodeHtmlEntities(value: string) {
+  return value
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#039;/g, "'")
+    .replace(/&nbsp;/g, " ");
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function titleCase(value: string) {
+  return value
+    .replace(/([A-Z])/g, " $1")
+    .replace(/[_-]/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase())
+    .trim();
 }

@@ -41,6 +41,28 @@ type Tenant = {
   name: string;
   slug: string;
   status?: string;
+  defaultLocale?: string;
+  tone?: "friendly" | "neutral" | "formal";
+  confidenceThreshold?: string | number;
+  maxMessageLength?: number;
+  retentionDays?: number;
+  theme?: WidgetTheme;
+};
+
+type WidgetTheme = {
+  primaryColor?: string;
+  backgroundColor?: string;
+  textColor?: string;
+  launcherLabel?: string;
+  openingMessage?: string;
+  language?: string;
+  position?: "bottom-right" | "bottom-left";
+  assistantName?: string;
+  leadCaptureEnabled?: boolean;
+  leadCaptureIntro?: string;
+  leadCaptureFields?: string[];
+  ctaLabel?: string;
+  ctaUrl?: string;
 };
 
 type KnowledgeItem = {
@@ -100,6 +122,29 @@ type TenantAnalytics = {
   }>;
 };
 
+type WebsiteImportResult = {
+  sourceUrl: string;
+  statusCode: number;
+  title: string;
+  detectedLanguage: string;
+  summary: string;
+  suggestedFaqs: Array<{
+    question: string;
+    answer: string;
+    tags: string[];
+  }>;
+};
+
+type InstallCheckResult = {
+  checkedUrl: string;
+  statusCode: number;
+  installed: boolean;
+  hasAssistantId: boolean;
+  hasWidgetScript: boolean;
+  hasApiUrl: boolean;
+  evidence: string[];
+};
+
 type TestAnswer = {
   status: string;
   text: string;
@@ -109,8 +154,10 @@ type TestAnswer = {
 };
 
 type TabKey =
+  | "setup"
   | "overview"
   | "knowledge"
+  | "leads"
   | "inbox"
   | "handoffs"
   | "test"
@@ -131,8 +178,10 @@ const defaultWidgetUrl =
 const defaultSiteUrl = "https://www.assad-dar.de/de";
 
 const tabs: Array<{ key: TabKey; label: string; icon: typeof BarChart3 }> = [
+  { key: "setup", label: "Setup", icon: ClipboardCheck },
   { key: "overview", label: "Overview", icon: BarChart3 },
   { key: "knowledge", label: "Knowledge", icon: Database },
+  { key: "leads", label: "Leads", icon: UserCheck },
   { key: "inbox", label: "Inbox", icon: Inbox },
   { key: "handoffs", label: "Handoffs", icon: AlertCircle },
   { key: "test", label: "Test", icon: MessageCircle },
@@ -167,6 +216,91 @@ const businessKnowledgeChecks = [
   {
     label: "Boundaries",
     terms: ["cannot", "not offer", "scope", "human", "handoff"],
+  },
+];
+
+const leadFieldOptions = [
+  "name",
+  "email",
+  "company",
+  "projectType",
+  "budget",
+  "timeline",
+  "message",
+];
+
+const defaultTheme: Required<
+  Pick<
+    WidgetTheme,
+    | "primaryColor"
+    | "backgroundColor"
+    | "textColor"
+    | "launcherLabel"
+    | "openingMessage"
+    | "language"
+    | "position"
+    | "assistantName"
+    | "leadCaptureIntro"
+    | "ctaLabel"
+    | "ctaUrl"
+  >
+> & {
+  leadCaptureEnabled: boolean;
+  leadCaptureFields: string[];
+} = {
+  primaryColor: "#2557d6",
+  backgroundColor: "#ffffff",
+  textColor: "#111827",
+  launcherLabel: "AI Beratung",
+  openingMessage:
+    "Hallo, ich bin der Assaddar AI Assistent. Wie kann ich bei KI, Automatisierung oder Prozessberatung helfen?",
+  language: "de",
+  position: "bottom-right",
+  assistantName: "Assaddar AI Consultant",
+  leadCaptureEnabled: true,
+  leadCaptureIntro:
+    "Hinterlassen Sie kurz Ihre Daten, damit wir das passende KI-Projekt einschätzen können.",
+  leadCaptureFields: ["name", "email", "company", "projectType", "budget"],
+  ctaLabel: "Beratung anfragen",
+  ctaUrl: "https://www.assad-dar.de/de",
+};
+
+const starterFaqs = [
+  {
+    question: "Was macht Assaddar AI Consultancy?",
+    answer:
+      "Assaddar AI Consultancy hilft kleinen und mittleren Unternehmen dabei, sinnvolle KI- und Automatisierungsprojekte zu identifizieren, zu planen und praktisch umzusetzen. Der Fokus liegt auf klaren Prozessen, messbarem Nutzen und einer sicheren Einführung im Unternehmen.",
+    tags: ["assaddar", "services", "company"],
+  },
+  {
+    question: "Welche KI-Projekte eignen sich fuer KMU?",
+    answer:
+      "Geeignete Projekte sind zum Beispiel Kundenservice-Automatisierung, interne Wissensassistenten, Dokumenten- und E-Mail-Prozesse, Angebotsvorbereitung, Reporting, Datenaufbereitung und wiederkehrende operative Workflows. Vor der Umsetzung wird priorisiert, was realistisch, wirtschaftlich und datenschutzkonform ist.",
+    tags: ["services", "kmu", "automation"],
+  },
+  {
+    question: "Wie startet ein Beratungsprojekt?",
+    answer:
+      "Ein Projekt startet mit einem kurzen Erstgespraech, einer Analyse der aktuellen Prozesse und einer priorisierten Roadmap. Danach werden ein klarer Use Case, die benoetigten Daten, technische Grenzen, Risiken und ein pragmatischer Umsetzungsplan definiert.",
+    tags: ["process", "consultation", "lead-capture"],
+  },
+  {
+    question: "Wie werden Datenschutz und Unternehmensdaten behandelt?",
+    answer:
+      "Datenschutz und vertrauliche Unternehmensdaten muessen vor jedem KI-Einsatz geklaert werden. Assaddar AI Consultancy arbeitet mit freigegebenen Informationen, vermeidet unnoetige Datenspeicherung und beruecksichtigt DSGVO-Anforderungen, Rollen, Zugriffe und technische Schutzmassnahmen.",
+    tags: ["privacy", "dsgvo", "data"],
+  },
+  {
+    question: "Kann ein Beratungsgespraech gebucht werden?",
+    answer:
+      "Ja. Interessenten koennen ihre Kontaktdaten, das Unternehmen, den Projektbedarf und den gewuenschten Zeitrahmen hinterlassen. Das Team prueft die Anfrage und meldet sich fuer ein passendes Beratungsgespraech.",
+    tags: ["contact", "consultation", "lead-capture"],
+  },
+  {
+    question: "Gibt es feste Preise?",
+    answer:
+      "Preise haengen vom Umfang, den vorhandenen Systemen, Datenschutzanforderungen und dem gewuenschten Ergebnis ab. Nach einer kurzen Analyse kann ein passendes Angebot oder ein sinnvoller erster Projektabschnitt vorgeschlagen werden.",
+    tags: ["pricing", "budget", "offer"],
   },
 ];
 
@@ -305,7 +439,56 @@ function findBestKnowledgeMatch(message: string, items: KnowledgeItem[]) {
 function titleCase(value: string) {
   return value
     .replace(/_/g, " ")
+    .replace(/([A-Z])/g, " $1")
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function fieldLabel(value: string) {
+  const labels: Record<string, string> = {
+    name: "Name",
+    email: "Email",
+    company: "Company",
+    projectType: "Project type",
+    budget: "Budget",
+    timeline: "Timeline",
+    message: "Message",
+  };
+  return labels[value] ?? titleCase(value);
+}
+
+function mergeTheme(theme?: WidgetTheme) {
+  return {
+    ...defaultTheme,
+    ...(theme ?? {}),
+    leadCaptureFields: theme?.leadCaptureFields?.length
+      ? theme.leadCaptureFields
+      : defaultTheme.leadCaptureFields,
+  };
+}
+
+function getUsageTotal(
+  analytics: TenantAnalytics | null,
+  eventTypes: string[],
+) {
+  return (
+    analytics?.usageByStatus
+      .filter((event) => eventTypes.includes(event.eventType))
+      .reduce((total, event) => total + event.total, 0) ?? 0
+  );
+}
+
+function parseLeadDetails(message: string) {
+  return message
+    .split("\n")
+    .map((line) => line.trim())
+    .map((line) => {
+      const [label, ...valueParts] = line.split(":");
+      return {
+        label: label?.trim() ?? "",
+        value: valueParts.join(":").trim(),
+      };
+    })
+    .filter((item) => item.label && item.value);
 }
 
 function getPriority(handoff: Handoff) {
@@ -364,17 +547,64 @@ export default function DashboardPage() {
   const [editingKnowledgeId, setEditingKnowledgeId] = useState("");
   const [editQuestion, setEditQuestion] = useState("");
   const [editAnswer, setEditAnswer] = useState("");
-  const [activeTab, setActiveTab] = useState<TabKey>("overview");
+  const [activeTab, setActiveTab] = useState<TabKey>("setup");
   const [knowledgeSearch, setKnowledgeSearch] = useState("");
   const [knowledgeStatusFilter, setKnowledgeStatusFilter] =
     useState<KnowledgeStatusFilter>("all");
   const [inboxFilter, setInboxFilter] = useState<InboxFilter>("all");
   const [handoffFilter, setHandoffFilter] = useState<HandoffFilter>("open");
   const [showAdvancedConnection, setShowAdvancedConnection] = useState(false);
+  const [connectionAttempted, setConnectionAttempted] = useState(false);
   const [confirmDeleteItem, setConfirmDeleteItem] =
     useState<KnowledgeItem | null>(null);
   const [widgetPlatform, setWidgetPlatform] = useState<WidgetPlatform>("html");
   const [copiedSnippet, setCopiedSnippet] = useState("");
+  const [siteUrl, setSiteUrl] = useState(defaultSiteUrl);
+  const [websiteImport, setWebsiteImport] =
+    useState<WebsiteImportResult | null>(null);
+  const [installCheck, setInstallCheck] = useState<InstallCheckResult | null>(
+    null,
+  );
+  const [assistantName, setAssistantName] = useState(
+    defaultTheme.assistantName,
+  );
+  const [widgetPrimaryColor, setWidgetPrimaryColor] = useState(
+    defaultTheme.primaryColor,
+  );
+  const [widgetBackgroundColor, setWidgetBackgroundColor] = useState(
+    defaultTheme.backgroundColor,
+  );
+  const [widgetTextColor, setWidgetTextColor] = useState(
+    defaultTheme.textColor,
+  );
+  const [widgetLauncherLabel, setWidgetLauncherLabel] = useState(
+    defaultTheme.launcherLabel,
+  );
+  const [widgetOpeningMessage, setWidgetOpeningMessage] = useState(
+    defaultTheme.openingMessage,
+  );
+  const [widgetLanguage, setWidgetLanguage] = useState(defaultTheme.language);
+  const [widgetPosition, setWidgetPosition] = useState<
+    "bottom-right" | "bottom-left"
+  >(defaultTheme.position);
+  const [leadCaptureEnabled, setLeadCaptureEnabled] = useState(
+    defaultTheme.leadCaptureEnabled,
+  );
+  const [leadCaptureIntro, setLeadCaptureIntro] = useState(
+    defaultTheme.leadCaptureIntro,
+  );
+  const [leadCaptureFields, setLeadCaptureFields] = useState<string[]>(
+    defaultTheme.leadCaptureFields,
+  );
+  const [ctaLabel, setCtaLabel] = useState(defaultTheme.ctaLabel);
+  const [ctaUrl, setCtaUrl] = useState(defaultTheme.ctaUrl);
+  const [tenantLocale, setTenantLocale] = useState(defaultTheme.language);
+  const [tenantTone, setTenantTone] = useState<"friendly" | "neutral" | "formal">(
+    "friendly",
+  );
+  const [confidenceThreshold, setConfidenceThreshold] = useState(0.18);
+  const [maxMessageLength, setMaxMessageLength] = useState(1200);
+  const [retentionDays, setRetentionDays] = useState(365);
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -388,6 +618,12 @@ export default function DashboardPage() {
     (conversation) => conversation.id === selectedConversationId,
   );
   const openHandoffs = handoffs.filter((handoff) => handoff.status === "open");
+  const leadHandoffs = handoffs.filter(
+    (handoff) => handoff.reason === "lead_capture",
+  );
+  const openLeads = leadHandoffs.filter((handoff) => handoff.status === "open");
+  const unansweredCount = getUsageTotal(analytics, ["handoff", "refused"]);
+  const answeredCount = getUsageTotal(analytics, ["answered"]);
   const handoffConversationIds = new Set(
     handoffs
       .filter((handoff) => handoff.status === "open")
@@ -413,6 +649,25 @@ export default function DashboardPage() {
         normalizedApiBase,
       )
     : "";
+  const currentTheme: WidgetTheme = {
+    assistantName,
+    primaryColor: widgetPrimaryColor,
+    backgroundColor: widgetBackgroundColor,
+    textColor: widgetTextColor,
+    launcherLabel: widgetLauncherLabel,
+    openingMessage: widgetOpeningMessage,
+    language: widgetLanguage,
+    position: widgetPosition,
+    leadCaptureEnabled,
+    leadCaptureIntro,
+    leadCaptureFields,
+  };
+  if (ctaLabel) {
+    currentTheme.ctaLabel = ctaLabel;
+  }
+  if (ctaUrl) {
+    currentTheme.ctaUrl = ctaUrl;
+  }
   const statusKind = statusTone(status);
 
   const filteredKnowledge = knowledge.filter((item) => {
@@ -445,29 +700,46 @@ export default function DashboardPage() {
 
   const setupSteps = [
     {
-      label: "Admin token",
+      label: "Login",
       done: Boolean(adminToken),
       action: "Paste token",
+      tab: "settings" as TabKey,
     },
     {
       label: "API connection",
       done: tenants.length > 0,
       action: "Connect",
+      tab: "settings" as TabKey,
     },
     {
       label: "Tenant",
       done: Boolean(selectedTenant),
       action: "Select tenant",
+      tab: "settings" as TabKey,
+    },
+    {
+      label: "Business profile",
+      done: Boolean(selectedTenant?.defaultLocale || selectedTenant?.theme),
+      action: "Save settings",
+      tab: "settings" as TabKey,
     },
     {
       label: "Knowledge",
       done: knowledge.length > 0,
       action: "Add FAQ",
+      tab: "knowledge" as TabKey,
+    },
+    {
+      label: "Test answer",
+      done: Boolean(testAnswer),
+      action: "Run test",
+      tab: "test" as TabKey,
     },
     {
       label: "Widget",
-      done: Boolean(selectedTenant),
-      action: "Copy install snippet",
+      done: Boolean(installCheck?.installed),
+      action: "Verify install",
+      tab: "widget" as TabKey,
     },
   ];
   const completedSteps = setupSteps.filter((step) => step.done).length;
@@ -475,6 +747,7 @@ export default function DashboardPage() {
   useEffect(() => {
     const savedToken = window.localStorage.getItem("assaddar_admin_token");
     const savedApiBase = window.localStorage.getItem("assaddar_api_base");
+    const savedSiteUrl = window.localStorage.getItem("assaddar_site_url");
 
     if (savedToken) {
       setAdminToken(savedToken);
@@ -482,6 +755,10 @@ export default function DashboardPage() {
 
     if (savedApiBase) {
       setApiBase(savedApiBase);
+    }
+
+    if (savedSiteUrl) {
+      setSiteUrl(savedSiteUrl);
     }
   }, []);
 
@@ -496,6 +773,40 @@ export default function DashboardPage() {
       window.localStorage.setItem("assaddar_api_base", normalizedApiBase);
     }
   }, [normalizedApiBase]);
+
+  useEffect(() => {
+    if (siteUrl) {
+      window.localStorage.setItem("assaddar_site_url", siteUrl);
+    }
+  }, [siteUrl]);
+
+  useEffect(() => {
+    if (!selectedTenant) {
+      return;
+    }
+
+    const theme = mergeTheme(selectedTenant.theme);
+    setAssistantName(theme.assistantName);
+    setWidgetPrimaryColor(theme.primaryColor);
+    setWidgetBackgroundColor(theme.backgroundColor);
+    setWidgetTextColor(theme.textColor);
+    setWidgetLauncherLabel(theme.launcherLabel);
+    setWidgetOpeningMessage(theme.openingMessage);
+    setWidgetLanguage(theme.language);
+    setWidgetPosition(theme.position);
+    setLeadCaptureEnabled(theme.leadCaptureEnabled);
+    setLeadCaptureIntro(theme.leadCaptureIntro);
+    setLeadCaptureFields(theme.leadCaptureFields);
+    setCtaLabel(theme.ctaLabel);
+    setCtaUrl(theme.ctaUrl);
+    setTenantLocale(selectedTenant.defaultLocale ?? theme.language);
+    setTenantTone(selectedTenant.tone ?? "friendly");
+    setConfidenceThreshold(Number(selectedTenant.confidenceThreshold ?? 0.18));
+    setMaxMessageLength(selectedTenant.maxMessageLength ?? 1200);
+    setRetentionDays(selectedTenant.retentionDays ?? 365);
+    setInstallCheck(null);
+    setWebsiteImport(null);
+  }, [selectedTenant?.id]);
 
   useEffect(() => {
     if (selectedTenant?.id) {
@@ -546,6 +857,7 @@ export default function DashboardPage() {
     try {
       const nextTenants = await apiFetch<Tenant[]>("/admin/tenants");
       setTenants(nextTenants);
+      setConnectionAttempted(true);
       if (
         nextTenants[0] &&
         !nextTenants.some((tenant) => tenant.id === selectedTenantId)
@@ -555,6 +867,7 @@ export default function DashboardPage() {
       setStatus(nextTenants.length ? "Connected" : "No tenants found");
     } catch (error) {
       setStatus(readableError(error));
+      setConnectionAttempted(false);
     } finally {
       setBusy(false);
     }
@@ -679,6 +992,8 @@ export default function DashboardPage() {
         body: JSON.stringify({
           name: tenantName,
           slug: tenantSlug,
+          defaultLocale: tenantLocale,
+          theme: currentTheme,
         }),
       });
       setTenants((current) => [tenant, ...current]);
@@ -686,6 +1001,40 @@ export default function DashboardPage() {
       setTenantName("");
       setTenantSlug("");
       setStatus("Tenant created");
+    } catch (error) {
+      setStatus(readableError(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveTenantSettings() {
+    if (!selectedTenant) {
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const updatedTenant = await apiFetch<Tenant>(
+        `/admin/tenants/${selectedTenant.id}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            defaultLocale: tenantLocale,
+            tone: tenantTone,
+            confidenceThreshold,
+            maxMessageLength,
+            retentionDays,
+            theme: currentTheme,
+          }),
+        },
+      );
+      setTenants((current) =>
+        current.map((tenant) =>
+          tenant.id === updatedTenant.id ? updatedTenant : tenant,
+        ),
+      );
+      setStatus("Business settings saved");
     } catch (error) {
       setStatus(readableError(error));
     } finally {
@@ -719,6 +1068,117 @@ export default function DashboardPage() {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function importStarterKnowledge() {
+    if (!selectedTenant) {
+      return;
+    }
+
+    setBusy(true);
+    try {
+      await Promise.all(
+        starterFaqs.map((item) =>
+          apiFetch(`/admin/tenants/${selectedTenant.id}/knowledge/faqs`, {
+            method: "POST",
+            body: JSON.stringify(item),
+          }),
+        ),
+      );
+      await refreshWorkspace(selectedTenant.id);
+      setStatus(`${starterFaqs.length} consultancy FAQs imported`);
+    } catch (error) {
+      setStatus(readableError(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function scanWebsiteForKnowledge() {
+    if (!selectedTenant || !siteUrl) {
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const result = await apiFetch<WebsiteImportResult>(
+        `/admin/tenants/${selectedTenant.id}/knowledge/import-website`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            url: siteUrl,
+            maxFaqs: 6,
+          }),
+        },
+      );
+      setWebsiteImport(result);
+      setStatus(`${result.suggestedFaqs.length} website FAQs suggested`);
+    } catch (error) {
+      setStatus(readableError(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function importSuggestedFaqs(
+    suggestions = websiteImport?.suggestedFaqs ?? [],
+  ) {
+    if (!selectedTenant || !suggestions.length) {
+      return;
+    }
+
+    setBusy(true);
+    try {
+      await Promise.all(
+        suggestions.map((item) =>
+          apiFetch(`/admin/tenants/${selectedTenant.id}/knowledge/faqs`, {
+            method: "POST",
+            body: JSON.stringify(item),
+          }),
+        ),
+      );
+      await refreshWorkspace(selectedTenant.id);
+      setStatus(`${suggestions.length} website FAQs imported`);
+    } catch (error) {
+      setStatus(readableError(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function verifyWidgetInstall() {
+    if (!selectedTenant || !siteUrl) {
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const result = await apiFetch<InstallCheckResult>(
+        `/admin/tenants/${selectedTenant.id}/install-check`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            url: siteUrl,
+            assistantId: selectedTenant.publicId,
+            widgetUrl: defaultWidgetUrl,
+          }),
+        },
+      );
+      setInstallCheck(result);
+      setStatus(result.installed ? "Widget installed" : "Widget not found");
+    } catch (error) {
+      setStatus(readableError(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function toggleLeadField(field: string) {
+    setLeadCaptureFields((current) =>
+      current.includes(field)
+        ? current.filter((item) => item !== field)
+        : [...current, field],
+    );
   }
 
   async function importFaqBlocks() {
@@ -893,6 +1353,11 @@ export default function DashboardPage() {
           <strong>{analytics?.messages ?? 0}</strong>
         </article>
         <article className="metricCard">
+          <UserCheck size={18} />
+          <span>Leads</span>
+          <strong>{leadHandoffs.length}</strong>
+        </article>
+        <article className="metricCard">
           <Database size={18} />
           <span>Knowledge</span>
           <strong>{analytics?.approvedKnowledge ?? knowledge.length}</strong>
@@ -904,6 +1369,14 @@ export default function DashboardPage() {
           <Inbox size={18} />
           <span>Open handoffs</span>
           <strong>{analytics?.openHandoffs ?? openHandoffs.length}</strong>
+        </article>
+        <article
+          className="metricCard"
+          data-alert={unansweredCount ? "true" : "false"}
+        >
+          <AlertCircle size={18} />
+          <span>Unanswered</span>
+          <strong>{unansweredCount}</strong>
         </article>
       </section>
     );
@@ -928,7 +1401,12 @@ export default function DashboardPage() {
         </div>
         <div className="setupList">
           {setupSteps.map((step) => (
-            <article data-done={step.done ? "true" : "false"} key={step.label}>
+            <button
+              data-done={step.done ? "true" : "false"}
+              key={step.label}
+              type="button"
+              onClick={() => setActiveTab(step.tab)}
+            >
               {step.done ? (
                 <CheckCircle2 size={17} />
               ) : (
@@ -938,10 +1416,126 @@ export default function DashboardPage() {
                 <strong>{step.label}</strong>
                 <span>{step.done ? "Ready" : step.action}</span>
               </div>
-            </article>
+            </button>
           ))}
         </div>
       </section>
+    );
+  }
+
+  function renderSetupWizard() {
+    return (
+      <div className="workspaceStack">
+        <section className="panel launchWizard">
+          <div className="panelHeader">
+            <div className="panelTitle">
+              <ClipboardCheck size={18} />
+              <h2>Launch setup</h2>
+            </div>
+            <span className="countPill">
+              {completedSteps}/{setupSteps.length}
+            </span>
+          </div>
+          <div className="progressTrack large">
+            <span
+              style={{
+                width: `${(completedSteps / setupSteps.length) * 100}%`,
+              }}
+            />
+          </div>
+          <div className="wizardSteps">
+            {setupSteps.map((step, index) => (
+              <button
+                data-done={step.done ? "true" : "false"}
+                key={step.label}
+                type="button"
+                onClick={() => setActiveTab(step.tab)}
+              >
+                <small>{index + 1}</small>
+                <strong>{step.label}</strong>
+                <span>{step.done ? "Complete" : step.action}</span>
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <div className="quickStartGrid">
+          <section className="panel">
+            <div className="panelHeader">
+              <div className="panelTitle">
+                <Sparkles size={18} />
+                <h2>Assaddar starter pack</h2>
+              </div>
+            </div>
+            <p className="mutedText">
+              Add the approved consultancy baseline for services, process,
+              privacy, pricing, and consultation capture.
+            </p>
+            <button
+              className="primaryButton full"
+              type="button"
+              disabled={busy || !selectedTenant}
+              onClick={importStarterKnowledge}
+            >
+              <Plus size={16} />
+              Import starter FAQs
+            </button>
+          </section>
+
+          <section className="panel">
+            <div className="panelHeader">
+              <div className="panelTitle">
+                <Globe2 size={18} />
+                <h2>Website check</h2>
+              </div>
+            </div>
+            <label className="field">
+              <span>Website URL</span>
+              <input
+                value={siteUrl}
+                onChange={(event) => setSiteUrl(event.target.value)}
+              />
+            </label>
+            <div className="rowActions">
+              <button
+                className="secondaryButton"
+                type="button"
+                disabled={busy || !selectedTenant || !siteUrl}
+                onClick={scanWebsiteForKnowledge}
+              >
+                <Upload size={16} />
+                Import knowledge
+              </button>
+              <button
+                className="secondaryButton"
+                type="button"
+                disabled={busy || !selectedTenant || !siteUrl}
+                onClick={verifyWidgetInstall}
+              >
+                <ShieldCheck size={16} />
+                Verify widget
+              </button>
+            </div>
+            {installCheck ? (
+              <div
+                className="installResult"
+                data-installed={installCheck.installed ? "true" : "false"}
+              >
+                {installCheck.installed ? (
+                  <CheckCircle2 size={16} />
+                ) : (
+                  <AlertCircle size={16} />
+                )}
+                <span>
+                  {installCheck.installed
+                    ? "Widget found on website"
+                    : "Widget not detected yet"}
+                </span>
+              </div>
+            ) : null}
+          </section>
+        </div>
+      </div>
     );
   }
 
@@ -1041,6 +1635,32 @@ export default function DashboardPage() {
               ) : (
                 <div className="emptyState compact">No conversations yet.</div>
               )}
+            </div>
+          </section>
+
+          <section className="panel">
+            <div className="panelHeader">
+              <div className="panelTitle">
+                <BarChart3 size={18} />
+                <h2>Answer quality</h2>
+              </div>
+              <span className="countPill">
+                {answeredCount + unansweredCount}
+              </span>
+            </div>
+            <div className="qualityRows">
+              <article>
+                <span>Answered</span>
+                <strong>{answeredCount}</strong>
+              </article>
+              <article data-alert={unansweredCount ? "true" : "false"}>
+                <span>Needs knowledge or human</span>
+                <strong>{unansweredCount}</strong>
+              </article>
+              <article>
+                <span>Lead captures</span>
+                <strong>{leadHandoffs.length}</strong>
+              </article>
             </div>
           </section>
         </div>
@@ -1233,8 +1853,67 @@ export default function DashboardPage() {
                 <Upload size={18} />
                 <h2>Import</h2>
               </div>
-              <span className="countPill">{importFaqs.length}</span>
+              <span className="countPill">
+                {websiteImport?.suggestedFaqs.length ?? importFaqs.length}
+              </span>
             </div>
+            <label className="field">
+              <span>Website URL</span>
+              <input
+                value={siteUrl}
+                onChange={(event) => setSiteUrl(event.target.value)}
+              />
+            </label>
+            <button
+              className="primaryButton full"
+              disabled={busy || !selectedTenant || !siteUrl}
+              type="button"
+              onClick={scanWebsiteForKnowledge}
+            >
+              <Globe2 size={16} />
+              Scan website
+            </button>
+            {websiteImport ? (
+              <div className="suggestionStack">
+                <div className="sourceSummary">
+                  <strong>{websiteImport.title}</strong>
+                  <span>
+                    {websiteImport.detectedLanguage.toUpperCase()} ·{" "}
+                    {websiteImport.statusCode}
+                  </span>
+                </div>
+                {websiteImport.suggestedFaqs.map((item) => (
+                  <article className="suggestionItem" key={item.question}>
+                    <strong>{item.question}</strong>
+                    <p>{item.answer}</p>
+                    <div className="tagRow">
+                      {item.tags.map((tag) => (
+                        <small key={tag}>{tag}</small>
+                      ))}
+                    </div>
+                    <button
+                      className="secondaryButton"
+                      type="button"
+                      disabled={busy}
+                      onClick={() => importSuggestedFaqs([item])}
+                    >
+                      <Plus size={15} />
+                      Add
+                    </button>
+                  </article>
+                ))}
+                <button
+                  className="secondaryButton full"
+                  type="button"
+                  disabled={busy || !websiteImport.suggestedFaqs.length}
+                  onClick={() => importSuggestedFaqs()}
+                >
+                  <Upload size={16} />
+                  Import all website FAQs
+                </button>
+              </div>
+            ) : null}
+            <div className="divider" />
             <label className="field">
               <span>Paste FAQs</span>
               <textarea
@@ -1254,6 +1933,106 @@ export default function DashboardPage() {
             </button>
           </section>
         </div>
+      </div>
+    );
+  }
+
+  function renderLeads() {
+    return (
+      <div className="workspaceStack">
+        <section className="metricsGrid compactMetrics">
+          <article className="metricCard">
+            <UserCheck size={18} />
+            <span>Total leads</span>
+            <strong>{leadHandoffs.length}</strong>
+          </article>
+          <article className="metricCard" data-alert={openLeads.length ? "true" : "false"}>
+            <Inbox size={18} />
+            <span>Open follow-ups</span>
+            <strong>{openLeads.length}</strong>
+          </article>
+          <article className="metricCard">
+            <CheckCircle2 size={18} />
+            <span>Resolved</span>
+            <strong>
+              {
+                leadHandoffs.filter((handoff) => handoff.status === "resolved")
+                  .length
+              }
+            </strong>
+          </article>
+        </section>
+
+        <section className="panel">
+          <div className="panelHeader">
+            <div className="panelTitle">
+              <UserCheck size={18} />
+              <h2>Lead capture inbox</h2>
+            </div>
+            <span className="countPill">{leadHandoffs.length}</span>
+          </div>
+          <div className="leadGrid">
+            {leadHandoffs.length ? (
+              leadHandoffs.map((handoff) => {
+                const details = parseLeadDetails(handoff.requesterMessage);
+                return (
+                  <article className="leadCard" key={handoff.id}>
+                    <div className="leadHeader">
+                      <div>
+                        <strong>
+                          {details.find((item) => item.label === "Company")
+                            ?.value ??
+                            details.find((item) => item.label === "Name")
+                              ?.value ??
+                            "Website lead"}
+                        </strong>
+                        <span>{formatDate(handoff.createdAt)}</span>
+                      </div>
+                      <small data-status={handoff.status}>
+                        {handoff.status}
+                      </small>
+                    </div>
+                    <dl>
+                      {details.map((item) => (
+                        <div key={`${handoff.id}-${item.label}`}>
+                          <dt>{item.label}</dt>
+                          <dd>{item.value}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                    <div className="rowActions">
+                      <button
+                        className="secondaryButton"
+                        type="button"
+                        disabled={handoff.status === "in_progress"}
+                        onClick={() =>
+                          updateHandoff(handoff, "in_progress", "Assad Dar")
+                        }
+                      >
+                        In progress
+                      </button>
+                      <button
+                        className="primaryButton"
+                        type="button"
+                        disabled={handoff.status === "resolved"}
+                        onClick={() =>
+                          updateHandoff(handoff, "resolved", "Assad Dar")
+                        }
+                      >
+                        Resolve
+                      </button>
+                    </div>
+                  </article>
+                );
+              })
+            ) : (
+              <div className="emptyState">
+                No leads yet. Enable lead capture in the widget settings and
+                publish the widget on the website.
+              </div>
+            )}
+          </div>
+        </section>
       </div>
     );
   }
@@ -1540,77 +2319,281 @@ export default function DashboardPage() {
 
   function renderWidget() {
     return (
-      <div className="widgetGrid">
-        <section className="panel">
-          <div className="panelHeader">
-            <div className="panelTitle">
-              <Code2 size={18} />
-              <h2>Install widget</h2>
-            </div>
-            <a
-              className="externalLink"
-              href={defaultSiteUrl}
-              rel="noreferrer"
-              target="_blank"
-            >
-              <ExternalLink size={15} />
-              Open site
-            </a>
-          </div>
-          <div className="platformTabs">
-            {(
-              ["html", "wordpress", "webflow", "shopify"] as WidgetPlatform[]
-            ).map((platform) => (
-              <button
-                data-active={widgetPlatform === platform ? "true" : "false"}
-                key={platform}
-                type="button"
-                onClick={() => setWidgetPlatform(platform)}
+      <div className="workspaceStack">
+        <div className="widgetGrid">
+          <section className="panel">
+            <div className="panelHeader">
+              <div className="panelTitle">
+                <Code2 size={18} />
+                <h2>Install widget</h2>
+              </div>
+              <a
+                className="externalLink"
+                href={siteUrl || defaultSiteUrl}
+                rel="noreferrer"
+                target="_blank"
               >
-                {titleCase(platform)}
-              </button>
-            ))}
-          </div>
-          <pre className="snippet">
-            {currentSnippet || "No tenant selected"}
-          </pre>
-          <button
-            className="primaryButton full"
-            disabled={!currentSnippet}
-            type="button"
-            onClick={() =>
-              copyText(currentSnippet, `${titleCase(widgetPlatform)} snippet`)
-            }
-          >
-            <Copy size={16} />
-            {copiedSnippet ? "Copy again" : "Copy snippet"}
-          </button>
-        </section>
-
-        <section className="panel">
-          <div className="panelHeader">
-            <div className="panelTitle">
-              <Layers size={18} />
-              <h2>Widget identity</h2>
+                <ExternalLink size={15} />
+                Open site
+              </a>
             </div>
-          </div>
-          <div className="identityList">
-            <article>
-              <span>Assistant ID</span>
-              <strong>
-                {selectedTenant?.publicId ?? "No tenant selected"}
-              </strong>
-            </article>
-            <article>
-              <span>API base</span>
-              <strong>{normalizedApiBase}</strong>
-            </article>
-            <article>
-              <span>Widget script</span>
-              <strong>{defaultWidgetUrl}</strong>
-            </article>
-          </div>
-        </section>
+            <div className="platformTabs">
+              {(
+                ["html", "wordpress", "webflow", "shopify"] as WidgetPlatform[]
+              ).map((platform) => (
+                <button
+                  data-active={widgetPlatform === platform ? "true" : "false"}
+                  key={platform}
+                  type="button"
+                  onClick={() => setWidgetPlatform(platform)}
+                >
+                  {titleCase(platform)}
+                </button>
+              ))}
+            </div>
+            <pre className="snippet">
+              {currentSnippet || "No tenant selected"}
+            </pre>
+            <div className="rowActions">
+              <button
+                className="primaryButton"
+                disabled={!currentSnippet}
+                type="button"
+                onClick={() =>
+                  copyText(
+                    currentSnippet,
+                    `${titleCase(widgetPlatform)} snippet`,
+                  )
+                }
+              >
+                <Copy size={16} />
+                {copiedSnippet ? "Copy again" : "Copy snippet"}
+              </button>
+              <button
+                className="secondaryButton"
+                type="button"
+                disabled={busy || !selectedTenant || !siteUrl}
+                onClick={verifyWidgetInstall}
+              >
+                <ShieldCheck size={16} />
+                Verify install
+              </button>
+            </div>
+            {installCheck ? (
+              <div
+                className="installResult"
+                data-installed={installCheck.installed ? "true" : "false"}
+              >
+                {installCheck.installed ? (
+                  <CheckCircle2 size={16} />
+                ) : (
+                  <AlertCircle size={16} />
+                )}
+                <div>
+                  <strong>
+                    {installCheck.installed
+                      ? "Widget detected"
+                      : "Widget missing"}
+                  </strong>
+                  <span>{installCheck.checkedUrl}</span>
+                </div>
+              </div>
+            ) : null}
+          </section>
+
+          <section className="panel">
+            <div className="panelHeader">
+              <div className="panelTitle">
+                <Sparkles size={18} />
+                <h2>Live preview</h2>
+              </div>
+              <span className="countPill">{widgetLanguage.toUpperCase()}</span>
+            </div>
+            <div
+              className="widgetPreview"
+              style={{
+                backgroundColor: widgetBackgroundColor,
+                color: widgetTextColor,
+              }}
+            >
+              <div
+                className="previewHeader"
+                style={{ backgroundColor: widgetPrimaryColor }}
+              >
+                <strong>{assistantName}</strong>
+                <span>{selectedTenant?.name ?? "Assaddar AI"}</span>
+              </div>
+              <div className="previewMessages">
+                <p>{widgetOpeningMessage}</p>
+                {ctaLabel ? (
+                  <a style={{ color: widgetPrimaryColor }}>{ctaLabel}</a>
+                ) : null}
+              </div>
+              {leadCaptureEnabled ? (
+                <div className="previewLead">
+                  <strong>{leadCaptureIntro}</strong>
+                  <div className="previewFields">
+                    {leadCaptureFields.slice(0, 5).map((field) => (
+                      <span key={field}>{fieldLabel(field)}</span>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+              <button
+                className="previewLauncher"
+                style={{ backgroundColor: widgetPrimaryColor }}
+                type="button"
+              >
+                {widgetLauncherLabel}
+              </button>
+            </div>
+          </section>
+        </div>
+
+        <div className="settingsGrid">
+          <section className="panel">
+            <div className="panelHeader">
+              <div className="panelTitle">
+                <Layers size={18} />
+                <h2>Theme editor</h2>
+              </div>
+            </div>
+            <div className="formGrid two">
+              <label className="field">
+                <span>Assistant name</span>
+                <input
+                  value={assistantName}
+                  onChange={(event) => setAssistantName(event.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>Launcher label</span>
+                <input
+                  value={widgetLauncherLabel}
+                  onChange={(event) =>
+                    setWidgetLauncherLabel(event.target.value)
+                  }
+                />
+              </label>
+              <label className="field">
+                <span>Primary color</span>
+                <input
+                  type="color"
+                  value={widgetPrimaryColor}
+                  onChange={(event) =>
+                    setWidgetPrimaryColor(event.target.value)
+                  }
+                />
+              </label>
+              <label className="field">
+                <span>Background</span>
+                <input
+                  type="color"
+                  value={widgetBackgroundColor}
+                  onChange={(event) =>
+                    setWidgetBackgroundColor(event.target.value)
+                  }
+                />
+              </label>
+              <label className="field">
+                <span>Text color</span>
+                <input
+                  type="color"
+                  value={widgetTextColor}
+                  onChange={(event) => setWidgetTextColor(event.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>Position</span>
+                <select
+                  value={widgetPosition}
+                  onChange={(event) =>
+                    setWidgetPosition(
+                      event.target.value as "bottom-right" | "bottom-left",
+                    )
+                  }
+                >
+                  <option value="bottom-right">Bottom right</option>
+                  <option value="bottom-left">Bottom left</option>
+                </select>
+              </label>
+            </div>
+            <label className="field">
+              <span>Opening message</span>
+              <textarea
+                value={widgetOpeningMessage}
+                onChange={(event) =>
+                  setWidgetOpeningMessage(event.target.value)
+                }
+                rows={3}
+              />
+            </label>
+            <button
+              className="primaryButton full"
+              type="button"
+              disabled={busy || !selectedTenant}
+              onClick={saveTenantSettings}
+            >
+              <Save size={16} />
+              Save widget settings
+            </button>
+          </section>
+
+          <section className="panel">
+            <div className="panelHeader">
+              <div className="panelTitle">
+                <UserCheck size={18} />
+                <h2>Lead capture</h2>
+              </div>
+              <label className="toggle">
+                <input
+                  type="checkbox"
+                  checked={leadCaptureEnabled}
+                  onChange={(event) =>
+                    setLeadCaptureEnabled(event.target.checked)
+                  }
+                />
+                <span>Enabled</span>
+              </label>
+            </div>
+            <label className="field">
+              <span>Prompt</span>
+              <textarea
+                value={leadCaptureIntro}
+                onChange={(event) => setLeadCaptureIntro(event.target.value)}
+                rows={3}
+              />
+            </label>
+            <div className="checkboxGrid">
+              {leadFieldOptions.map((field) => (
+                <label key={field}>
+                  <input
+                    type="checkbox"
+                    checked={leadCaptureFields.includes(field)}
+                    onChange={() => toggleLeadField(field)}
+                  />
+                  <span>{fieldLabel(field)}</span>
+                </label>
+              ))}
+            </div>
+            <div className="formGrid two">
+              <label className="field">
+                <span>CTA label</span>
+                <input
+                  value={ctaLabel}
+                  onChange={(event) => setCtaLabel(event.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>CTA URL</span>
+                <input
+                  value={ctaUrl}
+                  onChange={(event) => setCtaUrl(event.target.value)}
+                />
+              </label>
+            </div>
+          </section>
+        </div>
       </div>
     );
   }
@@ -1621,38 +2604,103 @@ export default function DashboardPage() {
         <section className="panel">
           <div className="panelHeader">
             <div className="panelTitle">
-              <Globe2 size={18} />
-              <h2>Connection</h2>
+              <Sparkles size={18} />
+              <h2>Assistant personality</h2>
             </div>
           </div>
+          <div className="formGrid two">
+            <label className="field">
+              <span>Default language</span>
+              <select
+                value={tenantLocale}
+                onChange={(event) => {
+                  setTenantLocale(event.target.value);
+                  setWidgetLanguage(event.target.value);
+                }}
+              >
+                <option value="de">German</option>
+                <option value="en">English</option>
+              </select>
+            </label>
+            <label className="field">
+              <span>Tone</span>
+              <select
+                value={tenantTone}
+                onChange={(event) =>
+                  setTenantTone(
+                    event.target.value as "friendly" | "neutral" | "formal",
+                  )
+                }
+              >
+                <option value="friendly">Friendly</option>
+                <option value="neutral">Neutral</option>
+                <option value="formal">Formal</option>
+              </select>
+            </label>
+          </div>
           <label className="field">
-            <span>API base</span>
-            <input
-              value={apiBase}
-              onChange={(event) => setApiBase(event.target.value)}
+            <span>Assistant role</span>
+            <textarea
+              value={widgetOpeningMessage}
+              onChange={(event) => setWidgetOpeningMessage(event.target.value)}
+              rows={4}
             />
           </label>
-          <label className="field">
-            <span>Admin token</span>
-            <div className="inputIcon">
-              <KeyRound size={16} />
-              <input
-                type="password"
-                value={adminToken}
-                onChange={(event) => setAdminToken(event.target.value)}
-                autoComplete="off"
-              />
-            </div>
-          </label>
           <button
-            className="primaryButton"
-            disabled={busy || !adminToken}
+            className="primaryButton full"
             type="button"
-            onClick={refreshTenants}
+            disabled={busy || !selectedTenant}
+            onClick={saveTenantSettings}
           >
-            <RefreshCw size={16} />
-            Reconnect
+            <Save size={16} />
+            Save business profile
           </button>
+        </section>
+
+        <section className="panel">
+          <div className="panelHeader">
+            <div className="panelTitle">
+              <ShieldCheck size={18} />
+              <h2>Safety and limits</h2>
+            </div>
+          </div>
+          <div className="formGrid two">
+            <label className="field">
+              <span>Confidence threshold</span>
+              <input
+                type="number"
+                min="0.05"
+                max="0.95"
+                step="0.01"
+                value={confidenceThreshold}
+                onChange={(event) =>
+                  setConfidenceThreshold(Number(event.target.value))
+                }
+              />
+            </label>
+            <label className="field">
+              <span>Max message length</span>
+              <input
+                type="number"
+                min="200"
+                max="4000"
+                value={maxMessageLength}
+                onChange={(event) =>
+                  setMaxMessageLength(Number(event.target.value))
+                }
+              />
+            </label>
+            <label className="field">
+              <span>Retention days</span>
+              <input
+                type="number"
+                min="1"
+                max="3650"
+                value={retentionDays}
+                onChange={(event) => setRetentionDays(Number(event.target.value))}
+              />
+            </label>
+          </div>
         </section>
 
         <section className="panel">
@@ -1675,7 +2723,58 @@ export default function DashboardPage() {
               <span>Status</span>
               <strong>{selectedTenant?.status ?? "active"}</strong>
             </article>
+            <article>
+              <span>Assistant ID</span>
+              <strong>{selectedTenant?.publicId ?? "-"}</strong>
+            </article>
           </div>
+        </section>
+
+        <section className="panel">
+          <div className="panelHeader">
+            <div className="panelTitle">
+              <Globe2 size={18} />
+              <h2>Admin access</h2>
+            </div>
+          </div>
+          <label className="field">
+            <span>API base</span>
+            <input
+              value={apiBase}
+              onChange={(event) => setApiBase(event.target.value)}
+            />
+          </label>
+          <label className="field">
+            <span>Admin token</span>
+            <div className="inputIcon">
+              <KeyRound size={16} />
+              <input
+                type="password"
+                value={adminToken}
+                onChange={(event) => setAdminToken(event.target.value)}
+                autoComplete="off"
+              />
+            </div>
+          </label>
+          <div className="identityList">
+            <article>
+              <span>Role</span>
+              <strong>Owner</strong>
+            </article>
+            <article>
+              <span>Session</span>
+              <strong>{connectionAttempted ? "Connected" : "Locked"}</strong>
+            </article>
+          </div>
+          <button
+            className="primaryButton full"
+            disabled={busy || !adminToken}
+            type="button"
+            onClick={refreshTenants}
+          >
+            <RefreshCw size={16} />
+            Reconnect
+          </button>
         </section>
       </div>
     );
@@ -1692,11 +2791,17 @@ export default function DashboardPage() {
       );
     }
 
+    if (activeTab === "setup") {
+      return renderSetupWizard();
+    }
     if (activeTab === "overview") {
       return renderOverview();
     }
     if (activeTab === "knowledge") {
       return renderKnowledge();
+    }
+    if (activeTab === "leads") {
+      return renderLeads();
     }
     if (activeTab === "inbox") {
       return renderInbox();
@@ -1711,6 +2816,82 @@ export default function DashboardPage() {
       return renderWidget();
     }
     return renderSettings();
+  }
+
+  if (!adminToken || (!connectionAttempted && !tenants.length)) {
+    return (
+      <main className="authShell">
+        <section className="authPanel">
+          <div className="brand large">
+            <span className="brandMark">
+              <Bot size={22} />
+            </span>
+            <div>
+              <strong>Assaddar AI</strong>
+              <span>Consultancy assistant admin</span>
+            </div>
+          </div>
+          <form
+            className="authForm"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void refreshTenants();
+            }}
+          >
+            <label className="field">
+              <span>Admin token</span>
+              <div className="inputIcon">
+                <KeyRound size={16} />
+                <input
+                  type="password"
+                  value={adminToken}
+                  onChange={(event) => setAdminToken(event.target.value)}
+                  autoComplete="off"
+                  autoFocus
+                />
+              </div>
+            </label>
+            {showAdvancedConnection ? (
+              <label className="field">
+                <span>API base</span>
+                <input
+                  value={apiBase}
+                  onChange={(event) => setApiBase(event.target.value)}
+                />
+              </label>
+            ) : null}
+            <button
+              className="primaryButton full"
+              disabled={busy || !adminToken}
+            >
+              {busy ? (
+                <Loader2 className="spin" size={16} />
+              ) : (
+                <ShieldCheck size={16} />
+              )}
+              Enter admin
+            </button>
+            <button
+              className="textToggle"
+              type="button"
+              onClick={() => setShowAdvancedConnection((current) => !current)}
+            >
+              {showAdvancedConnection ? "Hide advanced" : "Advanced"}
+            </button>
+            {status ? (
+              <span className="status authStatus" data-tone={statusKind}>
+                {statusKind === "danger" ? (
+                  <AlertCircle size={16} />
+                ) : (
+                  <CheckCircle2 size={16} />
+                )}
+                {status}
+              </span>
+            ) : null}
+          </form>
+        </section>
+      </main>
+    );
   }
 
   return (

@@ -5,6 +5,13 @@ type WidgetTheme = {
   launcherLabel?: string;
   openingMessage?: string;
   language?: string;
+  position?: "bottom-right" | "bottom-left";
+  assistantName?: string;
+  leadCaptureEnabled?: boolean;
+  leadCaptureIntro?: string;
+  leadCaptureFields?: string[];
+  ctaLabel?: string;
+  ctaUrl?: string;
 };
 
 type WidgetConfig = {
@@ -24,6 +31,11 @@ type ChatResponse = {
   handoffRecommended: boolean;
 };
 
+type LeadCaptureResponse = {
+  conversationId: string;
+  status: "captured";
+};
+
 type StoredMessage = {
   role: "assistant" | "user";
   text: string;
@@ -32,6 +44,7 @@ type StoredMessage = {
 type WidgetState = {
   visitorId: string;
   conversationId?: string;
+  leadCaptured?: boolean;
   sentAt: number[];
   messages: StoredMessage[];
 };
@@ -88,6 +101,15 @@ void (() => {
     const backgroundColor = config.theme.backgroundColor ?? "#ffffff";
     const textColor = config.theme.textColor ?? "#172033";
     const launcherLabel = config.theme.launcherLabel ?? "Chat";
+    const assistantName = config.theme.assistantName ?? config.tenantName;
+    const position = config.theme.position ?? "bottom-right";
+    const leadFields = normalizeLeadFields(config.theme.leadCaptureFields);
+    const leadCaptureVisible =
+      Boolean(config.theme.leadCaptureEnabled) && !state.leadCaptured;
+    const shellSide =
+      position === "bottom-left"
+        ? "left: 20px; right: auto;"
+        : "right: 20px; left: auto;";
 
     shadow.innerHTML = `
     <style>
@@ -95,7 +117,7 @@ void (() => {
       .assaddar-shell {
         position: fixed;
         z-index: 2147483000;
-        right: 20px;
+        ${shellSide}
         bottom: 20px;
         font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         color: ${textColor};
@@ -174,6 +196,61 @@ void (() => {
         background: ${primaryColor};
         color: #fff;
       }
+      .cta {
+        display: inline-flex;
+        align-self: flex-start;
+        border-radius: 7px;
+        background: rgba(21, 94, 239, 0.1);
+        color: ${primaryColor};
+        padding: 8px 10px;
+        text-decoration: none;
+        font-size: 13px;
+        font-weight: 800;
+      }
+      .lead-form {
+        display: none;
+        gap: 8px;
+        border-top: 1px solid rgba(23, 32, 51, 0.12);
+        background: #fff;
+        padding: 12px;
+      }
+      .lead-form[data-visible="true"] { display: grid; }
+      .lead-form strong {
+        display: block;
+        color: ${textColor};
+        font-size: 13px;
+      }
+      .lead-form input,
+      .lead-form textarea {
+        width: 100%;
+        box-sizing: border-box;
+        border: 1px solid rgba(23, 32, 51, 0.18);
+        border-radius: 6px;
+        min-height: 38px;
+        padding: 8px 10px;
+        outline: none;
+        font: inherit;
+        font-size: 13px;
+        resize: vertical;
+      }
+      .lead-form input:focus,
+      .lead-form textarea:focus {
+        border-color: ${primaryColor};
+        box-shadow: 0 0 0 3px rgba(21, 94, 239, 0.14);
+      }
+      .lead-form button {
+        border: 0;
+        border-radius: 6px;
+        background: ${primaryColor};
+        color: #fff;
+        min-height: 38px;
+        cursor: pointer;
+        font-weight: 800;
+      }
+      .lead-form button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
       .composer {
         display: grid;
         grid-template-columns: 1fr 44px;
@@ -214,12 +291,23 @@ void (() => {
       <div class="panel" part="panel">
         <div class="header">
           <div>
-            <strong>${escapeHtml(config.tenantName)}</strong>
+            <strong>${escapeHtml(assistantName)}</strong>
             <span>${escapeHtml(config.defaultLocale.toUpperCase())}</span>
           </div>
           <button class="close" aria-label="Close chat">×</button>
         </div>
         <div class="messages" part="messages"></div>
+        <form class="lead-form" data-visible="${leadCaptureVisible ? "true" : "false"}">
+          <strong>${escapeHtml(config.theme.leadCaptureIntro ?? "Leave your details and we will follow up.")}</strong>
+          ${leadFields
+            .map((field) =>
+              field === "message"
+                ? `<textarea name="${field}" rows="3" placeholder="${escapeHtml(leadFieldLabel(field))}"></textarea>`
+                : `<input name="${field}" ${field === "email" ? 'type="email"' : 'type="text"'} ${field === "name" || field === "email" ? "required" : ""} placeholder="${escapeHtml(leadFieldLabel(field))}" />`,
+            )
+            .join("")}
+          <button>Send details</button>
+        </form>
         <form class="composer">
           <input maxlength="${config.limits.maxMessageLength}" autocomplete="off" />
           <button aria-label="Send message">›</button>
@@ -233,6 +321,7 @@ void (() => {
     const panel = shadow.querySelector<HTMLDivElement>(".panel");
     const close = shadow.querySelector<HTMLButtonElement>(".close");
     const messages = shadow.querySelector<HTMLDivElement>(".messages");
+    const leadForm = shadow.querySelector<HTMLFormElement>(".lead-form");
     const form = shadow.querySelector<HTMLFormElement>(".composer");
     const input = shadow.querySelector<HTMLInputElement>(".composer input");
     const sendButton =
@@ -243,6 +332,7 @@ void (() => {
       !panel ||
       !close ||
       !messages ||
+      !leadForm ||
       !form ||
       !input ||
       !sendButton
@@ -250,7 +340,7 @@ void (() => {
       throw new Error("Widget failed to initialize.");
     }
 
-    drawMessages(messages, state.messages);
+    drawMessages(messages, state.messages, context.config.theme);
 
     launcher.addEventListener("click", () => {
       panel.classList.add("open");
@@ -263,6 +353,63 @@ void (() => {
       launcher.style.display = "inline-flex";
     });
 
+    leadForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const fields: Record<string, string> = {};
+      const formData = new FormData(leadForm);
+      for (const [key, value] of formData.entries()) {
+        fields[key] = String(value).trim();
+      }
+
+      if (!Object.values(fields).some(Boolean)) {
+        return;
+      }
+
+      const button = leadForm.querySelector<HTMLButtonElement>("button");
+      if (button) {
+        button.disabled = true;
+      }
+
+      try {
+        const response = await fetchJson<LeadCaptureResponse>(
+          `${context.apiBase}/widget/leads`,
+          {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              assistantId: context.config.assistantId,
+              conversationId: state.conversationId,
+              visitorId: state.visitorId,
+              pageUrl: window.location.href,
+              fields,
+            }),
+          },
+        );
+
+        state.conversationId = response.conversationId;
+        state.leadCaptured = true;
+        state.messages.push({
+          role: "assistant",
+          text: "Thanks. Your details were sent to the team.",
+        });
+        persistState(context.config.assistantId, state);
+        leadForm.dataset.visible = "false";
+        drawMessages(messages, state.messages, context.config.theme);
+      } catch {
+        state.messages.push({
+          role: "assistant",
+          text: "I couldn't send your details right now. Please try again later.",
+        });
+        drawMessages(messages, state.messages, context.config.theme);
+      } finally {
+        if (button) {
+          button.disabled = false;
+        }
+      }
+    });
+
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       const text = input.value.trim();
@@ -273,7 +420,7 @@ void (() => {
       input.value = "";
       sendButton.disabled = true;
       state.messages.push({ role: "user", text });
-      drawMessages(messages, state.messages);
+      drawMessages(messages, state.messages, context.config.theme);
       state.sentAt.push(Date.now());
 
       try {
@@ -305,7 +452,7 @@ void (() => {
         });
       } finally {
         sendButton.disabled = false;
-        drawMessages(messages, state.messages);
+        drawMessages(messages, state.messages, context.config.theme);
       }
     });
   }
@@ -348,14 +495,50 @@ void (() => {
     return `assaddar_widget_${assistantId}`;
   }
 
-  function drawMessages(container: HTMLElement, messages: StoredMessage[]) {
+  function drawMessages(
+    container: HTMLElement,
+    messages: StoredMessage[],
+    theme?: WidgetTheme,
+  ) {
     container.innerHTML = messages
       .map(
         (message) =>
           `<div class="bubble ${message.role}">${escapeHtml(message.text)}</div>`,
       )
       .join("");
+    if (theme?.ctaUrl && theme.ctaLabel) {
+      container.insertAdjacentHTML(
+        "beforeend",
+        `<a class="cta" href="${escapeHtml(theme.ctaUrl)}" target="_blank" rel="noreferrer">${escapeHtml(theme.ctaLabel)}</a>`,
+      );
+    }
     container.scrollTop = container.scrollHeight;
+  }
+
+  function normalizeLeadFields(fields?: string[]) {
+    const defaults = ["name", "email", "company", "projectType", "timeline"];
+    const values = fields?.length ? fields : defaults;
+    return Array.from(new Set(values)).slice(0, 8);
+  }
+
+  function leadFieldLabel(field: string) {
+    const labels: Record<string, string> = {
+      name: "Name",
+      email: "Email",
+      company: "Company",
+      projectType: "Project type",
+      budget: "Budget",
+      timeline: "Timeline",
+      message: "Message",
+    };
+    return (
+      labels[field] ??
+      field
+        .replace(/([A-Z])/g, " $1")
+        .replace(/[_-]/g, " ")
+        .replace(/\b\w/g, (letter) => letter.toUpperCase())
+        .trim()
+    );
   }
 
   function isClientRateLimited(state: WidgetState) {

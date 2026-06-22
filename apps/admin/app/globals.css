@@ -189,6 +189,20 @@ textarea:focus {
   box-shadow: 0 0 0 3px rgba(37, 87, 214, 0.14);
 }
 
+input[type="color"] {
+  height: 42px;
+  padding: 3px;
+}
+
+input[type="color"]::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+input[type="color"]::-webkit-color-swatch {
+  border: 0;
+  border-radius: 5px;
+}
+
 textarea {
   min-height: 116px;
   resize: vertical;
@@ -325,6 +339,7 @@ textarea {
 
 .tenantList {
   display: grid;
+  align-content: start;
   gap: 8px;
   min-height: 0;
   overflow: auto;
@@ -512,7 +527,7 @@ textarea {
 
 .metricsGrid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(160px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 12px;
 }
 
@@ -642,7 +657,7 @@ textarea {
   margin-top: 14px;
 }
 
-.setupList article,
+.setupList button,
 .readinessList article,
 .identityList article {
   display: flex;
@@ -655,7 +670,13 @@ textarea {
   padding: 10px;
 }
 
-.setupList article[data-done="true"],
+.setupList button {
+  justify-content: flex-start;
+  color: var(--text);
+  text-align: left;
+}
+
+.setupList button[data-done="true"],
 .readinessList article[data-done="true"] {
   border-color: var(--green-line);
   background: var(--green-bg);
@@ -1240,6 +1261,411 @@ textarea {
   line-height: 1.5;
 }
 
+.authShell {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  background:
+    linear-gradient(180deg, rgba(37, 87, 214, 0.08), rgba(22, 112, 74, 0.05)),
+    var(--bg);
+  padding: 20px;
+}
+
+.authPanel {
+  display: grid;
+  gap: 20px;
+  width: min(440px, 100%);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: var(--shadow);
+  padding: 22px;
+}
+
+.brand.large {
+  padding-bottom: 18px;
+}
+
+.authForm {
+  display: grid;
+  gap: 12px;
+}
+
+.authStatus {
+  max-width: 100%;
+  white-space: normal;
+}
+
+.progressTrack.large {
+  height: 10px;
+}
+
+.wizardSteps,
+.quickStartGrid,
+.leadGrid,
+.qualityRows,
+.suggestionStack,
+.formGrid,
+.checkboxGrid,
+.previewFields {
+  display: grid;
+  gap: 12px;
+}
+
+.wizardSteps {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  margin-top: 16px;
+}
+
+.wizardSteps button {
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+  min-height: 118px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  color: var(--text);
+  padding: 14px;
+  text-align: left;
+}
+
+.wizardSteps button[data-done="true"] {
+  border-color: var(--green-line);
+  background: var(--green-bg);
+}
+
+.wizardSteps small {
+  display: inline-flex;
+  width: 26px;
+  height: 26px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--accent);
+  font-weight: 900;
+}
+
+.wizardSteps strong {
+  font-size: 15px;
+}
+
+.wizardSteps span,
+.mutedText {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.quickStartGrid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.installResult {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  border: 1px solid var(--amber-line);
+  border-radius: 8px;
+  background: var(--amber-bg);
+  color: var(--amber);
+  margin-top: 12px;
+  padding: 10px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.installResult[data-installed="true"] {
+  border-color: var(--green-line);
+  background: var(--green-bg);
+  color: var(--green);
+}
+
+.installResult div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.installResult span {
+  overflow: hidden;
+  color: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 700;
+}
+
+.sourceSummary {
+  display: grid;
+  gap: 3px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  padding: 10px;
+}
+
+.sourceSummary span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.suggestionItem {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  padding: 10px;
+}
+
+.suggestionItem p {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.divider {
+  height: 1px;
+  background: var(--line);
+  margin: 14px 0;
+}
+
+.compactMetrics {
+  grid-template-columns: repeat(3, minmax(160px, 1fr));
+}
+
+.leadGrid {
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.leadCard {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  padding: 12px;
+}
+
+.leadHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.leadHeader div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.leadHeader strong,
+.leadHeader span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.leadHeader span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.leadHeader small {
+  border-radius: 999px;
+  background: var(--amber-bg);
+  color: var(--amber);
+  padding: 3px 7px;
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.leadHeader small[data-status="resolved"] {
+  background: var(--green-bg);
+  color: var(--green);
+}
+
+.leadCard dl {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+}
+
+.leadCard dl div {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.leadCard dt,
+.leadCard dd {
+  margin: 0;
+  min-width: 0;
+  font-size: 13px;
+}
+
+.leadCard dt {
+  color: var(--muted);
+  font-weight: 900;
+}
+
+.leadCard dd {
+  color: var(--text-soft);
+  word-break: break-word;
+}
+
+.qualityRows article {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  padding: 10px;
+}
+
+.qualityRows article[data-alert="true"] {
+  border-color: var(--amber-line);
+  background: var(--amber-bg);
+}
+
+.qualityRows span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.qualityRows strong {
+  font-size: 20px;
+}
+
+.widgetPreview {
+  position: relative;
+  display: grid;
+  gap: 0;
+  overflow: hidden;
+  min-height: 430px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.previewHeader {
+  display: grid;
+  gap: 3px;
+  padding: 14px;
+  color: #fff;
+}
+
+.previewHeader strong {
+  font-size: 15px;
+}
+
+.previewHeader span {
+  opacity: 0.86;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.previewMessages {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-height: 128px;
+  background: #f6f7f9;
+  padding: 14px;
+}
+
+.previewMessages p {
+  width: fit-content;
+  max-width: 90%;
+  margin: 0;
+  border: 1px solid rgba(23, 32, 51, 0.12);
+  border-radius: 8px;
+  background: #fff;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.previewMessages a {
+  width: fit-content;
+  border-radius: 7px;
+  background: rgba(37, 87, 214, 0.1);
+  padding: 8px 10px;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.previewLead {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid var(--line);
+  padding: 14px 14px 72px;
+}
+
+.previewLead strong {
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.previewFields {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.previewFields span {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--muted);
+  padding: 8px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.previewLauncher {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  min-height: 42px;
+  border: 0;
+  border-radius: 999px;
+  color: #fff;
+  padding: 0 16px;
+  font-weight: 900;
+}
+
+.formGrid.two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.checkboxGrid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 10px 0 14px;
+}
+
+.checkboxGrid label,
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-soft);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.checkboxGrid input,
+.toggle input {
+  width: auto;
+}
+
 @media (max-width: 1180px) {
   .shell {
     grid-template-columns: 1fr;
@@ -1265,7 +1691,8 @@ textarea {
   .testStudioGrid,
   .widgetGrid,
   .settingsGrid,
-  .inboxGrid {
+  .inboxGrid,
+  .quickStartGrid {
     grid-template-columns: 1fr;
   }
 
@@ -1302,11 +1729,15 @@ textarea {
   }
 
   .metricsGrid,
+  .compactMetrics,
   .readinessList,
   .knowledgeTools,
   .knowledgeForm.enhanced,
   .handoffBoard,
-  .sampleGrid {
+  .sampleGrid,
+  .formGrid.two,
+  .checkboxGrid,
+  .previewFields {
     grid-template-columns: 1fr;
   }
 

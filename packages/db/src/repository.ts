@@ -37,6 +37,17 @@ export type CreateTenantInput = {
   theme?: WidgetTheme;
 };
 
+export type UpdateTenantInput = {
+  name?: string;
+  slug?: string;
+  defaultLocale?: string;
+  tone?: "friendly" | "neutral" | "formal";
+  confidenceThreshold?: number;
+  maxMessageLength?: number;
+  retentionDays?: number;
+  theme?: WidgetTheme;
+};
+
 export type AddFaqInput = {
   question: string;
   answer: string;
@@ -110,6 +121,72 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       .where(and(eq(tenants.publicId, publicId), eq(tenants.status, "active")))
       .limit(1);
     return tenant ?? null;
+  }
+
+  async updateTenant(tenantId: string, input: UpdateTenantInput) {
+    assertTenantId(tenantId);
+    const existing = await this.getTenant(tenantId);
+    if (!existing) {
+      throw new Error("Tenant not found.");
+    }
+
+    const values: {
+      name?: string;
+      slug?: string;
+      defaultLocale?: string;
+      tone?: "friendly" | "neutral" | "formal";
+      confidenceThreshold?: string;
+      maxMessageLength?: number;
+      retentionDays?: number;
+      theme?: WidgetTheme;
+      updatedAt: SQL;
+    } = {
+      updatedAt: sql`now()`,
+    };
+
+    if (input.name) {
+      values.name = input.name;
+    }
+    if (input.slug) {
+      values.slug = input.slug;
+    }
+    if (input.defaultLocale) {
+      values.defaultLocale = input.defaultLocale;
+    }
+    if (input.tone) {
+      values.tone = input.tone;
+    }
+    if (typeof input.confidenceThreshold === "number") {
+      values.confidenceThreshold = String(input.confidenceThreshold);
+    }
+    if (typeof input.maxMessageLength === "number") {
+      values.maxMessageLength = input.maxMessageLength;
+    }
+    if (typeof input.retentionDays === "number") {
+      values.retentionDays = input.retentionDays;
+    }
+    if (input.theme) {
+      values.theme = {
+        ...(existing.theme ?? {}),
+        ...input.theme,
+      };
+    }
+
+    const [tenant] = await this.db
+      .update(tenants)
+      .set(values)
+      .where(eq(tenants.id, tenantId))
+      .returning();
+
+    if (!tenant) {
+      throw new Error("Tenant not found.");
+    }
+
+    await this.audit(tenantId, "tenant.updated", "tenant", tenantId, {
+      fields: Object.keys(input),
+    });
+
+    return tenant;
   }
 
   async getWidgetConfig(publicId: string) {
