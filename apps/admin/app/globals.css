@@ -2377,4 +2377,13 @@ textarea {
   .rowActions > button {
     flex: 1;
   }
+
+  .channelCard .rowActions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .channelCard .rowActions > button {
+    width: 100%;
+  }
 }
