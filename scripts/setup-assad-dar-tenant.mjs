@@ -13,13 +13,21 @@ const tenantInput = {
   slug: tenantSlug,
   defaultLocale: "de",
   theme: {
-    primaryColor: "#a66e2f",
+    primaryColor: "#2557d6",
     backgroundColor: "#ffffff",
-    textColor: "#16191e",
-    launcherLabel: "Assad",
+    textColor: "#111827",
+    assistantName: "Assaddar AI Consultant",
+    launcherLabel: "AI Beratung",
     openingMessage:
-      "Hallo, ich bin der Assad Dar KI-Assistent. Ich beantworte Fragen zu KI, Automatisierung, der ASDAR Method und Assads Beratungsangebot.",
-    language: "de"
+      "Hallo, ich bin der Assaddar AI Assistent. Ich helfe bei Fragen zu KI-Beratung, Automatisierung, Prozessen und der ASDAR Method.",
+    language: "de",
+    position: "bottom-right",
+    leadCaptureEnabled: true,
+    leadCaptureIntro:
+      "Hinterlassen Sie kurz Ihre Daten, damit wir das passende KI-Projekt einschaetzen koennen.",
+    leadCaptureFields: ["name", "email", "company", "projectType", "budget"],
+    ctaLabel: "Beratung anfragen",
+    ctaUrl: "https://www.assad-dar.de/de"
   }
 };
 
@@ -151,6 +159,18 @@ async function main() {
     tenant = await apiFetch("/admin/tenants", {
       method: "POST",
       body: JSON.stringify(tenantInput)
+    });
+  } else {
+    tenant = await apiFetch(`/admin/tenants/${tenant.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        defaultLocale: tenantInput.defaultLocale,
+        tone: "friendly",
+        confidenceThreshold: 0.18,
+        maxMessageLength: 1200,
+        retentionDays: 365,
+        theme: tenantInput.theme
+      })
     });
   }
 
