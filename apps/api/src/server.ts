@@ -1261,15 +1261,17 @@ function buildChannelConnectionDashboard(input: {
       "channel" | "provider" | "label" | "status" | "settings" | "credentialConfigured"
     > & {
       credentialConfigured: boolean;
+      defaultStatus?: ChannelDashboardItem["status"];
     },
   ): ChannelDashboardItem => {
     const connection = connectionMap.get(`${channel}:${provider}`);
+    const { defaultStatus = "pending", ...dashboardExtras } = extras;
     const status =
       connection?.status === "connected" ||
       connection?.status === "disabled" ||
       connection?.status === "pending"
         ? connection.status
-        : "pending";
+        : defaultStatus;
     return {
       channel,
       provider,
@@ -1281,13 +1283,14 @@ function buildChannelConnectionDashboard(input: {
           : null,
       settings: asRecord(connection?.settings),
       updatedAt: connection?.updatedAt,
-      ...extras,
+      ...dashboardExtras,
     };
   };
 
   return [
     item("website", "assaddar-widget", "Website widget", {
       credentialConfigured: true,
+      defaultStatus: "connected",
       assistantWebhookUrl: assistantId
         ? `${apiBase}/widget/config/${assistantId}`
         : undefined,
