@@ -1,5 +1,5 @@
 :root {
-  --bg: #f5f7fb;
+  --bg: #f4f7fb;
   --surface: #ffffff;
   --surface-muted: #f8fafc;
   --surface-raised: #eef6f2;
@@ -38,7 +38,8 @@ body {
     linear-gradient(
       180deg,
       rgba(37, 87, 214, 0.05),
-      rgba(245, 247, 251, 0) 260px
+      rgba(22, 112, 74, 0.03) 260px,
+      rgba(244, 247, 251, 0) 520px
     ),
     var(--bg);
   color: var(--text);
@@ -54,6 +55,7 @@ body {
 
 button,
 input,
+select,
 textarea {
   font: inherit;
 }
@@ -64,16 +66,19 @@ button {
 
 .shell {
   display: grid;
-  grid-template-columns: 332px minmax(0, 1fr);
+  grid-template-columns: 336px minmax(0, 1fr);
   min-height: 100vh;
 }
 
 .sidebar {
+  position: sticky;
+  top: 0;
   display: flex;
   flex-direction: column;
   gap: 18px;
+  height: 100vh;
   border-right: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.92);
+  background: rgba(255, 255, 255, 0.94);
   padding: 20px;
 }
 
@@ -124,6 +129,7 @@ button {
   display: flex;
   align-items: center;
   gap: 9px;
+  min-width: 0;
   color: var(--text-soft);
   font-size: 13px;
   font-weight: 800;
@@ -132,6 +138,13 @@ button {
 .sectionTitle span:first-of-type {
   text-transform: uppercase;
   letter-spacing: 0.04em;
+}
+
+.panelTitle h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 16px;
+  line-height: 1.2;
 }
 
 .field {
@@ -149,6 +162,7 @@ button {
 }
 
 input,
+select,
 textarea {
   width: 100%;
   min-width: 0;
@@ -164,7 +178,12 @@ textarea {
     background 140ms ease;
 }
 
+select {
+  min-height: 42px;
+}
+
 input:focus,
+select:focus,
 textarea:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(37, 87, 214, 0.14);
@@ -195,14 +214,18 @@ textarea {
 .secondaryButton,
 .dangerButton,
 .iconButton,
-.tenantButton {
+.tenantButton,
+.textToggle,
+.plainListButton,
+.tabBar button,
+.segmented button,
+.platformTabs button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
   min-height: 40px;
   border-radius: 7px;
-  border: 0;
   cursor: pointer;
   font-weight: 800;
   transition:
@@ -213,6 +236,7 @@ textarea {
 }
 
 .primaryButton {
+  border: 0;
   background: var(--accent);
   color: #ffffff;
   padding: 0 15px;
@@ -248,7 +272,8 @@ textarea {
 .primaryButton:disabled,
 .secondaryButton:disabled,
 .dangerButton:disabled,
-.iconButton:disabled {
+.iconButton:disabled,
+.tenantButton:disabled {
   cursor: not-allowed;
   opacity: 0.55;
 }
@@ -256,6 +281,16 @@ textarea {
 .primaryButton.full,
 .secondaryButton.full {
   width: 100%;
+}
+
+.textToggle {
+  justify-content: flex-start;
+  min-height: auto;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  padding: 0;
+  font-size: 13px;
 }
 
 .spin {
@@ -376,6 +411,11 @@ textarea {
   margin-top: 10px;
 }
 
+.form {
+  display: grid;
+  gap: 12px;
+}
+
 .workspace {
   min-width: 0;
   padding: 26px;
@@ -386,7 +426,7 @@ textarea {
   align-items: flex-start;
   justify-content: space-between;
   gap: 18px;
-  margin-bottom: 20px;
+  margin-bottom: 16px;
 }
 
 .titleGroup {
@@ -404,7 +444,7 @@ textarea {
 
 .topbar h1 {
   margin: 5px 0 0;
-  font-size: clamp(24px, 3vw, 34px);
+  font-size: 32px;
   line-height: 1.15;
   letter-spacing: 0;
 }
@@ -443,6 +483,26 @@ textarea {
   border-color: var(--danger-line);
   background: var(--danger-bg);
   color: var(--danger);
+}
+
+.tabBar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.tabBar button {
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.84);
+  color: var(--text-soft);
+  padding: 0 12px;
+}
+
+.tabBar button[data-active="true"] {
+  border-color: var(--accent);
+  background: #f1f5ff;
+  color: var(--accent);
 }
 
 .workspaceStack {
@@ -495,18 +555,6 @@ textarea {
   background: var(--amber-bg);
 }
 
-.dashboardGrid {
-  display: grid;
-  grid-template-columns: minmax(420px, 1fr) minmax(300px, 400px);
-  grid-template-areas:
-    "knowledge test"
-    "knowledge inbox"
-    "knowledge handoffs"
-    "knowledge embed";
-  align-items: start;
-  gap: 16px;
-}
-
 .panel {
   min-width: 0;
   border: 1px solid var(--line);
@@ -516,39 +564,12 @@ textarea {
   padding: 16px;
 }
 
-.knowledgePanel {
-  grid-area: knowledge;
-}
-
-.sidePanel:nth-of-type(2) {
-  grid-area: test;
-}
-
-.sidePanel:nth-of-type(3) {
-  grid-area: inbox;
-}
-
-.sidePanel:nth-of-type(4) {
-  grid-area: handoffs;
-}
-
-.sidePanel:nth-of-type(5) {
-  grid-area: embed;
-}
-
 .panelHeader {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 14px;
-}
-
-.panelTitle h2 {
-  margin: 0;
-  color: var(--text);
-  font-size: 16px;
-  line-height: 1.2;
 }
 
 .countPill {
@@ -566,16 +587,192 @@ textarea {
   font-weight: 900;
 }
 
-.form,
-.knowledgeForm {
+.countPill[data-tone="good"] {
+  border-color: var(--green-line);
+  background: var(--green-bg);
+  color: var(--green);
+}
+
+.countPill[data-tone="warn"] {
+  border-color: var(--amber-line);
+  background: var(--amber-bg);
+  color: var(--amber);
+}
+
+.overviewGrid,
+.knowledgeGrid,
+.testStudioGrid,
+.widgetGrid,
+.settingsGrid {
   display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 420px);
+  gap: 16px;
+  align-items: start;
+}
+
+.knowledgeGrid,
+.inboxGrid {
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 380px);
+}
+
+.setupPanel {
+  grid-row: span 2;
+}
+
+.progressTrack {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-muted);
+}
+
+.progressTrack span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--green);
+}
+
+.setupList,
+.readinessList,
+.compactList,
+.identityList {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.setupList article,
+.readinessList article,
+.identityList article {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  padding: 10px;
+}
+
+.setupList article[data-done="true"],
+.readinessList article[data-done="true"] {
+  border-color: var(--green-line);
+  background: var(--green-bg);
+  color: var(--green);
+}
+
+.setupList div,
+.identityList article {
+  min-width: 0;
+}
+
+.setupList strong,
+.identityList strong {
+  display: block;
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.setupList span,
+.identityList span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.readinessList {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.readinessList article {
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.plainListButton {
+  display: grid;
+  justify-items: start;
+  width: 100%;
+  min-height: auto;
+  border: 1px solid var(--line);
+  background: var(--surface-muted);
+  color: var(--text);
+  padding: 10px;
+  text-align: left;
+}
+
+.plainListButton:hover {
+  border-color: var(--accent);
+  background: #f1f5ff;
+}
+
+.plainListButton strong,
+.plainListButton span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plainListButton strong {
+  font-size: 13px;
+}
+
+.plainListButton span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.knowledgeTools {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 180px;
   gap: 12px;
+  margin-bottom: 14px;
 }
 
 .knowledgeForm {
-  grid-template-columns: 1fr;
-  border-bottom: 1px solid var(--line);
-  padding-bottom: 16px;
+  display: grid;
+  gap: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+
+.knowledgeForm.enhanced {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.knowledgeForm.enhanced label:nth-of-type(2),
+.knowledgeForm.enhanced .warningRow,
+.knowledgeForm.enhanced button {
+  grid-column: 1 / -1;
+}
+
+.warningRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.warningRow span {
+  border: 1px solid var(--amber-line);
+  border-radius: 999px;
+  background: var(--amber-bg);
+  color: var(--amber);
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.warningRow.block {
+  margin-top: 12px;
+}
+
+.warningRow.block span {
+  border-radius: 8px;
 }
 
 .knowledgeList {
@@ -587,6 +784,10 @@ textarea {
   padding-right: 2px;
 }
 
+.knowledgeList.expanded {
+  max-height: 680px;
+}
+
 .knowledgeItem {
   display: grid;
   gap: 8px;
@@ -596,7 +797,7 @@ textarea {
   padding: 12px;
 }
 
-.knowledgeItem div {
+.knowledgeItem > div:first-child {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -630,6 +831,21 @@ textarea {
   white-space: pre-wrap;
 }
 
+.tagRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tagRow small {
+  border-radius: 999px;
+  background: #eef2f8;
+  color: var(--muted);
+  padding: 3px 7px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
 .editStack {
   display: grid;
   gap: 12px;
@@ -642,45 +858,33 @@ textarea {
   justify-content: flex-end;
 }
 
-.testRow {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 42px;
-  gap: 10px;
-  margin-top: 14px;
+.segmented,
+.platformTabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
-.iconButton {
-  width: 42px;
-  background: var(--green);
-  color: #ffffff;
-}
-
-.answerBox {
-  display: grid;
-  gap: 8px;
-  margin-top: 14px;
-  border: 1px solid var(--green-line);
-  border-radius: 8px;
-  background: var(--green-bg);
-  padding: 12px;
-}
-
-.answerBox span {
-  color: var(--green);
-  font-size: 12px;
-  font-weight: 900;
-  text-transform: uppercase;
-}
-
-.answerBox p {
-  margin: 0;
+.segmented button,
+.platformTabs button {
+  min-height: 34px;
+  border: 1px solid var(--line);
+  background: var(--surface);
   color: var(--text-soft);
-  line-height: 1.5;
+  padding: 0 10px;
+  font-size: 12px;
 }
 
-.answerBox small {
-  color: var(--muted);
-  font-weight: 700;
+.segmented button[data-active="true"],
+.platformTabs button[data-active="true"] {
+  border-color: var(--accent);
+  background: #f1f5ff;
+  color: var(--accent);
+}
+
+.inboxGrid {
+  display: grid;
+  gap: 16px;
 }
 
 .conversationList,
@@ -688,6 +892,14 @@ textarea {
   display: grid;
   gap: 8px;
   margin-top: 14px;
+}
+
+.conversationList.framed {
+  max-height: 620px;
+  margin-top: 0;
+  overflow: auto;
+  border-right: 1px solid var(--line);
+  padding-right: 12px;
 }
 
 .conversationButton {
@@ -711,7 +923,6 @@ textarea {
 
 .conversationButton strong {
   font-size: 13px;
-  text-transform: capitalize;
 }
 
 .conversationButton span,
@@ -724,14 +935,49 @@ textarea {
   font-size: 12px;
 }
 
+.transcriptPane {
+  min-height: 460px;
+}
+
+.transcriptHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 12px;
+}
+
+.transcriptHeader div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.transcriptHeader strong,
+.transcriptHeader span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.transcriptHeader span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .messagePreview {
   display: grid;
   gap: 8px;
   max-height: 280px;
   margin-top: 12px;
   overflow: auto;
-  border-top: 1px solid var(--line);
   padding-top: 12px;
+}
+
+.messagePreview.full {
+  max-height: 560px;
 }
 
 .messagePreview > strong {
@@ -762,6 +1008,12 @@ textarea {
   text-transform: uppercase;
 }
 
+.handoffBoard {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
 .handoffItem {
   display: grid;
   gap: 8px;
@@ -769,6 +1021,11 @@ textarea {
   border-radius: 8px;
   background: var(--surface-muted);
   padding: 10px;
+}
+
+.handoffItem.large {
+  align-content: start;
+  padding: 12px;
 }
 
 .handoffItem > div:first-child {
@@ -799,6 +1056,11 @@ textarea {
   color: var(--green);
 }
 
+.handoffItem span[data-status="dismissed"] {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
 .handoffItem p,
 .handoffItem small {
   margin: 0;
@@ -807,14 +1069,93 @@ textarea {
   line-height: 1.45;
 }
 
-.handoffItem small {
+.handoffMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.handoffMeta small {
+  border-radius: 999px;
+  background: #eef2f8;
+  color: var(--muted);
+  padding: 3px 7px;
+  font-weight: 800;
+}
+
+.testStudioGrid {
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 420px);
+}
+
+.sampleGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.sampleGrid .secondaryButton {
+  min-height: 48px;
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.testRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 42px;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.testRow.large {
+  grid-template-columns: minmax(0, 1fr) 48px;
+}
+
+.iconButton {
+  width: 42px;
+  border: 0;
+  background: var(--green);
+  color: #ffffff;
+}
+
+.testRow.large .iconButton {
+  width: 48px;
+}
+
+.answerBox {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+  border: 1px solid var(--green-line);
+  border-radius: 8px;
+  background: var(--green-bg);
+  padding: 12px;
+}
+
+.answerBox span {
+  color: var(--green);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.answerBox p {
+  margin: 0;
+  color: var(--text-soft);
+  line-height: 1.5;
+}
+
+.answerBox small {
   color: var(--muted);
   font-weight: 700;
 }
 
+.platformTabs {
+  margin-bottom: 12px;
+}
+
 .snippet {
-  min-height: 116px;
-  max-height: 240px;
+  min-height: 146px;
+  max-height: 280px;
   overflow: auto;
   border: 1px solid #263244;
   border-radius: 8px;
@@ -825,6 +1166,16 @@ textarea {
   word-break: break-word;
   font-size: 12px;
   line-height: 1.6;
+}
+
+.externalLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent);
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 800;
 }
 
 .emptyState,
@@ -848,7 +1199,7 @@ textarea {
 }
 
 .emptyWorkspace {
-  min-height: 420px;
+  min-height: 520px;
 }
 
 .emptyWorkspace h2 {
@@ -856,18 +1207,47 @@ textarea {
   color: var(--text);
 }
 
-.emptyWorkspace p {
-  max-width: 460px;
+.emptyWorkspace .setupPanel {
+  width: min(620px, 100%);
+  margin-top: 8px;
+  text-align: left;
+}
+
+.modalBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  background: rgba(15, 23, 42, 0.38);
+  padding: 16px;
+}
+
+.modalPanel {
+  display: grid;
+  gap: 14px;
+  width: min(440px, 100%);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 18px 60px rgba(15, 23, 42, 0.2);
+  padding: 18px;
+}
+
+.modalPanel p {
   margin: 0;
+  color: var(--text-soft);
   line-height: 1.5;
 }
 
-@media (max-width: 1080px) {
+@media (max-width: 1180px) {
   .shell {
     grid-template-columns: 1fr;
   }
 
   .sidebar {
+    position: static;
+    height: auto;
     border-right: 0;
     border-bottom: 1px solid var(--line);
   }
@@ -876,22 +1256,29 @@ textarea {
     max-height: 260px;
   }
 
-  .dashboardGrid {
-    grid-template-columns: 1fr;
-    grid-template-areas:
-      "knowledge"
-      "test"
-      "inbox"
-      "handoffs"
-      "embed";
-  }
-
   .metricsGrid {
     grid-template-columns: repeat(2, minmax(160px, 1fr));
   }
+
+  .overviewGrid,
+  .knowledgeGrid,
+  .testStudioGrid,
+  .widgetGrid,
+  .settingsGrid,
+  .inboxGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .conversationList.framed {
+    max-height: 320px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    padding-right: 0;
+    padding-bottom: 12px;
+  }
 }
 
-@media (max-width: 680px) {
+@media (max-width: 740px) {
   .sidebar,
   .workspace {
     padding: 16px;
@@ -901,12 +1288,38 @@ textarea {
     flex-direction: column;
   }
 
+  .topbar h1 {
+    font-size: 26px;
+  }
+
   .status {
     max-width: 100%;
   }
 
-  .metricsGrid {
+  .tabBar {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .metricsGrid,
+  .readinessList,
+  .knowledgeTools,
+  .knowledgeForm.enhanced,
+  .handoffBoard,
+  .sampleGrid {
     grid-template-columns: 1fr;
+  }
+
+  .knowledgeForm.enhanced label:nth-of-type(2),
+  .knowledgeForm.enhanced .warningRow,
+  .knowledgeForm.enhanced button {
+    grid-column: auto;
+  }
+
+  .panelHeader,
+  .transcriptHeader {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .rowActions {
