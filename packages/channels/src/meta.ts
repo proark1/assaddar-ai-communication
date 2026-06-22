@@ -11,7 +11,11 @@ export class WhatsAppCloudAdapter implements ChannelAdapter {
   readonly channel = "whatsapp" as const;
   readonly provider = "meta-whatsapp-cloud";
 
-  constructor(private readonly verifyToken: string, private readonly accessToken?: string) {}
+  constructor(
+    private readonly verifyToken: string,
+    private readonly accessToken?: string,
+    private readonly graphApiVersion = "v25.0"
+  ) {}
 
   verifyWebhook(request: WebhookVerificationRequest): string | null {
     if (request.mode === "subscribe" && request.verifyToken === this.verifyToken && request.challenge) {
@@ -30,6 +34,11 @@ export class WhatsAppCloudAdapter implements ChannelAdapter {
       for (const change of changes) {
         const value = isRecord(change) && isRecord(change.value) ? change.value : undefined;
         const messages = value && Array.isArray(value.messages) ? value.messages : [];
+        const metadata = value && isRecord(value.metadata) ? value.metadata : undefined;
+        const phoneNumberId =
+          typeof metadata?.phone_number_id === "string"
+            ? metadata.phone_number_id
+            : undefined;
         for (const message of messages) {
           if (!isRecord(message)) {
             continue;
@@ -46,8 +55,15 @@ export class WhatsAppCloudAdapter implements ChannelAdapter {
             channel: this.channel,
             provider: this.provider,
             text,
-            raw: message
+            raw: {
+              message,
+              value
+            }
           };
+
+          if (phoneNumberId) {
+            event.providerAccountId = phoneNumberId;
+          }
 
           if (from) {
             event.externalUserId = from;
@@ -69,11 +85,57 @@ export class WhatsAppCloudAdapter implements ChannelAdapter {
         detail: "WHATSAPP_ACCESS_TOKEN is not configured."
       };
     }
+    if (!message.providerAccountId) {
+      return {
+        status: "skipped",
+        detail: "WhatsApp phone number ID is not mapped to this tenant."
+      };
+    }
+    if (!message.externalUserId) {
+      return {
+        status: "skipped",
+        detail: "WhatsApp recipient is missing."
+      };
+    }
 
-    return {
-      status: "queued",
-      detail: "Meta WhatsApp Cloud API sender is intentionally credential-gated for MVP."
+    const response = await fetch(
+      `https://graph.facebook.com/${this.graphApiVersion}/${message.providerAccountId}/messages`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${this.accessToken}`,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          to: message.externalUserId,
+          type: "text",
+          text: {
+            preview_url: false,
+            body: truncateMessage(message.text)
+          }
+        })
+      }
+    );
+
+    if (!response.ok) {
+      return {
+        status: "skipped",
+        detail: `WhatsApp send failed with ${response.status}.`
+      };
+    }
+
+    const body = (await response.json().catch(() => ({}))) as {
+      messages?: Array<{ id?: string }>;
     };
+
+    const result: DeliveryResult = {
+      status: "sent"
+    };
+    if (body.messages?.[0]?.id) {
+      result.providerMessageId = body.messages[0].id;
+    }
+    return result;
   }
 }
 
@@ -83,7 +145,8 @@ export class MetaMessengerAdapter implements ChannelAdapter {
   constructor(
     readonly channel: "instagram" | "messenger",
     private readonly verifyToken: string,
-    private readonly pageAccessToken?: string
+    private readonly pageAccessToken?: string,
+    private readonly graphApiVersion = "v25.0"
   ) {}
 
   verifyWebhook(request: WebhookVerificationRequest): string | null {
@@ -99,6 +162,7 @@ export class MetaMessengerAdapter implements ChannelAdapter {
     const entries = isRecord(payload) && Array.isArray(payload.entry) ? payload.entry : [];
 
     for (const entry of entries) {
+      const accountId = isRecord(entry) && typeof entry.id === "string" ? entry.id : undefined;
       const messaging = isRecord(entry) && Array.isArray(entry.messaging) ? entry.messaging : [];
       for (const item of messaging) {
         if (!isRecord(item) || !isRecord(item.message)) {
@@ -119,6 +183,10 @@ export class MetaMessengerAdapter implements ChannelAdapter {
           raw: item
         };
 
+        if (accountId) {
+          event.providerAccountId = accountId;
+        }
+
         if (sender) {
           event.externalUserId = sender;
           event.externalConversationId = sender;
@@ -138,11 +206,50 @@ export class MetaMessengerAdapter implements ChannelAdapter {
         detail: "MESSENGER_PAGE_ACCESS_TOKEN is not configured."
       };
     }
+    if (!message.externalUserId) {
+      return {
+        status: "skipped",
+        detail: `Meta ${message.channel} recipient is missing.`
+      };
+    }
 
-    return {
-      status: "queued",
-      detail: `Meta ${message.channel} sender is intentionally credential-gated for MVP.`
+    const response = await fetch(
+      `https://graph.facebook.com/${this.graphApiVersion}/me/messages`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${this.pageAccessToken}`,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          recipient: {
+            id: message.externalUserId
+          },
+          message: {
+            text: truncateMessage(message.text)
+          }
+        })
+      }
+    );
+
+    if (!response.ok) {
+      return {
+        status: "skipped",
+        detail: `Meta ${message.channel} send failed with ${response.status}.`
+      };
+    }
+
+    const body = (await response.json().catch(() => ({}))) as {
+      message_id?: string;
     };
+
+    const result: DeliveryResult = {
+      status: "sent"
+    };
+    if (body.message_id) {
+      result.providerMessageId = body.message_id;
+    }
+    return result;
   }
 }
 
@@ -169,4 +276,8 @@ function readNestedText(value: Record<string, unknown>, path: string[]): string 
   }
 
   return typeof current === "string" ? current : undefined;
+}
+
+function truncateMessage(value: string) {
+  return value.length > 3900 ? `${value.slice(0, 3897)}...` : value;
 }

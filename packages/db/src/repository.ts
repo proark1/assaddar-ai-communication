@@ -15,6 +15,7 @@ import {
   allowedIntents,
   auditLogs,
   blockedTopics,
+  channelConnections,
   conversations,
   escalationRules,
   handoffRequests,
@@ -59,6 +60,14 @@ export type UpdateFaqInput = AddFaqInput;
 export type ConversationRecord = typeof conversations.$inferSelect;
 
 export type MessageRecord = typeof messages.$inferSelect;
+
+export type ChannelConnectionInput = {
+  channel: Channel;
+  provider: string;
+  externalAccountId?: string | null | undefined;
+  status?: "pending" | "connected" | "disabled" | undefined;
+  settings?: Record<string, unknown> | undefined;
+};
 
 export class TenantRepository implements AnswerDataStore, HandoffStore {
   constructor(private readonly db: Database) {}
@@ -187,6 +196,90 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     });
 
     return tenant;
+  }
+
+  async listChannelConnections(tenantId: string) {
+    assertTenantId(tenantId);
+    return this.db
+      .select()
+      .from(channelConnections)
+      .where(eq(channelConnections.tenantId, tenantId))
+      .orderBy(channelConnections.channel);
+  }
+
+  async upsertChannelConnection(
+    tenantId: string,
+    input: ChannelConnectionInput,
+  ) {
+    assertTenantId(tenantId);
+    const values = {
+      tenantId,
+      channel: input.channel,
+      provider: input.provider,
+      externalAccountId: input.externalAccountId?.trim() || null,
+      status: input.status ?? "pending",
+      settings: input.settings ?? {},
+      updatedAt: sql`now()`,
+    };
+
+    const [connection] = await this.db
+      .insert(channelConnections)
+      .values(values)
+      .onConflictDoUpdate({
+        target: [
+          channelConnections.tenantId,
+          channelConnections.channel,
+          channelConnections.provider,
+        ],
+        set: {
+          externalAccountId: values.externalAccountId,
+          status: values.status,
+          settings: values.settings,
+          updatedAt: sql`now()`,
+        },
+      })
+      .returning();
+
+    if (!connection) {
+      throw new Error("Failed to save channel connection.");
+    }
+
+    await this.audit(
+      tenantId,
+      "channel_connection.updated",
+      "channel_connection",
+      connection.id,
+      {
+        channel: connection.channel,
+        provider: connection.provider,
+        status: connection.status,
+      },
+    );
+
+    return connection;
+  }
+
+  async getTenantByChannelConnection(
+    channel: Channel,
+    provider: string,
+    externalAccountId: string,
+  ) {
+    const [row] = await this.db
+      .select({ tenant: tenants })
+      .from(channelConnections)
+      .innerJoin(tenants, eq(tenants.id, channelConnections.tenantId))
+      .where(
+        and(
+          eq(channelConnections.channel, channel),
+          eq(channelConnections.provider, provider),
+          eq(channelConnections.externalAccountId, externalAccountId),
+          eq(channelConnections.status, "connected"),
+          eq(tenants.status, "active"),
+        ),
+      )
+      .limit(1);
+
+    return row?.tenant ?? null;
   }
 
   async getWidgetConfig(publicId: string) {

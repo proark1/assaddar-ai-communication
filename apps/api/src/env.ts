@@ -8,6 +8,7 @@ export const EnvSchema = z.object({
     .string()
     .default("http://localhost:5174,http://localhost:3000"),
   META_VERIFY_TOKEN: z.string().default("change-me-meta-verify-token"),
+  META_GRAPH_API_VERSION: z.string().default("v25.0"),
   WHATSAPP_ACCESS_TOKEN: z.string().optional(),
   MESSENGER_PAGE_ACCESS_TOKEN: z.string().optional(),
   ADMIN_USER_EMAIL: z.string().email().default("owner@assad-dar.de"),

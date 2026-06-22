@@ -5,6 +5,7 @@ export const NormalizedInboundEventSchema = z.object({
   tenantId: z.string().uuid(),
   channel: ChannelSchema,
   provider: z.string().min(1),
+  providerAccountId: z.string().min(1).optional(),
   externalConversationId: z.string().min(1).optional(),
   externalUserId: z.string().min(1).optional(),
   text: z.string().min(1).max(4000),
@@ -17,6 +18,7 @@ export type OutboundMessage = {
   tenantId: string;
   channel: Channel;
   provider: string;
+  providerAccountId?: string;
   externalConversationId?: string;
   externalUserId?: string;
   text: string;

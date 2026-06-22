@@ -10,9 +10,11 @@ export class TwilioVoiceAdapter implements ChannelAdapter {
     }
 
     const speechResult = typeof payload.SpeechResult === "string" ? payload.SpeechResult : undefined;
+    const digits = typeof payload.Digits === "string" ? payload.Digits : undefined;
     const from = typeof payload.From === "string" ? payload.From : undefined;
     const callSid = typeof payload.CallSid === "string" ? payload.CallSid : undefined;
-    if (!speechResult) {
+    const text = digits === "0" ? "human_transfer_requested" : speechResult;
+    if (!text) {
       return [];
     }
 
@@ -20,9 +22,13 @@ export class TwilioVoiceAdapter implements ChannelAdapter {
       tenantId,
       channel: this.channel,
       provider: this.provider,
-      text: speechResult,
+      text,
       raw: payload
     };
+
+    if (typeof payload.To === "string") {
+      event.providerAccountId = payload.To;
+    }
 
     if (callSid) {
       event.externalConversationId = callSid;
@@ -43,12 +49,39 @@ export class TwilioVoiceAdapter implements ChannelAdapter {
   }
 }
 
-export function createTwiMLSay(message: string): string {
-  return `<?xml version="1.0" encoding="UTF-8"?><Response><Say>${escapeXml(message)}</Say><Gather input="speech" action="/twilio/voice" method="POST" speechTimeout="auto"><Say>What else can I help with?</Say></Gather></Response>`;
+export type TwiMLVoiceOptions = {
+  actionUrl?: string;
+  language?: string;
+  voice?: string;
+};
+
+export function createTwiMLSay(
+  message: string,
+  options: TwiMLVoiceOptions = {}
+): string {
+  const actionUrl = options.actionUrl ?? "/twilio/voice";
+  const language = options.language ?? "de-DE";
+  const voice = options.voice ?? "alice";
+  return `<?xml version="1.0" encoding="UTF-8"?><Response><Say language="${escapeXml(language)}" voice="${escapeXml(voice)}">${escapeXml(message)}</Say><Gather input="speech dtmf" action="${escapeXml(actionUrl)}" method="POST" speechTimeout="auto" numDigits="1"><Say language="${escapeXml(language)}" voice="${escapeXml(voice)}">Was kann ich sonst noch helfen? Druecken Sie 0, wenn Sie mit einem Menschen sprechen moechten.</Say></Gather></Response>`;
 }
 
-export function createTwiMLGather(prompt: string): string {
-  return `<?xml version="1.0" encoding="UTF-8"?><Response><Gather input="speech" action="/twilio/voice" method="POST" speechTimeout="auto"><Say>${escapeXml(prompt)}</Say></Gather></Response>`;
+export function createTwiMLGather(
+  prompt: string,
+  options: TwiMLVoiceOptions = {}
+): string {
+  const actionUrl = options.actionUrl ?? "/twilio/voice";
+  const language = options.language ?? "de-DE";
+  const voice = options.voice ?? "alice";
+  return `<?xml version="1.0" encoding="UTF-8"?><Response><Gather input="speech dtmf" action="${escapeXml(actionUrl)}" method="POST" speechTimeout="auto" numDigits="1"><Say language="${escapeXml(language)}" voice="${escapeXml(voice)}">${escapeXml(prompt)}</Say></Gather></Response>`;
+}
+
+export function createTwiMLDial(
+  phoneNumber: string,
+  options: TwiMLVoiceOptions = {}
+): string {
+  const language = options.language ?? "de-DE";
+  const voice = options.voice ?? "alice";
+  return `<?xml version="1.0" encoding="UTF-8"?><Response><Say language="${escapeXml(language)}" voice="${escapeXml(voice)}">Ich verbinde Sie jetzt.</Say><Dial>${escapeXml(phoneNumber)}</Dial></Response>`;
 }
 
 function escapeXml(value: string): string {

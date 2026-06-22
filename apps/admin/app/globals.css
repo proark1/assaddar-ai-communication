@@ -1763,6 +1763,126 @@ textarea {
   align-items: start;
 }
 
+.channelGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 14px;
+}
+
+.channelCard {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  padding: 14px;
+}
+
+.channelCardHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.channelCardHeader div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.channelCardHeader strong,
+.channelCardHeader span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.channelCardHeader span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.channelCardHeader small {
+  border-radius: 999px;
+  background: var(--amber-bg);
+  color: var(--amber);
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.channelCardHeader small[data-status="connected"] {
+  background: var(--green-bg);
+  color: var(--green);
+}
+
+.channelCardHeader small[data-status="disabled"] {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.channelStatusRows {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.channelStatusRows article {
+  display: grid;
+  gap: 3px;
+  border: 1px solid var(--amber-line);
+  border-radius: 8px;
+  background: var(--amber-bg);
+  padding: 9px;
+}
+
+.channelStatusRows article[data-ready="true"] {
+  border-color: var(--green-line);
+  background: var(--green-bg);
+}
+
+.channelStatusRows span,
+.webhookBox span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.channelStatusRows strong {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.webhookBox {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 10px;
+}
+
+.webhookBox code {
+  overflow: hidden;
+  color: var(--text-soft);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.channelHint {
+  border-left: 3px solid var(--accent);
+  color: var(--text-soft);
+  padding-left: 10px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 .automationRuleList,
 .topicGroupList,
 .noteList {
@@ -2229,6 +2349,7 @@ textarea {
   }
 
   .automationRule,
+  .channelStatusRows,
   .detailList div {
     grid-template-columns: 1fr;
   }

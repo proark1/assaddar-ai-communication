@@ -14,6 +14,7 @@ async function main() {
     adminToken: env.ADMIN_API_TOKEN,
     allowedOrigins: env.WIDGET_ALLOWED_ORIGINS.split(",").map((origin) => origin.trim()),
     metaVerifyToken: env.META_VERIFY_TOKEN,
+    metaGraphApiVersion: env.META_GRAPH_API_VERSION,
     adminUser: {
       email: env.ADMIN_USER_EMAIL,
       name: env.ADMIN_USER_NAME,

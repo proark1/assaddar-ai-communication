@@ -61,6 +61,16 @@ export const openApiDocument = {
         summary: "Update a tenant handoff request",
       },
     },
+    "/admin/tenants/{tenantId}/channel-connections": {
+      get: {
+        summary: "List tenant channel connection setup status",
+      },
+    },
+    "/admin/tenants/{tenantId}/channel-connections/{channel}": {
+      put: {
+        summary: "Create or update a tenant channel connection",
+      },
+    },
     "/admin/tenants/{tenantId}/weekly-report": {
       post: {
         summary: "Send the tenant weekly automation summary email",

@@ -127,8 +127,11 @@ void (() => {
     const consentVisible =
       Boolean(config.theme.consentEnabled) && !state.consentAccepted;
     const quickReplies = normalizeQuickReplies(config.theme.quickReplies);
+    const hasQuickReplies = quickReplies.length > 0;
     const readinessVisible =
-      Boolean(config.theme.readinessEnabled) && !state.readinessCaptured;
+      Boolean(config.theme.readinessEnabled) &&
+      !state.readinessCaptured &&
+      !hasQuickReplies;
     const shellSide =
       position === "bottom-left"
         ? "left: 20px; right: auto;"
@@ -160,11 +163,11 @@ void (() => {
       }
       .panel {
         display: none;
-        width: min(372px, calc(100vw - 28px));
-        height: min(620px, calc(100vh - 96px));
+        width: min(420px, calc(100vw - 28px));
+        height: min(700px, calc(100vh - 88px));
         background: ${backgroundColor};
         border: 1px solid rgba(22, 25, 30, 0.14);
-        border-radius: 8px;
+        border-radius: 10px;
         box-shadow: 0 18px 50px rgba(22, 25, 30, 0.22);
         overflow: hidden;
       }
@@ -179,9 +182,18 @@ void (() => {
         justify-content: space-between;
         gap: 12px;
       }
-      .header strong { display: block; font-size: 15px; }
+      .header > div { min-width: 0; }
+      .header strong {
+        display: block;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 15px;
+        line-height: 1.15;
+      }
       .header span { display: block; font-size: 12px; opacity: 0.88; }
       .close {
+        flex: 0 0 auto;
         border: 0;
         background: rgba(255,255,255,0.18);
         color: #fff;
@@ -194,7 +206,7 @@ void (() => {
       }
       .messages {
         flex: 1 1 auto;
-        min-height: 0;
+        min-height: 118px;
         overflow: auto;
         display: flex;
         flex-direction: column;
@@ -234,6 +246,7 @@ void (() => {
       }
       .lead-form {
         display: none;
+        flex: 0 0 auto;
         gap: 8px;
         border-top: 1px solid rgba(22, 25, 30, 0.12);
         background: #fff;
@@ -271,14 +284,21 @@ void (() => {
         font-weight: 800;
       }
       .quick-replies {
+        flex: 0 0 auto;
         grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .readiness-form {
+        flex: 0 0 auto;
+        max-height: min(382px, calc(100vh - 318px));
+        overflow: auto;
       }
       .quick-replies button {
         min-width: 0;
         overflow: hidden;
-        padding: 0 8px;
-        text-overflow: ellipsis;
-        white-space: nowrap;
+        padding: 7px 10px;
+        text-overflow: initial;
+        white-space: normal;
+        line-height: 1.15;
         font-size: 12px;
       }
       .quick-replies button[data-action="readiness"],
@@ -329,6 +349,7 @@ void (() => {
         cursor: not-allowed;
       }
       .composer {
+        flex: 0 0 auto;
         display: grid;
         grid-template-columns: 1fr 44px;
         gap: 8px;
@@ -360,7 +381,8 @@ void (() => {
       .composer button:disabled { opacity: 0.5; cursor: not-allowed; }
       @media (max-width: 520px) {
         .assaddar-shell { right: 10px; left: 10px; bottom: 10px; }
-        .panel { width: 100%; height: min(620px, calc(100vh - 84px)); }
+        .panel { width: 100%; height: min(680px, calc(100vh - 84px)); }
+        .readiness-form { max-height: min(360px, calc(100vh - 318px)); }
         .launcher { float: right; }
       }
     </style>
@@ -378,7 +400,7 @@ void (() => {
           <p>${escapeHtml(config.theme.consentText ?? "This assistant uses approved business information and stores messages so the team can follow up.")}</p>
           <button type="button">Accept</button>
         </div>
-        <div class="quick-replies" data-visible="${quickReplies.length && !consentVisible ? "true" : "false"}">
+        <div class="quick-replies" data-visible="${hasQuickReplies && !consentVisible ? "true" : "false"}">
           ${quickReplies
             .map(
               (reply) =>
@@ -476,7 +498,12 @@ void (() => {
       if (quickRepliesNode && quickReplyButtons.length) {
         quickRepliesNode.dataset.visible = "true";
       }
-      if (readinessForm && context.config.theme.readinessEnabled && !state.readinessCaptured) {
+      if (
+        readinessForm &&
+        context.config.theme.readinessEnabled &&
+        !state.readinessCaptured &&
+        !quickReplyButtons.length
+      ) {
         readinessForm.dataset.visible = "true";
       }
       if (leadForm && context.config.theme.leadCaptureEnabled && !state.leadCaptured) {
@@ -494,6 +521,10 @@ void (() => {
         });
 
         if (action === "readiness") {
+          const quickRepliesNode = shadow.querySelector<HTMLDivElement>(".quick-replies");
+          if (quickRepliesNode) {
+            quickRepliesNode.dataset.visible = "false";
+          }
           readinessForm.dataset.visible = "true";
           leadForm.dataset.visible = "false";
           state.messages.push({
@@ -506,6 +537,10 @@ void (() => {
         }
 
         if (action === "lead") {
+          const quickRepliesNode = shadow.querySelector<HTMLDivElement>(".quick-replies");
+          if (quickRepliesNode) {
+            quickRepliesNode.dataset.visible = "false";
+          }
           leadForm.dataset.visible = "true";
           readinessForm.dataset.visible = "false";
           state.messages.push({

@@ -1,5 +1,6 @@
 import { config } from "dotenv";
 import {
+  createTwiMLDial,
   createTwiMLGather,
   createTwiMLSay,
   TwilioVoiceAdapter,
@@ -17,6 +18,9 @@ const VoiceQuerySchema = z.object({
 });
 
 const port = Number(process.env.VOICE_PORT ?? process.env.PORT ?? 4100);
+const transferPhoneNumber = process.env.TWILIO_TRANSFER_PHONE_NUMBER;
+const twilioVoiceLanguage = process.env.TWILIO_VOICE_LANGUAGE ?? "de-DE";
+const twilioVoiceName = process.env.TWILIO_VOICE_NAME ?? "alice";
 const client = createDbClient();
 const store = new TenantRepository(client.db);
 const engine = createAnswerEngine({
@@ -35,12 +39,21 @@ app.get("/health", async () => ({
 
 app.post("/twilio/voice", async (request, reply) => {
   const query = VoiceQuerySchema.safeParse(request.query);
+  const actionUrl = query.success
+    ? `/twilio/voice?assistantId=${encodeURIComponent(query.data.assistantId)}`
+    : "/twilio/voice";
+  const voiceOptions = {
+    actionUrl,
+    language: twilioVoiceLanguage,
+    voice: twilioVoiceName,
+  };
   if (!query.success) {
     return reply
       .type("text/xml")
       .send(
         createTwiMLSay(
           "This assistant is not configured. Please contact the business directly.",
+          voiceOptions,
         ),
       );
   }
@@ -52,17 +65,35 @@ app.post("/twilio/voice", async (request, reply) => {
       .send(
         createTwiMLSay(
           "This assistant is not available. Please contact the business directly.",
+          voiceOptions,
         ),
       );
   }
 
   const [event] = adapter.normalizeInbound(request.body, tenant.id);
+  if (event?.text === "human_transfer_requested") {
+    if (transferPhoneNumber) {
+      return reply
+        .type("text/xml")
+        .send(createTwiMLDial(transferPhoneNumber, voiceOptions));
+    }
+    return reply
+      .type("text/xml")
+      .send(
+        createTwiMLSay(
+          "Ein direkter Transfer ist gerade nicht eingerichtet. Bitte hinterlassen Sie Ihre Frage, damit das Team nachfassen kann.",
+          voiceOptions,
+        ),
+      );
+  }
+
   if (!event) {
     return reply
       .type("text/xml")
       .send(
         createTwiMLGather(
-          "Hello. Please tell me how I can help with this business.",
+          "Hallo. Ich bin der Assaddar AI Assistent. Bitte sagen Sie kurz, wobei ich helfen kann. Druecken Sie 0, wenn Sie mit einem Menschen sprechen moechten.",
+          voiceOptions,
         ),
       );
   }
@@ -127,14 +158,19 @@ app.post("/twilio/voice", async (request, reply) => {
     },
   });
 
-  return reply.type("text/xml").send(createTwiMLSay(answer.text));
+  return reply.type("text/xml").send(createTwiMLSay(answer.text, voiceOptions));
 });
 
 app.setErrorHandler(async (error, request, reply) => {
   request.log.error(error);
   return reply
     .type("text/xml")
-    .send(createTwiMLSay("I cannot answer right now. Please try again later."));
+    .send(
+      createTwiMLSay("I cannot answer right now. Please try again later.", {
+        language: twilioVoiceLanguage,
+        voice: twilioVoiceName,
+      }),
+    );
 });
 
 process.on("SIGTERM", async () => {

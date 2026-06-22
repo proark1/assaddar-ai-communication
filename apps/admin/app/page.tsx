@@ -183,6 +183,19 @@ type UnansweredQuestion = {
   suggestedTags: string[];
 };
 
+type ChannelConnection = {
+  channel: "website" | "whatsapp" | "messenger" | "instagram" | "telephone";
+  provider: string;
+  label: string;
+  status: "pending" | "connected" | "disabled";
+  externalAccountId?: string | null;
+  webhookUrl?: string;
+  assistantWebhookUrl?: string;
+  credentialConfigured: boolean;
+  settings: Record<string, unknown>;
+  updatedAt?: string;
+};
+
 type InstallCheckResult = {
   checkedUrl: string;
   statusCode: number;
@@ -206,6 +219,7 @@ type TabKey =
   | "overview"
   | "knowledge"
   | "leads"
+  | "channels"
   | "automation"
   | "inbox"
   | "handoffs"
@@ -238,6 +252,7 @@ const tabs: Array<{ key: TabKey; label: string; icon: typeof BarChart3 }> = [
   { key: "overview", label: "Overview", icon: BarChart3 },
   { key: "knowledge", label: "Knowledge", icon: Database },
   { key: "leads", label: "Leads", icon: UserCheck },
+  { key: "channels", label: "Channels", icon: Globe2 },
   { key: "automation", label: "Automation", icon: Sparkles },
   { key: "inbox", label: "Inbox", icon: Inbox },
   { key: "handoffs", label: "Handoffs", icon: AlertCircle },
@@ -801,6 +816,12 @@ export default function DashboardPage() {
     ConversationMessage[]
   >([]);
   const [handoffs, setHandoffs] = useState<Handoff[]>([]);
+  const [channelConnections, setChannelConnections] = useState<
+    ChannelConnection[]
+  >([]);
+  const [channelAccountDrafts, setChannelAccountDrafts] = useState<
+    Record<string, string>
+  >({});
   const [unansweredQuestions, setUnansweredQuestions] = useState<
     UnansweredQuestion[]
   >([]);
@@ -918,6 +939,19 @@ export default function DashboardPage() {
       getLeadScore(handoff) >= automationSettings.readinessQualificationScore ||
       ["qualified", "proposal"].includes(getPipelineStage(handoff)),
   );
+  const connectedChannelCount = channelConnections.filter(
+    (connection) =>
+      connection.status === "connected" || connection.channel === "website",
+  ).length;
+  const telephoneConnection = channelConnections.find(
+    (connection) => connection.channel === "telephone",
+  );
+  const metaChannelsReady = channelConnections.filter(
+    (connection) =>
+      ["whatsapp", "messenger", "instagram"].includes(connection.channel) &&
+      connection.status === "connected" &&
+      connection.credentialConfigured,
+  ).length;
   const unansweredCount = getUsageTotal(analytics, ["handoff", "refused"]);
   const answeredCount = getUsageTotal(analytics, ["answered"]);
   const handoffConversationIds = new Set(
@@ -1072,6 +1106,14 @@ export default function DashboardPage() {
           tab: "widget" as TabKey,
         }
       : null,
+    !telephoneConnection?.externalAccountId
+      ? {
+          tone: "info",
+          title: "Connect telephone",
+          detail: "Add the Twilio number and webhook URL for phone support.",
+          tab: "channels" as TabKey,
+        }
+      : null,
     !automationSettings.visitorConfirmationEmailEnabled
       ? {
           tone: "info",
@@ -1137,6 +1179,12 @@ export default function DashboardPage() {
       done: Boolean(installCheck?.installed),
       action: "Verify install",
       tab: "widget" as TabKey,
+    },
+    {
+      label: "Channels",
+      done: connectedChannelCount > 1,
+      action: "Connect phone or Meta",
+      tab: "channels" as TabKey,
     },
     {
       label: "Automation",
@@ -1294,6 +1342,8 @@ export default function DashboardPage() {
       setAnalytics(null);
       setConversations([]);
       setHandoffs([]);
+      setChannelConnections([]);
+      setChannelAccountDrafts({});
       return;
     }
 
@@ -1302,6 +1352,7 @@ export default function DashboardPage() {
       refreshAnalytics(tenantId),
       refreshConversations(tenantId),
       refreshHandoffs(tenantId),
+      refreshChannelConnections(tenantId),
       refreshUnanswered(tenantId),
     ]);
   }
@@ -1390,6 +1441,30 @@ export default function DashboardPage() {
         `/admin/tenants/${tenantId}/handoffs`,
       );
       setHandoffs(items);
+    } catch (error) {
+      setStatus(readableError(error));
+    }
+  }
+
+  async function refreshChannelConnections(tenantId = selectedTenant?.id) {
+    if (!tenantId) {
+      setChannelConnections([]);
+      return;
+    }
+
+    try {
+      const items = await apiFetch<ChannelConnection[]>(
+        `/admin/tenants/${tenantId}/channel-connections`,
+      );
+      setChannelConnections(items);
+      setChannelAccountDrafts(
+        Object.fromEntries(
+          items.map((item) => [
+            item.channel,
+            item.externalAccountId ?? "",
+          ]),
+        ),
+      );
     } catch (error) {
       setStatus(readableError(error));
     }
@@ -1634,6 +1709,38 @@ export default function DashboardPage() {
       );
       setInstallCheck(result);
       setStatus(result.installed ? "Widget installed" : "Widget not found");
+    } catch (error) {
+      setStatus(readableError(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveChannelConnection(
+    connection: ChannelConnection,
+    updates: Partial<Pick<ChannelConnection, "externalAccountId" | "status">>,
+  ) {
+    if (!selectedTenant) {
+      return;
+    }
+
+    setBusy(true);
+    try {
+      await apiFetch(
+        `/admin/tenants/${selectedTenant.id}/channel-connections/${connection.channel}`,
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            provider: connection.provider,
+            externalAccountId:
+              updates.externalAccountId ?? connection.externalAccountId ?? null,
+            status: updates.status ?? connection.status,
+            settings: connection.settings ?? {},
+          }),
+        },
+      );
+      await refreshChannelConnections(selectedTenant.id);
+      setStatus(`${connection.label} saved`);
     } catch (error) {
       setStatus(readableError(error));
     } finally {
@@ -3756,6 +3863,229 @@ export default function DashboardPage() {
     );
   }
 
+  function renderChannels() {
+    return (
+      <div className="workspaceStack">
+        <section className="metricsGrid compactMetrics">
+          <article className="metricCard">
+            <Globe2 size={18} />
+            <span>Channels</span>
+            <strong>{channelConnections.length}</strong>
+          </article>
+          <article className="metricCard">
+            <CheckCircle2 size={18} />
+            <span>Connected</span>
+            <strong>{connectedChannelCount}</strong>
+          </article>
+          <article className="metricCard">
+            <MessageCircle size={18} />
+            <span>Meta ready</span>
+            <strong>{metaChannelsReady}</strong>
+          </article>
+          <article
+            className="metricCard"
+            data-alert={telephoneConnection?.status === "connected" ? "false" : "true"}
+          >
+            <Inbox size={18} />
+            <span>Telephone</span>
+            <strong>
+              {telephoneConnection?.status === "connected" ? "Ready" : "Setup"}
+            </strong>
+          </article>
+        </section>
+
+        <section className="panel">
+          <div className="panelHeader">
+            <div className="panelTitle">
+              <Globe2 size={18} />
+              <h2>Channel setup</h2>
+            </div>
+            <button
+              className="secondaryButton"
+              type="button"
+              disabled={busy || !selectedTenant}
+              onClick={() => refreshChannelConnections()}
+            >
+              <RefreshCw size={16} />
+              Refresh
+            </button>
+          </div>
+          <div className="channelGrid">
+            {channelConnections.map((connection) => {
+              const webhook =
+                connection.assistantWebhookUrl ?? connection.webhookUrl ?? "";
+              const draftValue =
+                channelAccountDrafts[connection.channel] ??
+                connection.externalAccountId ??
+                "";
+              const isWebsite = connection.channel === "website";
+              return (
+                <article className="channelCard" key={connection.channel}>
+                  <div className="channelCardHeader">
+                    <div>
+                      <strong>{connection.label}</strong>
+                      <span>{connection.provider}</span>
+                    </div>
+                    <small data-status={connection.status}>
+                      {connection.status}
+                    </small>
+                  </div>
+
+                  <div className="channelStatusRows">
+                    <article
+                      data-ready={
+                        connection.credentialConfigured ? "true" : "false"
+                      }
+                    >
+                      <span>Credential</span>
+                      <strong>
+                        {connection.credentialConfigured ? "Ready" : "Missing"}
+                      </strong>
+                    </article>
+                    <article
+                      data-ready={
+                        connection.externalAccountId || isWebsite
+                          ? "true"
+                          : "false"
+                      }
+                    >
+                      <span>Account ID</span>
+                      <strong>
+                        {connection.externalAccountId || isWebsite
+                          ? "Set"
+                          : "Missing"}
+                      </strong>
+                    </article>
+                  </div>
+
+                  {isWebsite ? (
+                    <button
+                      className="secondaryButton full"
+                      type="button"
+                      onClick={() => setActiveTab("widget")}
+                    >
+                      <Code2 size={15} />
+                      Open widget setup
+                    </button>
+                  ) : (
+                    <label className="field">
+                      <span>{channelAccountLabel(connection.channel)}</span>
+                      <input
+                        value={draftValue}
+                        onChange={(event) =>
+                          setChannelAccountDrafts((current) => ({
+                            ...current,
+                            [connection.channel]: event.target.value,
+                          }))
+                        }
+                      />
+                    </label>
+                  )}
+
+                  {webhook ? (
+                    <div className="webhookBox">
+                      <span>Webhook URL</span>
+                      <code>{webhook}</code>
+                      <button
+                        className="secondaryButton"
+                        type="button"
+                        onClick={() =>
+                          copyText(webhook, `${connection.label} webhook`)
+                        }
+                      >
+                        <Copy size={15} />
+                        Copy
+                      </button>
+                    </div>
+                  ) : null}
+
+                  <div className="channelHint">
+                    {channelSetupHint(connection)}
+                  </div>
+
+                  {!isWebsite ? (
+                    <div className="rowActions">
+                      <button
+                        className="primaryButton"
+                        type="button"
+                        disabled={busy}
+                        onClick={() =>
+                          saveChannelConnection(connection, {
+                            externalAccountId: draftValue,
+                            status: "connected",
+                          })
+                        }
+                      >
+                        <Save size={15} />
+                        Save connected
+                      </button>
+                      <button
+                        className="secondaryButton"
+                        type="button"
+                        disabled={busy}
+                        onClick={() =>
+                          saveChannelConnection(connection, {
+                            status: "pending",
+                          })
+                        }
+                      >
+                        Pending
+                      </button>
+                      <button
+                        className="dangerButton"
+                        type="button"
+                        disabled={busy}
+                        onClick={() =>
+                          saveChannelConnection(connection, {
+                            status: "disabled",
+                          })
+                        }
+                      >
+                        Disable
+                      </button>
+                    </div>
+                  ) : null}
+                </article>
+              );
+            })}
+          </div>
+        </section>
+      </div>
+    );
+  }
+
+  function channelAccountLabel(channel: ChannelConnection["channel"]) {
+    if (channel === "telephone") {
+      return "Twilio phone number";
+    }
+    if (channel === "whatsapp") {
+      return "WhatsApp phone number ID";
+    }
+    if (channel === "messenger") {
+      return "Facebook Page ID";
+    }
+    if (channel === "instagram") {
+      return "Instagram account ID";
+    }
+    return "Account ID";
+  }
+
+  function channelSetupHint(connection: ChannelConnection) {
+    if (connection.channel === "telephone") {
+      return "Set this URL as the Twilio Voice webhook for incoming calls. Pressing 0 can transfer if TWILIO_TRANSFER_PHONE_NUMBER is configured.";
+    }
+    if (connection.channel === "whatsapp") {
+      return "Use the WhatsApp Cloud API phone number ID. The webhook accepts mapped account traffic or the assistant-specific URL.";
+    }
+    if (connection.channel === "messenger") {
+      return "Use the Facebook Page ID and subscribe the app to messages on the Messenger webhook.";
+    }
+    if (connection.channel === "instagram") {
+      return "Use the Instagram Professional account ID and subscribe the app to messaging webhooks.";
+    }
+    return "Website traffic is handled by the installed widget snippet.";
+  }
+
   function renderAutomation() {
     const rules = [
       {
@@ -4138,6 +4468,9 @@ export default function DashboardPage() {
     }
     if (activeTab === "leads") {
       return renderLeads();
+    }
+    if (activeTab === "channels") {
+      return renderChannels();
     }
     if (activeTab === "automation") {
       return renderAutomation();

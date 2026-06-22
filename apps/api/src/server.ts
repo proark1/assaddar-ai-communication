@@ -1,5 +1,6 @@
 import {
   MetaMessengerAdapter,
+  type NormalizedInboundEvent,
   WhatsAppCloudAdapter,
   WebsiteAdapter,
   type ChannelAdapter,
@@ -45,6 +46,10 @@ const ParamsAssistantSchema = z.object({
 
 const ParamsMetaChannelSchema = z.object({
   channel: z.enum(["whatsapp", "messenger", "instagram"]),
+});
+
+const ParamsChannelSchema = ParamsTenantSchema.extend({
+  channel: z.enum(["website", "whatsapp", "messenger", "instagram", "telephone"]),
 });
 
 const CreateTenantSchema = z.object({
@@ -179,6 +184,18 @@ const WidgetEventSchema = z.object({
   metadata: z.record(z.unknown()).optional(),
 });
 
+const MetaWebhookQuerySchema = z.object({
+  assistantId: z.string().min(8).optional(),
+});
+
+const ChannelConnectionSchema = z.object({
+  channel: z.enum(["website", "whatsapp", "messenger", "instagram", "telephone"]),
+  provider: z.string().min(1).max(80),
+  externalAccountId: z.string().max(256).nullable().optional(),
+  status: z.enum(["pending", "connected", "disabled"]).optional(),
+  settings: z.record(z.unknown()).optional(),
+});
+
 const WebsiteImportSchema = z.object({
   url: z.string().url().max(500),
   maxFaqs: z.number().int().min(1).max(12).default(6),
@@ -195,6 +212,7 @@ type CreateTenantInput = z.infer<typeof CreateTenantSchema>;
 type UpdateTenantInput = z.infer<typeof UpdateTenantSchema>;
 type AddFaqInput = z.infer<typeof AddFaqSchema>;
 type UpdateHandoffInput = z.infer<typeof UpdateHandoffSchema>;
+type ChannelConnectionInput = z.infer<typeof ChannelConnectionSchema>;
 type WidgetThemeInput = z.infer<typeof WidgetThemeSchema>;
 type AutomationSettings = {
   ownerLeadEmailEnabled: boolean;
@@ -231,6 +249,16 @@ export type PlatformStore = AnswerDataStore &
     deleteKnowledge(tenantId: string, knowledgeId: string): Promise<void>;
     listKnowledge(tenantId: string): Promise<unknown[]>;
     listConversations(tenantId: string): Promise<unknown[]>;
+    listChannelConnections(tenantId: string): Promise<unknown[]>;
+    upsertChannelConnection(
+      tenantId: string,
+      input: ChannelConnectionInput,
+    ): Promise<unknown>;
+    getTenantByChannelConnection(
+      channel: Channel,
+      provider: string,
+      externalAccountId: string,
+    ): Promise<StoreTenant | null>;
     listConversationMessages(
       tenantId: string,
       conversationId: string,
@@ -291,6 +319,7 @@ export type BuildServerOptions = {
   };
   leadNotificationEmailSender?: (email: LeadNotificationEmail) => Promise<void>;
   metaVerifyToken?: string;
+  metaGraphApiVersion?: string;
   whatsappAccessToken?: string;
   messengerPageAccessToken?: string;
 };
@@ -364,16 +393,19 @@ export async function buildServer(
     whatsapp: new WhatsAppCloudAdapter(
       options.metaVerifyToken ?? "change-me-meta-verify-token",
       options.whatsappAccessToken,
+      options.metaGraphApiVersion,
     ),
     messenger: new MetaMessengerAdapter(
       "messenger",
       options.metaVerifyToken ?? "change-me-meta-verify-token",
       options.messengerPageAccessToken,
+      options.metaGraphApiVersion,
     ),
     instagram: new MetaMessengerAdapter(
       "instagram",
       options.metaVerifyToken ?? "change-me-meta-verify-token",
       options.messengerPageAccessToken,
+      options.metaGraphApiVersion,
     ),
   };
 
@@ -423,6 +455,34 @@ export async function buildServer(
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const body = UpdateTenantSchema.parse(request.body);
       return options.store.updateTenant(tenantId, body);
+    },
+  );
+
+  app.get(
+    "/admin/tenants/:tenantId/channel-connections",
+    { preHandler: requireAdmin(options.adminToken) },
+    async (request) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      const tenant = await options.store.getTenant(tenantId);
+      const connections = await options.store.listChannelConnections(tenantId);
+      return buildChannelConnectionDashboard({
+        tenant,
+        connections,
+        options,
+      });
+    },
+  );
+
+  app.put(
+    "/admin/tenants/:tenantId/channel-connections/:channel",
+    { preHandler: requireAdmin(options.adminToken) },
+    async (request) => {
+      const { tenantId, channel } = ParamsChannelSchema.parse(request.params);
+      const body = ChannelConnectionSchema.parse({
+        ...(isRecord(request.body) ? request.body : {}),
+        channel,
+      });
+      return options.store.upsertChannelConnection(tenantId, body);
     },
   );
 
@@ -1079,13 +1139,55 @@ export async function buildServer(
     return reply.type("text/plain").send(challenge);
   });
 
-  app.post("/webhooks/meta/:channel", async (request) => {
+  app.post("/webhooks/meta/:channel", async (request, reply) => {
     const { channel } = ParamsMetaChannelSchema.parse(request.params);
+    const query = MetaWebhookQuerySchema.parse(request.query);
+    const adapter = metaAdapters[channel];
+    const providerAccountId = extractMetaProviderAccountId(
+      channel,
+      request.body,
+    );
+    const tenant = query.assistantId
+      ? await options.store.getTenantByPublicId(query.assistantId)
+      : providerAccountId
+        ? await options.store.getTenantByChannelConnection(
+            channel,
+            adapter.provider,
+            providerAccountId,
+          )
+        : null;
+
+    if (!tenant) {
+      return reply.code(202).send({
+        received: true,
+        routed: false,
+        channel,
+        provider: adapter.provider,
+        reason: "tenant_not_mapped",
+        ...(providerAccountId ? { providerAccountId } : {}),
+      });
+    }
+
+    const events = adapter.normalizeInbound(request.body, tenant.id);
+    const results = [];
+    for (const event of events) {
+      results.push(
+        await processChannelInboundEvent({
+          options,
+          engine,
+          adapter,
+          tenant,
+          event,
+        }),
+      );
+    }
+
     return {
       received: true,
       channel,
-      adapter: metaAdapters[channel].provider,
-      note: "Webhook payload stored/processed once channel connection credential mapping is configured.",
+      provider: adapter.provider,
+      routed: results.length,
+      results,
     };
   });
 
@@ -1113,6 +1215,255 @@ function requireAdmin(adminToken: string) {
       return reply.code(401).send({ error: "Unauthorized." });
     }
   };
+}
+
+type ChannelDashboardItem = {
+  channel: Channel;
+  provider: string;
+  label: string;
+  status: "pending" | "connected" | "disabled";
+  externalAccountId?: string | null | undefined;
+  webhookUrl?: string | undefined;
+  assistantWebhookUrl?: string | undefined;
+  credentialConfigured: boolean;
+  settings: Record<string, unknown>;
+  updatedAt?: unknown;
+};
+
+function buildChannelConnectionDashboard(input: {
+  tenant: StoreTenant | null;
+  connections: unknown[];
+  options: BuildServerOptions;
+}) {
+  const apiBase =
+    process.env.API_PUBLIC_URL ??
+    "https://assaddar-api-production.up.railway.app";
+  const voiceBase =
+    process.env.VOICE_PUBLIC_URL ??
+    "https://assaddar-voice-production.up.railway.app";
+  const assistantId = input.tenant?.publicId;
+  const connectionMap = new Map(
+    input.connections.map((connection) => {
+      const record = asRecord(connection);
+      return [
+        `${record.channel ?? ""}:${record.provider ?? ""}`,
+        record,
+      ] as const;
+    }),
+  );
+
+  const item = (
+    channel: Channel,
+    provider: string,
+    label: string,
+    extras: Omit<
+      ChannelDashboardItem,
+      "channel" | "provider" | "label" | "status" | "settings" | "credentialConfigured"
+    > & {
+      credentialConfigured: boolean;
+    },
+  ): ChannelDashboardItem => {
+    const connection = connectionMap.get(`${channel}:${provider}`);
+    const status =
+      connection?.status === "connected" ||
+      connection?.status === "disabled" ||
+      connection?.status === "pending"
+        ? connection.status
+        : "pending";
+    return {
+      channel,
+      provider,
+      label,
+      status,
+      externalAccountId:
+        typeof connection?.externalAccountId === "string"
+          ? connection.externalAccountId
+          : null,
+      settings: asRecord(connection?.settings),
+      updatedAt: connection?.updatedAt,
+      ...extras,
+    };
+  };
+
+  return [
+    item("website", "assaddar-widget", "Website widget", {
+      credentialConfigured: true,
+      assistantWebhookUrl: assistantId
+        ? `${apiBase}/widget/config/${assistantId}`
+        : undefined,
+    }),
+    item("telephone", "twilio", "Telephone", {
+      credentialConfigured: true,
+      webhookUrl: assistantId
+        ? `${voiceBase}/twilio/voice?assistantId=${assistantId}`
+        : `${voiceBase}/twilio/voice`,
+    }),
+    item("whatsapp", "meta-whatsapp-cloud", "WhatsApp Business", {
+      credentialConfigured: Boolean(input.options.whatsappAccessToken),
+      webhookUrl: `${apiBase}/webhooks/meta/whatsapp`,
+      assistantWebhookUrl: assistantId
+        ? `${apiBase}/webhooks/meta/whatsapp?assistantId=${assistantId}`
+        : undefined,
+    }),
+    item("messenger", "meta-messenger-platform", "Facebook Messenger", {
+      credentialConfigured: Boolean(input.options.messengerPageAccessToken),
+      webhookUrl: `${apiBase}/webhooks/meta/messenger`,
+      assistantWebhookUrl: assistantId
+        ? `${apiBase}/webhooks/meta/messenger?assistantId=${assistantId}`
+        : undefined,
+    }),
+    item("instagram", "meta-messenger-platform", "Instagram DM", {
+      credentialConfigured: Boolean(input.options.messengerPageAccessToken),
+      webhookUrl: `${apiBase}/webhooks/meta/instagram`,
+      assistantWebhookUrl: assistantId
+        ? `${apiBase}/webhooks/meta/instagram?assistantId=${assistantId}`
+        : undefined,
+    }),
+  ];
+}
+
+async function processChannelInboundEvent(input: {
+  options: BuildServerOptions;
+  engine: ReturnType<typeof createAnswerEngine>;
+  adapter: ChannelAdapter;
+  tenant: StoreTenant;
+  event: NormalizedInboundEvent;
+}) {
+  const conversationInput: Parameters<
+    PlatformStore["findOrCreateConversation"]
+  >[0] = {
+    tenantId: input.tenant.id,
+    channel: input.event.channel,
+    locale: input.tenant.defaultLocale,
+  };
+  if (input.event.externalConversationId) {
+    conversationInput.publicConversationId =
+      buildProviderConversationId(input.event);
+  }
+  if (input.event.externalUserId) {
+    conversationInput.externalUserId = input.event.externalUserId;
+  }
+
+  const conversation =
+    await input.options.store.findOrCreateConversation(conversationInput);
+
+  await input.options.store.addMessage({
+    tenantId: input.tenant.id,
+    conversationId: conversation.id,
+    channel: input.event.channel,
+    direction: "inbound",
+    role: "user",
+    content: input.event.text,
+    trace: {
+      provider: input.event.provider,
+      providerAccountId: input.event.providerAccountId,
+      raw: input.event.raw,
+    },
+  });
+
+  const answer = await input.engine.answer(
+    InboundMessageSchema.parse({
+      tenantId: input.tenant.id,
+      conversationId: conversation.id,
+      channel: input.event.channel,
+      externalUserId: input.event.externalUserId,
+      text: input.event.text,
+      locale: input.tenant.defaultLocale,
+      metadata: {
+        provider: input.event.provider,
+        providerAccountId: input.event.providerAccountId,
+      },
+    }),
+  );
+
+  const outboundMessage = {
+    tenantId: input.tenant.id,
+    channel: input.event.channel,
+    provider: input.adapter.provider,
+    text: answer.text,
+  };
+  if (input.event.providerAccountId) {
+    Object.assign(outboundMessage, {
+      providerAccountId: input.event.providerAccountId,
+    });
+  }
+  if (input.event.externalConversationId) {
+    Object.assign(outboundMessage, {
+      externalConversationId: input.event.externalConversationId,
+    });
+  }
+  if (input.event.externalUserId) {
+    Object.assign(outboundMessage, {
+      externalUserId: input.event.externalUserId,
+    });
+  }
+  const delivery = await input.adapter.sendMessage(outboundMessage);
+
+  await input.options.store.addMessage({
+    tenantId: input.tenant.id,
+    conversationId: conversation.id,
+    channel: input.event.channel,
+    direction: "outbound",
+    role: "assistant",
+    content: answer.text,
+    trace: {
+      answer,
+      delivery,
+    },
+  });
+
+  await input.options.store.logUsage({
+    tenantId: input.tenant.id,
+    channel: input.event.channel,
+    eventType: answer.status,
+    credits: answer.usage.estimatedCredits,
+    metadata: {
+      intent: answer.intent,
+      confidence: answer.confidence,
+      provider: input.event.provider,
+      deliveryStatus: delivery.status,
+      providerMessageId: delivery.providerMessageId,
+    },
+  });
+
+  return {
+    conversationId: conversation.publicId,
+    answerStatus: answer.status,
+    deliveryStatus: delivery.status,
+    deliveryDetail: delivery.detail,
+  };
+}
+
+function buildProviderConversationId(event: NormalizedInboundEvent) {
+  return [
+    event.channel,
+    event.provider,
+    event.providerAccountId,
+    event.externalConversationId,
+  ]
+    .filter(Boolean)
+    .join(":");
+}
+
+function extractMetaProviderAccountId(
+  channel: "whatsapp" | "messenger" | "instagram",
+  payload: unknown,
+) {
+  const entry = asArray(asRecord(payload).entry)[0];
+  if (!isRecord(entry)) {
+    return undefined;
+  }
+
+  if (channel === "whatsapp") {
+    const change = asArray(entry.changes)[0];
+    const value = isRecord(change) ? asRecord(change.value) : {};
+    const metadata = asRecord(value.metadata);
+    return typeof metadata.phone_number_id === "string"
+      ? metadata.phone_number_id
+      : undefined;
+  }
+
+  return typeof entry.id === "string" ? entry.id : undefined;
 }
 
 function getPermissions(role: "owner" | "admin" | "operator" | "viewer") {
@@ -1592,6 +1943,14 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object"
     ? (value as Record<string, unknown>)
     : {};
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function asArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
 }
 
 async function sendSmtpEmail(

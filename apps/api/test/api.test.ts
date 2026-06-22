@@ -38,6 +38,16 @@ class MemoryPlatformStore
     createdAt: Date;
   }> = [];
   messages: Array<Record<string, unknown>> = [];
+  channelConnections: Array<{
+    id: string;
+    tenantId: string;
+    channel: Channel;
+    provider: string;
+    externalAccountId?: string | null;
+    status: string;
+    settings: Record<string, unknown>;
+    updatedAt: Date;
+  }> = [];
   handoffs: Array<
     HandoffInput & {
       id: string;
@@ -128,6 +138,68 @@ class MemoryPlatformStore
         maxMessageLength: tenant.maxMessageLength ?? 1200,
       },
     };
+  }
+
+  async listChannelConnections(tenantId: string) {
+    return this.channelConnections.filter(
+      (connection) => connection.tenantId === tenantId,
+    );
+  }
+
+  async upsertChannelConnection(
+    tenantId: string,
+    input: {
+      channel: Channel;
+      provider: string;
+      externalAccountId?: string | null | undefined;
+      status?: "pending" | "connected" | "disabled" | undefined;
+      settings?: Record<string, unknown> | undefined;
+    },
+  ) {
+    const existing = this.channelConnections.find(
+      (connection) =>
+        connection.tenantId === tenantId &&
+        connection.channel === input.channel &&
+        connection.provider === input.provider,
+    );
+    if (existing) {
+      existing.externalAccountId = input.externalAccountId ?? null;
+      existing.status = input.status ?? existing.status;
+      existing.settings = input.settings ?? existing.settings;
+      existing.updatedAt = new Date();
+      return existing;
+    }
+
+    const connection = {
+      id: crypto.randomUUID(),
+      tenantId,
+      channel: input.channel,
+      provider: input.provider,
+      externalAccountId: input.externalAccountId ?? null,
+      status: input.status ?? "pending",
+      settings: input.settings ?? {},
+      updatedAt: new Date(),
+    };
+    this.channelConnections.push(connection);
+    return connection;
+  }
+
+  async getTenantByChannelConnection(
+    channel: Channel,
+    provider: string,
+    externalAccountId: string,
+  ) {
+    const connection = this.channelConnections.find(
+      (item) =>
+        item.channel === channel &&
+        item.provider === provider &&
+        item.externalAccountId === externalAccountId &&
+        item.status === "connected",
+    );
+    if (!connection) {
+      return null;
+    }
+    return this.getTenant(connection.tenantId);
   }
 
   async addFaq(
@@ -820,6 +892,132 @@ describe("API", () => {
         reply: "Termin buchen",
       },
     });
+    await app.close();
+  });
+
+  it("lists and saves channel connections for admin setup", async () => {
+    const store = new MemoryPlatformStore();
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+    });
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+
+    const listResponse = await app.inject({
+      method: "GET",
+      url: `/admin/tenants/${tenant.id}/channel-connections`,
+      headers: { "x-admin-token": "test-token" },
+    });
+    expect(listResponse.statusCode).toBe(200);
+    expect(listResponse.json<Array<{ channel: string }>>()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ channel: "telephone" }),
+        expect.objectContaining({ channel: "whatsapp" }),
+      ]),
+    );
+
+    const saveResponse = await app.inject({
+      method: "PUT",
+      url: `/admin/tenants/${tenant.id}/channel-connections/telephone`,
+      headers: { "x-admin-token": "test-token" },
+      payload: {
+        provider: "twilio",
+        externalAccountId: "+49123456789",
+        status: "connected",
+      },
+    });
+    expect(saveResponse.statusCode).toBe(200);
+    expect(saveResponse.json()).toMatchObject({
+      channel: "telephone",
+      provider: "twilio",
+      externalAccountId: "+49123456789",
+      status: "connected",
+    });
+    await app.close();
+  });
+
+  it("routes WhatsApp webhooks through a mapped channel connection", async () => {
+    const store = new MemoryPlatformStore();
+    globalThis.fetch = vi.fn(async () => {
+      return new Response(JSON.stringify({ messages: [{ id: "wamid.1" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+      whatsappAccessToken: "whatsapp-token",
+      metaGraphApiVersion: "v25.0",
+    });
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+    await store.addFaq(tenant.id, {
+      question: "What do you do?",
+      answer: "We implement practical AI automation.",
+      tags: ["faq"],
+    });
+    await store.upsertChannelConnection(tenant.id, {
+      channel: "whatsapp",
+      provider: "meta-whatsapp-cloud",
+      externalAccountId: "phone-number-1",
+      status: "connected",
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/webhooks/meta/whatsapp",
+      payload: {
+        entry: [
+          {
+            changes: [
+              {
+                value: {
+                  metadata: {
+                    phone_number_id: "phone-number-1",
+                  },
+                  messages: [
+                    {
+                      from: "491701234567",
+                      text: {
+                        body: "What do you do?",
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json<{ routed: number }>().routed).toBe(1);
+    expect(store.conversations[0]).toMatchObject({
+      tenantId: tenant.id,
+      channel: "whatsapp",
+    });
+    expect(store.messages).toHaveLength(2);
+    expect(store.messages[1]?.trace).toMatchObject({
+      delivery: {
+        status: "sent",
+        providerMessageId: "wamid.1",
+      },
+    });
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "https://graph.facebook.com/v25.0/phone-number-1/messages",
+      expect.objectContaining({
+        method: "POST",
+      }),
+    );
     await app.close();
   });
 

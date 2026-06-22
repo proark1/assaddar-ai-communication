@@ -32,7 +32,9 @@ API:
 ```text
 ADMIN_API_TOKEN=<random 32+ byte token>
 WIDGET_ALLOWED_ORIGINS=https://your-admin-domain,https://your-widget-domain,https://customer-site.example
+API_PUBLIC_URL=https://your-api-domain
 META_VERIFY_TOKEN=<random verify token>
+META_GRAPH_API_VERSION=v25.0
 WHATSAPP_ACCESS_TOKEN=<only when WhatsApp sending is enabled>
 MESSENGER_PAGE_ACCESS_TOKEN=<only when Messenger/Instagram sending is enabled>
 ```
@@ -67,7 +69,10 @@ Voice:
 TWILIO_ACCOUNT_SID=<when Twilio is enabled>
 TWILIO_AUTH_TOKEN=<when Twilio is enabled>
 TWILIO_FROM_NUMBER=<when outbound calling is enabled>
-VOICE_TRANSFER_NUMBER=<when transfer is enabled>
+VOICE_PUBLIC_URL=https://your-voice-domain
+TWILIO_TRANSFER_PHONE_NUMBER=<when press-0 transfer is enabled>
+TWILIO_VOICE_LANGUAGE=de-DE
+TWILIO_VOICE_NAME=alice
 ```
 
 OpenAI is optional for the current deterministic MVP:
