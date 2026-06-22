@@ -1,12 +1,15 @@
 "use client";
 
 import {
+  AlertCircle,
   Bot,
   Building2,
   CheckCircle2,
   Copy,
   Database,
+  Globe2,
   KeyRound,
+  Loader2,
   MessageSquare,
   Plus,
   RefreshCw,
@@ -28,6 +31,10 @@ type KnowledgeItem = {
   content: string;
   tags: string[];
   status: string;
+  metadata?: {
+    question?: string;
+    answer?: string;
+  };
 };
 
 type TestAnswer = {
@@ -38,9 +45,24 @@ type TestAnswer = {
   handoffRecommended: boolean;
 };
 
-const defaultApiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:4000";
+const productionApiBase = "https://assaddar-api-production.up.railway.app";
+const defaultApiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? productionApiBase;
 const defaultWidgetUrl =
   process.env.NEXT_PUBLIC_WIDGET_URL ?? "https://assaddar-widget-production.up.railway.app/widget.js";
+
+function normalizeBaseUrl(value: string) {
+  return value.trim().replace(/\/+$/, "");
+}
+
+function statusTone(status: string) {
+  if (!status) {
+    return "neutral";
+  }
+
+  return /failed|required|error|unauthorized|forbidden|not found|not allowed/i.test(status)
+    ? "danger"
+    : "success";
+}
 
 export default function DashboardPage() {
   const [apiBase, setApiBase] = useState(defaultApiBase);
@@ -57,19 +79,28 @@ export default function DashboardPage() {
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
 
+  const normalizedApiBase = normalizeBaseUrl(apiBase);
   const selectedTenant = useMemo(
     () => tenants.find((tenant) => tenant.id === selectedTenantId) ?? tenants[0],
     [selectedTenantId, tenants]
   );
 
   const embedSnippet = selectedTenant
-    ? `<script src="${defaultWidgetUrl}" data-assistant-id="${selectedTenant.publicId}" data-api-url="${apiBase}" async></script>`
+    ? `<script src="${defaultWidgetUrl}" data-assistant-id="${selectedTenant.publicId}" data-api-url="${normalizedApiBase}" async></script>`
     : "";
+
+  const statusKind = statusTone(status);
 
   useEffect(() => {
     const savedToken = window.localStorage.getItem("assaddar_admin_token");
+    const savedApiBase = window.localStorage.getItem("assaddar_api_base");
+
     if (savedToken) {
       setAdminToken(savedToken);
+    }
+
+    if (savedApiBase) {
+      setApiBase(savedApiBase);
     }
   }, []);
 
@@ -79,8 +110,14 @@ export default function DashboardPage() {
     }
   }, [adminToken]);
 
+  useEffect(() => {
+    if (normalizedApiBase) {
+      window.localStorage.setItem("assaddar_api_base", normalizedApiBase);
+    }
+  }, [normalizedApiBase]);
+
   async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-    const response = await fetch(`${apiBase}${path}`, {
+    const response = await fetch(`${normalizedApiBase}${path}`, {
       ...init,
       headers: {
         "content-type": "application/json",
@@ -111,10 +148,10 @@ export default function DashboardPage() {
     try {
       const nextTenants = await apiFetch<Tenant[]>("/admin/tenants");
       setTenants(nextTenants);
-      if (!selectedTenantId && nextTenants[0]) {
+      if (nextTenants[0] && !nextTenants.some((tenant) => tenant.id === selectedTenantId)) {
         setSelectedTenantId(nextTenants[0].id);
       }
-      setStatus("Tenants loaded");
+      setStatus(nextTenants.length ? "Connected" : "No tenants found");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Failed to load tenants");
     } finally {
@@ -210,9 +247,9 @@ export default function DashboardPage() {
     }
   }
 
-  function copyEmbed() {
+  async function copyEmbed() {
     if (embedSnippet) {
-      navigator.clipboard.writeText(embedSnippet);
+      await navigator.clipboard.writeText(embedSnippet);
       setStatus("Embed copied");
     }
   }
@@ -227,150 +264,201 @@ export default function DashboardPage() {
     <main className="shell">
       <aside className="sidebar">
         <div className="brand">
-          <Bot size={22} />
+          <span className="brandMark">
+            <Bot size={20} />
+          </span>
           <div>
             <strong>Assaddar AI</strong>
-            <span>Communication</span>
+            <span>Communication Admin</span>
           </div>
         </div>
 
-        <label className="field">
-          <span>API base</span>
-          <input value={apiBase} onChange={(event) => setApiBase(event.target.value)} />
-        </label>
-
-        <label className="field">
-          <span>Admin token</span>
-          <div className="inputIcon">
-            <KeyRound size={16} />
-            <input
-              type="password"
-              value={adminToken}
-              onChange={(event) => setAdminToken(event.target.value)}
-            />
+        <section className="sidebarSection">
+          <div className="sectionTitle">
+            <Globe2 size={16} />
+            <span>Connection</span>
           </div>
-        </label>
 
-        <button className="primaryButton" disabled={busy} onClick={refreshTenants}>
-          <RefreshCw size={16} />
-          Refresh
-        </button>
+          <label className="field">
+            <span>API base</span>
+            <input value={apiBase} onChange={(event) => setApiBase(event.target.value)} />
+          </label>
 
-        <div className="tenantList">
-          {tenants.map((tenant) => (
-            <button
-              className={tenant.id === selectedTenant?.id ? "tenantButton active" : "tenantButton"}
-              key={tenant.id}
-              onClick={() => setSelectedTenantId(tenant.id)}
-            >
-              <Building2 size={16} />
-              <span>{tenant.name}</span>
+          <label className="field">
+            <span>Admin token</span>
+            <div className="inputIcon">
+              <KeyRound size={16} />
+              <input
+                type="password"
+                value={adminToken}
+                onChange={(event) => setAdminToken(event.target.value)}
+                autoComplete="off"
+              />
+            </div>
+          </label>
+
+          <div className="connectionState" data-state={tenants.length ? "connected" : "idle"}>
+            {tenants.length ? <CheckCircle2 size={15} /> : <AlertCircle size={15} />}
+            <span>{tenants.length ? `${tenants.length} tenants loaded` : "Not connected"}</span>
+          </div>
+
+          <button className="primaryButton full" disabled={busy || !adminToken} onClick={refreshTenants}>
+            {busy ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
+            {tenants.length ? "Refresh tenants" : "Connect"}
+          </button>
+        </section>
+
+        <section className="sidebarSection grow">
+          <div className="sectionTitle">
+            <Building2 size={16} />
+            <span>Tenants</span>
+            <span className="countPill">{tenants.length}</span>
+          </div>
+
+          <div className="tenantList">
+            {tenants.length ? (
+              tenants.map((tenant) => (
+                <button
+                  className={tenant.id === selectedTenant?.id ? "tenantButton active" : "tenantButton"}
+                  key={tenant.id}
+                  onClick={() => setSelectedTenantId(tenant.id)}
+                >
+                  <Building2 size={16} />
+                  <span>{tenant.name}</span>
+                  <small>{tenant.slug}</small>
+                </button>
+              ))
+            ) : (
+              <div className="emptyState compact">Connect to load tenants.</div>
+            )}
+          </div>
+        </section>
+
+        <details className="newTenant">
+          <summary>
+            <Plus size={16} />
+            New tenant
+          </summary>
+          <form className="form" onSubmit={createTenant}>
+            <label className="field">
+              <span>Name</span>
+              <input value={tenantName} onChange={(event) => setTenantName(event.target.value)} />
+            </label>
+            <label className="field">
+              <span>Slug</span>
+              <input value={tenantSlug} onChange={(event) => setTenantSlug(event.target.value)} />
+            </label>
+            <button className="secondaryButton" disabled={busy || !adminToken}>
+              <Plus size={16} />
+              Create tenant
             </button>
-          ))}
-        </div>
+          </form>
+        </details>
       </aside>
 
       <section className="workspace">
         <header className="topbar">
-          <div>
-            <h1>{selectedTenant?.name ?? "Tenant Operations"}</h1>
-            <p>{selectedTenant?.publicId ?? "Create or select a tenant"}</p>
+          <div className="titleGroup">
+            <span className="eyebrow">Workspace</span>
+            <h1>{selectedTenant?.name ?? "Select a tenant"}</h1>
+            <p>{selectedTenant?.publicId ?? "Connect to the API and choose a tenant from the sidebar."}</p>
           </div>
-          <span className="status">
-            <CheckCircle2 size={16} />
-            {status || "Idle"}
+          <span className="status" data-tone={statusKind}>
+            {statusKind === "danger" ? <AlertCircle size={16} /> : <CheckCircle2 size={16} />}
+            {status || "Ready"}
           </span>
         </header>
 
-        <div className="grid">
-          <section className="panel">
-            <div className="panelTitle">
-              <Building2 size={18} />
-              <h2>Create tenant</h2>
-            </div>
-            <form className="form" onSubmit={createTenant}>
-              <label className="field">
-                <span>Name</span>
-                <input value={tenantName} onChange={(event) => setTenantName(event.target.value)} />
-              </label>
-              <label className="field">
-                <span>Slug</span>
-                <input value={tenantSlug} onChange={(event) => setTenantSlug(event.target.value)} />
-              </label>
-              <button className="primaryButton" disabled={busy || !adminToken}>
-                <Plus size={16} />
-                Create
-              </button>
-            </form>
-          </section>
-
-          <section className="panel wide">
-            <div className="panelTitle">
-              <Database size={18} />
-              <h2>Approved knowledge</h2>
-            </div>
-            <form className="form twoColumn" onSubmit={addFaq}>
-              <label className="field">
-                <span>Question</span>
-                <input value={question} onChange={(event) => setQuestion(event.target.value)} />
-              </label>
-              <label className="field">
-                <span>Answer</span>
-                <textarea value={answer} onChange={(event) => setAnswer(event.target.value)} rows={4} />
-              </label>
-              <button className="primaryButton" disabled={busy || !selectedTenant}>
-                <Plus size={16} />
-                Add FAQ
-              </button>
-            </form>
-            <div className="knowledgeList">
-              {knowledge.map((item) => (
-                <article className="knowledgeItem" key={item.id}>
-                  <strong>{item.title ?? "Knowledge item"}</strong>
-                  <p>{item.content}</p>
-                </article>
-              ))}
-            </div>
-          </section>
-
-          <section className="panel wide">
-            <div className="panelTitle">
-              <MessageSquare size={18} />
-              <h2>Test assistant</h2>
-            </div>
-            <form className="testRow" onSubmit={testAssistant}>
-              <input
-                value={testMessage}
-                onChange={(event) => setTestMessage(event.target.value)}
-                placeholder="Ask from approved knowledge"
-              />
-              <button className="iconButton" disabled={busy || !selectedTenant} aria-label="Send test">
-                <Send size={18} />
-              </button>
-            </form>
-            {testAnswer ? (
-              <div className="answerBox">
-                <span>{testAnswer.status}</span>
-                <p>{testAnswer.text}</p>
-                <small>
-                  {testAnswer.intent} · {Math.round(testAnswer.confidence * 100)}%
-                </small>
+        {selectedTenant ? (
+          <div className="dashboardGrid">
+            <section className="panel knowledgePanel">
+              <div className="panelHeader">
+                <div className="panelTitle">
+                  <Database size={18} />
+                  <h2>Approved knowledge</h2>
+                </div>
+                <span className="countPill">{knowledge.length}</span>
               </div>
-            ) : null}
-          </section>
 
-          <section className="panel">
-            <div className="panelTitle">
-              <Copy size={18} />
-              <h2>Embed</h2>
-            </div>
-            <pre className="snippet">{embedSnippet || "No tenant selected"}</pre>
-            <button className="primaryButton" disabled={!embedSnippet} onClick={copyEmbed}>
-              <Copy size={16} />
-              Copy
-            </button>
+              <form className="knowledgeForm" onSubmit={addFaq}>
+                <label className="field">
+                  <span>Question</span>
+                  <input value={question} onChange={(event) => setQuestion(event.target.value)} />
+                </label>
+                <label className="field">
+                  <span>Answer</span>
+                  <textarea value={answer} onChange={(event) => setAnswer(event.target.value)} rows={4} />
+                </label>
+                <button className="primaryButton" disabled={busy || !question || !answer}>
+                  <Plus size={16} />
+                  Add FAQ
+                </button>
+              </form>
+
+              <div className="knowledgeList">
+                {knowledge.length ? (
+                  knowledge.map((item) => (
+                    <article className="knowledgeItem" key={item.id}>
+                      <div>
+                        <strong>{item.metadata?.question ?? item.title ?? "Knowledge item"}</strong>
+                        <span>{item.status}</span>
+                      </div>
+                      <p>{item.metadata?.answer ?? item.content}</p>
+                    </article>
+                  ))
+                ) : (
+                  <div className="emptyState">No approved knowledge loaded for this tenant.</div>
+                )}
+              </div>
+            </section>
+
+            <section className="panel sidePanel">
+              <div className="panelTitle">
+                <MessageSquare size={18} />
+                <h2>Test assistant</h2>
+              </div>
+              <form className="testRow" onSubmit={testAssistant}>
+                <input
+                  value={testMessage}
+                  onChange={(event) => setTestMessage(event.target.value)}
+                  placeholder="Ask from approved knowledge"
+                />
+                <button className="iconButton" disabled={busy || !testMessage} aria-label="Send test">
+                  <Send size={18} />
+                </button>
+              </form>
+              {testAnswer ? (
+                <div className="answerBox">
+                  <span>{testAnswer.status}</span>
+                  <p>{testAnswer.text}</p>
+                  <small>
+                    {testAnswer.intent} · {Math.round(testAnswer.confidence * 100)}%
+                  </small>
+                </div>
+              ) : (
+                <div className="emptyState compact">Test answers appear here.</div>
+              )}
+            </section>
+
+            <section className="panel sidePanel">
+              <div className="panelTitle">
+                <Copy size={18} />
+                <h2>Embed</h2>
+              </div>
+              <pre className="snippet">{embedSnippet}</pre>
+              <button className="secondaryButton full" disabled={!embedSnippet} onClick={copyEmbed}>
+                <Copy size={16} />
+                Copy snippet
+              </button>
+            </section>
+          </div>
+        ) : (
+          <section className="emptyWorkspace">
+            <Bot size={28} />
+            <h2>No tenant selected</h2>
+            <p>Connect with the admin token, then select Assad Dar AI Consultancy from the sidebar.</p>
           </section>
-        </div>
+        )}
       </section>
     </main>
   );
