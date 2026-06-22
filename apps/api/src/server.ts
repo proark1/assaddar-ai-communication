@@ -18,6 +18,8 @@ import Fastify, {
   type FastifyReply,
   type FastifyRequest,
 } from "fastify";
+import net from "node:net";
+import tls from "node:tls";
 import { z } from "zod";
 import { openApiDocument } from "./openapi";
 
@@ -156,6 +158,15 @@ const WidgetReadinessSchema = z.object({
     ),
 });
 
+const WidgetEventSchema = z.object({
+  assistantId: z.string().min(8),
+  conversationId: z.string().min(8).max(80).optional(),
+  visitorId: z.string().min(1).max(120).optional(),
+  pageUrl: z.string().url().max(500).optional(),
+  eventType: z.enum(["widget_open", "quick_reply_clicked", "cta_clicked"]),
+  metadata: z.record(z.unknown()).optional(),
+});
+
 const WebsiteImportSchema = z.object({
   url: z.string().url().max(500),
   maxFaqs: z.number().int().min(1).max(12).default(6),
@@ -180,10 +191,10 @@ export type PlatformStore = AnswerDataStore &
     listTenants(): Promise<unknown[]>;
     getTenant(
       tenantId: string,
-    ): Promise<{ id: string; publicId: string; defaultLocale: string } | null>;
+    ): Promise<{ id: string; publicId: string; name: string; defaultLocale: string } | null>;
     getTenantByPublicId(
       publicId: string,
-    ): Promise<{ id: string; publicId: string; defaultLocale: string } | null>;
+    ): Promise<{ id: string; publicId: string; name: string; defaultLocale: string } | null>;
     getWidgetConfig(publicId: string): Promise<unknown | null>;
     addFaq(tenantId: string, input: AddFaqInput): Promise<unknown>;
     updateFaq(
@@ -244,9 +255,36 @@ export type BuildServerOptions = {
   };
   leadNotificationWebhookUrl?: string;
   leadNotificationEmailTo?: string;
+  leadNotificationSmtp?: {
+    host: string;
+    port: number;
+    secure: boolean;
+    from: string;
+    username?: string;
+    password?: string;
+  };
+  leadNotificationEmailSender?: (email: LeadNotificationEmail) => Promise<void>;
   metaVerifyToken?: string;
   whatsappAccessToken?: string;
   messengerPageAccessToken?: string;
+};
+
+type LeadNotificationPayload = {
+  tenantId: string;
+  tenantName: string;
+  type: "lead_capture" | "readiness_assessment";
+  conversationId: string;
+  message: string;
+  fields: Record<string, string>;
+  pageUrl?: string;
+  score?: number;
+};
+
+type LeadNotificationEmail = {
+  to: string;
+  from: string;
+  subject: string;
+  text: string;
 };
 
 export async function buildServer(
@@ -595,6 +633,29 @@ export async function buildServer(
     return config;
   });
 
+  app.post("/widget/events", async (request, reply) => {
+    const body = WidgetEventSchema.parse(request.body);
+    const tenant = await options.store.getTenantByPublicId(body.assistantId);
+    if (!tenant) {
+      return reply.code(404).send({ error: "Assistant not found." });
+    }
+
+    await options.store.logUsage({
+      tenantId: tenant.id,
+      channel: "website",
+      eventType: body.eventType,
+      credits: 0,
+      metadata: {
+        conversationId: body.conversationId,
+        visitorId: body.visitorId,
+        pageUrl: body.pageUrl,
+        ...(body.metadata ?? {}),
+      },
+    });
+
+    return reply.code(202).send({ received: true });
+  });
+
   app.post("/widget/chat", async (request, reply) => {
     const body = WidgetChatSchema.parse(request.body);
     const tenant = await options.store.getTenantByPublicId(body.assistantId);
@@ -731,7 +792,7 @@ export async function buildServer(
 
     await notifyLead(options, {
       tenantId: tenant.id,
-      tenantName: "unknown",
+      tenantName: tenant.name,
       type: "lead_capture",
       conversationId: conversation.publicId,
       message,
@@ -819,7 +880,7 @@ export async function buildServer(
 
     await notifyLead(options, {
       tenantId: tenant.id,
-      tenantName: "unknown",
+      tenantName: tenant.name,
       type: "readiness_assessment",
       conversationId: conversation.publicId,
       message,
@@ -1016,42 +1077,244 @@ function buildUnansweredQueue(handoffs: unknown[]) {
 
 async function notifyLead(
   options: BuildServerOptions,
-  payload: {
-    tenantId: string;
-    tenantName: string;
-    type: "lead_capture" | "readiness_assessment";
-    conversationId: string;
-    message: string;
-    fields: Record<string, string>;
-    pageUrl?: string;
-    score?: number;
-  },
+  payload: LeadNotificationPayload,
 ) {
-  if (!options.leadNotificationWebhookUrl) {
+  const results: Array<Record<string, unknown>> = [];
+
+  if (!options.leadNotificationWebhookUrl && !options.leadNotificationEmailTo) {
     return { sent: false, reason: "not_configured" };
   }
 
-  try {
-    const response = await fetch(options.leadNotificationWebhookUrl, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        ...payload,
-        notifyTo: options.leadNotificationEmailTo,
-        sentAt: new Date().toISOString(),
-      }),
-      signal: AbortSignal.timeout(8_000),
-    });
+  if (options.leadNotificationWebhookUrl) {
+    try {
+      const response = await fetch(options.leadNotificationWebhookUrl, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          ...payload,
+          notifyTo: options.leadNotificationEmailTo,
+          sentAt: new Date().toISOString(),
+        }),
+        signal: AbortSignal.timeout(8_000),
+      });
 
-    return { sent: response.ok, status: response.status };
-  } catch (error) {
-    return {
-      sent: false,
-      reason: error instanceof Error ? error.message : "notification_failed",
-    };
+      results.push({
+        channel: "webhook",
+        sent: response.ok,
+        status: response.status,
+      });
+    } catch (error) {
+      results.push({
+        channel: "webhook",
+        sent: false,
+        reason: error instanceof Error ? error.message : "notification_failed",
+      });
+    }
   }
+
+  if (options.leadNotificationEmailTo) {
+    try {
+      const from =
+        options.leadNotificationSmtp?.from ??
+        options.adminUser?.email ??
+        "owner@assad-dar.de";
+      const email = buildLeadNotificationEmail(
+        payload,
+        options.leadNotificationEmailTo,
+        from,
+      );
+
+      if (options.leadNotificationEmailSender) {
+        await options.leadNotificationEmailSender(email);
+      } else if (options.leadNotificationSmtp) {
+        await sendSmtpEmail(options.leadNotificationSmtp, email);
+      } else {
+        results.push({
+          channel: "email",
+          sent: false,
+          reason: "smtp_not_configured",
+        });
+      }
+
+      if (options.leadNotificationEmailSender || options.leadNotificationSmtp) {
+        results.push({ channel: "email", sent: true });
+      }
+    } catch (error) {
+      results.push({
+        channel: "email",
+        sent: false,
+        reason: error instanceof Error ? error.message : "email_failed",
+      });
+    }
+  }
+
+  return {
+    sent: results.some((result) => result.sent === true),
+    results,
+  };
+}
+
+function buildLeadNotificationEmail(
+  payload: LeadNotificationPayload,
+  to: string,
+  from: string,
+): LeadNotificationEmail {
+  const typeLabel =
+    payload.type === "readiness_assessment"
+      ? "AI readiness lead"
+      : "Website lead";
+  const subjectParts = [typeLabel, payload.tenantName];
+  if (payload.score) {
+    subjectParts.push(`${payload.score}/100`);
+  }
+
+  return {
+    to,
+    from,
+    subject: subjectParts.join(" - "),
+    text: [
+      `${typeLabel} captured for ${payload.tenantName}`,
+      "",
+      `Conversation: ${payload.conversationId}`,
+      payload.score ? `Readiness score: ${payload.score}/100` : "",
+      payload.pageUrl ? `Page: ${payload.pageUrl}` : "",
+      "",
+      "Details:",
+      ...Object.entries(payload.fields)
+        .filter(([, value]) => value.trim())
+        .map(([key, value]) => `${titleCase(key)}: ${value.trim()}`),
+      "",
+      "Raw message:",
+      payload.message,
+    ]
+      .filter((line) => line !== "")
+      .join("\n"),
+  };
+}
+
+async function sendSmtpEmail(
+  smtp: NonNullable<BuildServerOptions["leadNotificationSmtp"]>,
+  email: LeadNotificationEmail,
+) {
+  const socket = smtp.secure
+    ? tls.connect({
+        host: smtp.host,
+        port: smtp.port,
+        servername: smtp.host,
+      })
+    : net.createConnection({
+        host: smtp.host,
+        port: smtp.port,
+      });
+
+  socket.setTimeout(12_000);
+
+  let buffer = "";
+  const waiters: Array<{
+    resolve: (response: { code: number; text: string }) => void;
+    reject: (error: Error) => void;
+  }> = [];
+
+  function takeResponse() {
+    const lines = buffer.split(/\r?\n/);
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index];
+      if (/^\d{3} /.test(line ?? "")) {
+        const responseLines = lines.slice(0, index + 1);
+        buffer = lines.slice(index + 1).join("\r\n");
+        return {
+          code: Number(line?.slice(0, 3)),
+          text: responseLines.join("\n"),
+        };
+      }
+    }
+    return null;
+  }
+
+  function flushWaiters() {
+    let response = takeResponse();
+    while (response && waiters.length) {
+      const waiter = waiters.shift();
+      waiter?.resolve(response);
+      response = takeResponse();
+    }
+  }
+
+  socket.on("data", (chunk) => {
+    buffer += chunk.toString("utf8");
+    flushWaiters();
+  });
+
+  const socketReady = new Promise<void>((resolve, reject) => {
+    socket.once(smtp.secure ? "secureConnect" : "connect", () => resolve());
+    socket.once("error", reject);
+    socket.once("timeout", () => reject(new Error("SMTP connection timed out.")));
+  });
+
+  function readResponse() {
+    const response = takeResponse();
+    if (response) {
+      return Promise.resolve(response);
+    }
+    return new Promise<{ code: number; text: string }>((resolve, reject) => {
+      waiters.push({ resolve, reject });
+    });
+  }
+
+  async function command(line: string, expected: number[]) {
+    socket.write(`${line}\r\n`);
+    const response = await readResponse();
+    if (!expected.includes(response.code)) {
+      throw new Error(`SMTP ${response.code}: ${response.text}`);
+    }
+    return response;
+  }
+
+  await socketReady;
+  const greeting = await readResponse();
+  if (greeting.code !== 220) {
+    throw new Error(`SMTP ${greeting.code}: ${greeting.text}`);
+  }
+
+  await command("EHLO assaddar-ai", [250]);
+  if (smtp.username && smtp.password) {
+    await command("AUTH LOGIN", [334]);
+    await command(Buffer.from(smtp.username).toString("base64"), [334]);
+    await command(Buffer.from(smtp.password).toString("base64"), [235]);
+  }
+  await command(`MAIL FROM:<${email.from}>`, [250]);
+  await command(`RCPT TO:<${email.to}>`, [250, 251]);
+  await command("DATA", [354]);
+  socket.write(formatSmtpMessage(email));
+  const accepted = await readResponse();
+  if (accepted.code !== 250) {
+    throw new Error(`SMTP ${accepted.code}: ${accepted.text}`);
+  }
+  await command("QUIT", [221]);
+  socket.end();
+}
+
+function formatSmtpMessage(email: LeadNotificationEmail) {
+  const body = email.text
+    .replace(/\r?\n/g, "\r\n")
+    .replace(/^\./gm, "..");
+  return [
+    `From: ${email.from}`,
+    `To: ${email.to}`,
+    `Subject: ${escapeMailHeader(email.subject)}`,
+    "Content-Type: text/plain; charset=utf-8",
+    "Content-Transfer-Encoding: 8bit",
+    "",
+    body,
+    ".",
+    "",
+  ].join("\r\n");
+}
+
+function escapeMailHeader(value: string) {
+  return value.replace(/[\r\n]+/g, " ").slice(0, 160);
 }
 
 function buildWebsiteImport(html: string, sourceUrl: string, maxFaqs: number) {

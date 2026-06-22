@@ -76,6 +76,21 @@ export const openApiDocument = {
         summary: "Send a website chat message",
       },
     },
+    "/widget/events": {
+      post: {
+        summary: "Track lightweight widget funnel events",
+      },
+    },
+    "/widget/leads": {
+      post: {
+        summary: "Capture a website lead and create a handoff",
+      },
+    },
+    "/widget/readiness": {
+      post: {
+        summary: "Capture an AI readiness assessment as a lead",
+      },
+    },
     "/webhooks/meta/{channel}": {
       get: {
         summary:

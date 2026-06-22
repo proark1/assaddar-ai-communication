@@ -15,6 +15,12 @@ export const EnvSchema = z.object({
   ADMIN_USER_ROLE: z.enum(["owner", "admin", "operator", "viewer"]).default("owner"),
   LEAD_NOTIFICATION_WEBHOOK_URL: z.string().url().optional(),
   LEAD_NOTIFICATION_EMAIL_TO: z.string().email().optional(),
+  LEAD_NOTIFICATION_EMAIL_FROM: z.string().email().optional(),
+  LEAD_NOTIFICATION_SMTP_HOST: z.string().optional(),
+  LEAD_NOTIFICATION_SMTP_PORT: z.coerce.number().int().positive().optional(),
+  LEAD_NOTIFICATION_SMTP_SECURE: z.coerce.boolean().optional(),
+  LEAD_NOTIFICATION_SMTP_USER: z.string().optional(),
+  LEAD_NOTIFICATION_SMTP_PASSWORD: z.string().optional(),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

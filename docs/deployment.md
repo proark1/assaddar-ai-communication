@@ -37,6 +37,19 @@ WHATSAPP_ACCESS_TOKEN=<only when WhatsApp sending is enabled>
 MESSENGER_PAGE_ACCESS_TOKEN=<only when Messenger/Instagram sending is enabled>
 ```
 
+Optional lead notifications:
+
+```text
+LEAD_NOTIFICATION_WEBHOOK_URL=https://hooks.example.com/lead
+LEAD_NOTIFICATION_EMAIL_TO=owner@example.com
+LEAD_NOTIFICATION_EMAIL_FROM=owner@example.com
+LEAD_NOTIFICATION_SMTP_HOST=smtp.example.com
+LEAD_NOTIFICATION_SMTP_PORT=465
+LEAD_NOTIFICATION_SMTP_SECURE=true
+LEAD_NOTIFICATION_SMTP_USER=<smtp username>
+LEAD_NOTIFICATION_SMTP_PASSWORD=<smtp password>
+```
+
 Admin:
 
 ```text

@@ -48,8 +48,12 @@ class MemoryPlatformStore
       createdAt: Date;
     }
   > = [];
-  usageEvents: Array<{ tenantId: string; eventType: string; credits: number }> =
-    [];
+  usageEvents: Array<{
+    tenantId: string;
+    eventType: string;
+    credits: number;
+    metadata?: Record<string, unknown>;
+  }> = [];
 
   async createTenant(input: { name: string; slug: string }) {
     const tenant = {
@@ -255,6 +259,7 @@ class MemoryPlatformStore
     tenantId: string;
     eventType: string;
     credits: number;
+    metadata?: Record<string, unknown>;
   }) {
     this.usageEvents.push(input);
   }
@@ -636,6 +641,50 @@ describe("API", () => {
     await app.close();
   });
 
+  it("sends lead notification emails when an email sender is configured", async () => {
+    const sentEmails: Array<{ to: string; subject: string; text: string }> = [];
+    const store = new MemoryPlatformStore();
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+      leadNotificationEmailTo: "owner@example.com",
+      leadNotificationEmailSender: async (email) => {
+        sentEmails.push(email);
+      },
+    });
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/widget/leads",
+      payload: {
+        assistantId: tenant.publicId,
+        visitorId: "visitor-one",
+        pageUrl: "https://assad-dar.de/de",
+        fields: {
+          name: "Ada",
+          email: "ada@example.com",
+          company: "Example GmbH",
+          projectType: "Support automation",
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(sentEmails).toHaveLength(1);
+    expect(sentEmails[0]).toMatchObject({
+      to: "owner@example.com",
+      subject: "Website lead - Tenant One",
+    });
+    expect(sentEmails[0]?.text).toContain("ada@example.com");
+    expect(sentEmails[0]?.text).toContain("https://assad-dar.de/de");
+    await app.close();
+  });
+
   it("captures AI readiness assessments as lead handoffs", async () => {
     const store = new MemoryPlatformStore();
     const app = await buildServer({
@@ -670,6 +719,45 @@ describe("API", () => {
       reason: "readiness_assessment",
       metadata: {
         pipelineStage: "new",
+      },
+    });
+    await app.close();
+  });
+
+  it("logs widget events for funnel analytics", async () => {
+    const store = new MemoryPlatformStore();
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+    });
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/widget/events",
+      payload: {
+        assistantId: tenant.publicId,
+        visitorId: "visitor-one",
+        pageUrl: "https://assad-dar.de/de",
+        eventType: "quick_reply_clicked",
+        metadata: {
+          reply: "Termin buchen",
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(store.usageEvents[0]).toMatchObject({
+      tenantId: tenant.id,
+      eventType: "quick_reply_clicked",
+      credits: 0,
+      metadata: {
+        visitorId: "visitor-one",
+        reply: "Termin buchen",
       },
     });
     await app.close();

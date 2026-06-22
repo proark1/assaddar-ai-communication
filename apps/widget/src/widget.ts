@@ -59,6 +59,7 @@ type WidgetState = {
   consentAccepted?: boolean;
   leadCaptured?: boolean;
   readinessCaptured?: boolean;
+  openTracked?: boolean;
   sentAt: number[];
   messages: StoredMessage[];
 };
@@ -277,6 +278,10 @@ void (() => {
         white-space: nowrap;
         font-size: 12px;
       }
+      .quick-replies button[data-action="readiness"],
+      .quick-replies button[data-action="lead"] {
+        background: rgba(166, 110, 47, 0.12);
+      }
       .readiness-form input,
       .readiness-form textarea,
       .lead-form strong {
@@ -371,7 +376,12 @@ void (() => {
           <button type="button">Accept</button>
         </div>
         <div class="quick-replies" data-visible="${quickReplies.length && !consentVisible ? "true" : "false"}">
-          ${quickReplies.map((reply) => `<button type="button">${escapeHtml(reply)}</button>`).join("")}
+          ${quickReplies
+            .map(
+              (reply) =>
+                `<button type="button" data-action="${inferQuickReplyAction(reply)}">${escapeHtml(reply)}</button>`,
+            )
+            .join("")}
         </div>
         <form class="readiness-form" data-visible="${readinessVisible && !consentVisible ? "true" : "false"}">
           <p>${escapeHtml(config.theme.readinessIntro ?? "Check whether your company is ready for a useful AI automation project.")}</p>
@@ -443,6 +453,11 @@ void (() => {
       panel.classList.add("open");
       launcher.style.display = "none";
       inputEl.focus();
+      if (!state.openTracked) {
+        state.openTracked = true;
+        persistState(context.config.assistantId, state);
+        void trackWidgetEvent(context, state, "widget_open");
+      }
     });
 
     close.addEventListener("click", () => {
@@ -468,7 +483,51 @@ void (() => {
 
     quickReplyButtons.forEach((button) => {
       button.addEventListener("click", () => {
-        void sendChatMessage(button.textContent?.trim() ?? "");
+        const reply = button.textContent?.trim() ?? "";
+        const action = button.dataset.action ?? "message";
+        void trackWidgetEvent(context, state, "quick_reply_clicked", {
+          reply,
+          action,
+        });
+
+        if (action === "readiness") {
+          readinessForm.dataset.visible = "true";
+          leadForm.dataset.visible = "false";
+          state.messages.push({
+            role: "assistant",
+            text: "Gerne. Beantworten Sie kurz die Fragen, dann schaetze ich die KI-Readiness ein.",
+          });
+          persistState(context.config.assistantId, state);
+          drawMessages(messagesEl, state.messages, context.config.theme);
+          return;
+        }
+
+        if (action === "lead") {
+          leadForm.dataset.visible = "true";
+          readinessForm.dataset.visible = "false";
+          state.messages.push({
+            role: "assistant",
+            text: "Gerne. Hinterlassen Sie kurz Ihre Daten, dann kann Assad Dar passend nachfassen.",
+          });
+          persistState(context.config.assistantId, state);
+          drawMessages(messagesEl, state.messages, context.config.theme);
+          return;
+        }
+
+        if (action === "cta" && context.config.theme.ctaUrl) {
+          void trackWidgetEvent(context, state, "cta_clicked", {
+            label: context.config.theme.ctaLabel ?? reply,
+            url: context.config.theme.ctaUrl,
+          });
+          window.open(
+            context.config.theme.ctaUrl,
+            "_blank",
+            "noopener,noreferrer",
+          );
+          return;
+        }
+
+        void sendChatMessage(reply);
       });
     });
 
@@ -701,16 +760,60 @@ void (() => {
 
   function normalizeQuickReplies(replies?: string[]) {
     const defaults = [
-      "KI Beratung anfragen",
+      "KI Readiness prüfen",
       "Use Case prüfen",
-      "Datenschutz klären",
       "Termin buchen",
+      "Datenschutz klären",
+      "Beratung anfragen",
     ];
     const values = replies?.length ? replies : defaults;
     return Array.from(new Set(values.map((reply) => reply.trim()).filter(Boolean))).slice(
       0,
       8,
     );
+  }
+
+  function inferQuickReplyAction(reply: string) {
+    const text = reply.toLowerCase();
+    if (/(readiness|bereit|prüfen|pruefen|use case|use-case)/.test(text)) {
+      return "readiness";
+    }
+    if (/(beratung|anfragen|kontakt|angebot|budget|projekt)/.test(text)) {
+      return "lead";
+    }
+    if (/(termin|call|buchen|meeting)/.test(text)) {
+      return "cta";
+    }
+    return "message";
+  }
+
+  async function trackWidgetEvent(
+    context: {
+      apiBase: string;
+      config: WidgetConfig;
+    },
+    state: WidgetState,
+    eventType: "widget_open" | "quick_reply_clicked" | "cta_clicked",
+    metadata: Record<string, unknown> = {},
+  ) {
+    try {
+      await fetch(`${context.apiBase}/widget/events`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          assistantId: context.config.assistantId,
+          conversationId: state.conversationId,
+          visitorId: state.visitorId,
+          pageUrl: window.location.href,
+          eventType,
+          metadata,
+        }),
+      });
+    } catch {
+      // Analytics must never block the visitor experience.
+    }
   }
 
   function leadFieldLabel(field: string) {

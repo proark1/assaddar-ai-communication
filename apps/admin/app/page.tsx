@@ -324,10 +324,11 @@ const defaultTheme: Required<
   consentText:
     "Dieser Assistent beantwortet Fragen mit freigegebenem Business-Wissen. Nachrichten koennen gespeichert werden, damit das Team nachfassen kann.",
   quickReplies: [
-    "KI Beratung anfragen",
+    "KI Readiness prüfen",
     "Use Case prüfen",
-    "Datenschutz klären",
     "Termin buchen",
+    "Datenschutz klären",
+    "Beratung anfragen",
   ],
   readinessEnabled: true,
   readinessIntro:
@@ -546,6 +547,20 @@ function getUsageTotal(
   );
 }
 
+function formatPercent(value: number) {
+  if (!Number.isFinite(value)) {
+    return "0%";
+  }
+  return `${Math.round(value)}%`;
+}
+
+function rate(numerator: number, denominator: number) {
+  if (!denominator) {
+    return 0;
+  }
+  return (numerator / denominator) * 100;
+}
+
 function parseLeadDetails(message: string) {
   return message
     .split("\n")
@@ -558,6 +573,64 @@ function parseLeadDetails(message: string) {
       };
     })
     .filter((item) => item.label && item.value);
+}
+
+function getLeadScore(handoff: Handoff) {
+  const details = parseLeadDetails(handoff.requesterMessage);
+  const detailMap = new Map(
+    details.map((item) => [item.label.toLowerCase(), item.value.toLowerCase()]),
+  );
+  const readinessScore = handoff.requesterMessage.match(
+    /readiness score:\s*(\d+)/i,
+  )?.[1];
+
+  if (readinessScore) {
+    return Math.min(100, Number(readinessScore));
+  }
+
+  let score = 35;
+  if (detailMap.get("email")) {
+    score += 15;
+  }
+  if (detailMap.get("company")) {
+    score += 12;
+  }
+  if (detailMap.get("project type")) {
+    score += 12;
+  }
+  if (detailMap.get("budget")) {
+    score += 12;
+  }
+  if (detailMap.get("timeline")) {
+    score += 8;
+  }
+  if (/(urgent|quarter|monat|soon|sofort|asap)/i.test(handoff.requesterMessage)) {
+    score += 6;
+  }
+
+  return Math.min(100, score);
+}
+
+function getLeadNextStep(handoff: Handoff) {
+  const stage = getPipelineStage(handoff);
+  const score = getLeadScore(handoff);
+
+  if (stage === "new" && score >= 70) {
+    return "Contact today";
+  }
+  if (stage === "new") {
+    return "Qualify fit";
+  }
+  if (stage === "contacted") {
+    return "Book discovery";
+  }
+  if (stage === "qualified") {
+    return "Prepare proposal";
+  }
+  if (stage === "proposal") {
+    return "Follow up";
+  }
+  return stage === "won" ? "Close loop" : "Archive";
 }
 
 function getPipelineStage(handoff: Handoff): LeadPipelineStage {
@@ -799,6 +872,78 @@ export default function DashboardPage() {
     }
     return handoff.status === handoffFilter;
   });
+  const widgetOpenCount = getUsageTotal(analytics, ["widget_open"]);
+  const quickReplyCount = getUsageTotal(analytics, ["quick_reply_clicked"]);
+  const ctaClickCount = getUsageTotal(analytics, ["cta_clicked"]);
+  const chatOutcomeCount = getUsageTotal(analytics, [
+    "answered",
+    "handoff",
+    "refused",
+  ]);
+  const conversionBase = widgetOpenCount || chatOutcomeCount;
+  const leadConversionRate = rate(leadHandoffs.length, conversionBase);
+  const unansweredRate = rate(unansweredCount, answeredCount + unansweredCount);
+  const wonLeadCount = leadHandoffs.filter(
+    (handoff) => getPipelineStage(handoff) === "won",
+  ).length;
+  const nextActions = [
+    openLeads.length
+      ? {
+          tone: "urgent",
+          title: "Follow up open leads",
+          detail: `${openLeads.length} lead${openLeads.length === 1 ? "" : "s"} waiting for action.`,
+          tab: "leads" as TabKey,
+        }
+      : null,
+    unansweredQuestions.length
+      ? {
+          tone: "urgent",
+          title: "Answer unanswered questions",
+          detail: `${unansweredQuestions.length} question${unansweredQuestions.length === 1 ? "" : "s"} can become approved FAQs.`,
+          tab: "knowledge" as TabKey,
+        }
+      : null,
+    missingKnowledgeChecks.length
+      ? {
+          tone: "warn",
+          title: "Fill knowledge gaps",
+          detail: missingKnowledgeChecks
+            .map((check) => check.label)
+            .slice(0, 3)
+            .join(", "),
+          tab: "knowledge" as TabKey,
+        }
+      : null,
+    !installCheck?.installed
+      ? {
+          tone: "warn",
+          title: "Verify website widget",
+          detail: "Run the install check after every website or widget deploy.",
+          tab: "widget" as TabKey,
+        }
+      : null,
+    !leadCaptureEnabled
+      ? {
+          tone: "warn",
+          title: "Enable lead capture",
+          detail: "Lead capture is currently off for the widget.",
+          tab: "widget" as TabKey,
+        }
+      : null,
+    conversations.length === 0
+      ? {
+          tone: "info",
+          title: "Run a live website test",
+          detail: "Open the site widget, ask a real question, and confirm it lands here.",
+          tab: "test" as TabKey,
+        }
+      : null,
+  ].filter(Boolean) as Array<{
+    tone: "urgent" | "warn" | "info";
+    title: string;
+    detail: string;
+    tab: TabKey;
+  }>;
 
   const setupSteps = [
     {
@@ -1308,6 +1453,40 @@ export default function DashboardPage() {
     );
   }
 
+  function applyQuickReplyPreset(
+    preset: "consultancy" | "lead" | "privacy",
+  ) {
+    if (preset === "lead") {
+      setQuickReplies(
+        [
+          "Beratung anfragen",
+          "Termin buchen",
+          "Budget klären",
+          "Use Case prüfen",
+        ].join("\n"),
+      );
+      setLeadCaptureEnabled(true);
+      return;
+    }
+
+    if (preset === "privacy") {
+      setQuickReplies(
+        [
+          "Datenschutz klären",
+          "Datenverarbeitung verstehen",
+          "DSGVO Fragen",
+          "Beratung anfragen",
+        ].join("\n"),
+      );
+      setConsentEnabled(true);
+      return;
+    }
+
+    setQuickReplies(defaultTheme.quickReplies.join("\n"));
+    setReadinessEnabled(true);
+    setLeadCaptureEnabled(true);
+  }
+
   function draftFaqFromUnanswered(item: UnansweredQuestion) {
     setQuestion(item.question);
     setAnswer("");
@@ -1682,6 +1861,36 @@ export default function DashboardPage() {
     return (
       <div className="workspaceStack">
         {renderMetrics()}
+        <section className="panel actionPanel">
+          <div className="panelHeader">
+            <div className="panelTitle">
+              <ClipboardCheck size={18} />
+              <h2>Next actions</h2>
+            </div>
+            <span className="countPill">{nextActions.length}</span>
+          </div>
+          <div className="nextActionList">
+            {nextActions.length ? (
+              nextActions.slice(0, 5).map((action) => (
+                <button
+                  className="actionItem"
+                  data-tone={action.tone}
+                  key={action.title}
+                  type="button"
+                  onClick={() => setActiveTab(action.tab)}
+                >
+                  <span>{action.tone}</span>
+                  <strong>{action.title}</strong>
+                  <small>{action.detail}</small>
+                </button>
+              ))
+            ) : (
+              <div className="emptyState compact">
+                No urgent work. Keep testing new website questions weekly.
+              </div>
+            )}
+          </div>
+        </section>
         <div className="overviewGrid">
           {renderSetupChecklist()}
 
@@ -1781,10 +1990,40 @@ export default function DashboardPage() {
             <div className="panelHeader">
               <div className="panelTitle">
                 <BarChart3 size={18} />
+                <h2>Traffic funnel</h2>
+              </div>
+              <span className="countPill">
+                {formatPercent(leadConversionRate)}
+              </span>
+            </div>
+            <div className="funnelGrid">
+              <article>
+                <span>Widget opens</span>
+                <strong>{widgetOpenCount}</strong>
+              </article>
+              <article>
+                <span>Chat outcomes</span>
+                <strong>{chatOutcomeCount}</strong>
+              </article>
+              <article>
+                <span>Quick replies</span>
+                <strong>{quickReplyCount}</strong>
+              </article>
+              <article>
+                <span>CTA clicks</span>
+                <strong>{ctaClickCount}</strong>
+              </article>
+            </div>
+          </section>
+
+          <section className="panel">
+            <div className="panelHeader">
+              <div className="panelTitle">
+                <BarChart3 size={18} />
                 <h2>Answer quality</h2>
               </div>
               <span className="countPill">
-                {answeredCount + unansweredCount}
+                {formatPercent(100 - unansweredRate)}
               </span>
             </div>
             <div className="qualityRows">
@@ -1799,6 +2038,10 @@ export default function DashboardPage() {
               <article>
                 <span>Lead captures</span>
                 <strong>{leadHandoffs.length}</strong>
+              </article>
+              <article>
+                <span>Won leads</span>
+                <strong>{wonLeadCount}</strong>
               </article>
             </div>
           </section>
@@ -2110,14 +2353,29 @@ export default function DashboardPage() {
                       {titleCase(item.reason)} · {item.channel} ·{" "}
                       {formatDate(item.createdAt)}
                     </p>
-                    <button
-                      className="secondaryButton"
-                      type="button"
-                      onClick={() => draftFaqFromUnanswered(item)}
-                    >
-                      <Plus size={15} />
-                      Create FAQ draft
-                    </button>
+                    <div className="rowActions">
+                      <button
+                        className="secondaryButton"
+                        type="button"
+                        onClick={() => draftFaqFromUnanswered(item)}
+                      >
+                        <Plus size={15} />
+                        Draft FAQ
+                      </button>
+                      {item.conversationId ? (
+                        <button
+                          className="secondaryButton"
+                          type="button"
+                          onClick={() => {
+                            setSelectedConversationId(item.conversationId ?? "");
+                            setActiveTab("inbox");
+                          }}
+                        >
+                          <Inbox size={15} />
+                          Open chat
+                        </button>
+                      ) : null}
+                    </div>
                   </article>
                 ))
               ) : (
@@ -2198,6 +2456,7 @@ export default function DashboardPage() {
             {leadHandoffs.length ? (
               leadHandoffs.map((handoff) => {
                 const details = parseLeadDetails(handoff.requesterMessage);
+                const leadScore = getLeadScore(handoff);
                 return (
                   <article className="leadCard" key={handoff.id}>
                     <div className="leadHeader">
@@ -2223,6 +2482,13 @@ export default function DashboardPage() {
                         </div>
                       ))}
                     </dl>
+                    <div className="leadScore">
+                      <div>
+                        <span>Lead score</span>
+                        <strong>{leadScore}/100</strong>
+                      </div>
+                      <small>{getLeadNextStep(handoff)}</small>
+                    </div>
                     <label className="field">
                       <span>Pipeline stage</span>
                       <select
@@ -2882,6 +3148,29 @@ export default function DashboardPage() {
                 rows={3}
               />
             </label>
+            <div className="presetRow" aria-label="Quick reply presets">
+              <button
+                className="secondaryButton"
+                type="button"
+                onClick={() => applyQuickReplyPreset("consultancy")}
+              >
+                Consultancy flow
+              </button>
+              <button
+                className="secondaryButton"
+                type="button"
+                onClick={() => applyQuickReplyPreset("lead")}
+              >
+                Lead flow
+              </button>
+              <button
+                className="secondaryButton"
+                type="button"
+                onClick={() => applyQuickReplyPreset("privacy")}
+              >
+                Privacy flow
+              </button>
+            </div>
             <label className="field">
               <span>Quick replies</span>
               <textarea

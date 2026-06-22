@@ -1308,12 +1308,15 @@ textarea {
 .quickStartGrid,
 .leadGrid,
 .qualityRows,
+.nextActionList,
+.funnelGrid,
 .suggestionStack,
 .formGrid,
 .checkboxGrid,
 .previewFields,
 .pipelineGrid,
 .crawlList,
+.presetRow,
 .previewQuickReplies {
   display: grid;
   gap: 12px;
@@ -1568,6 +1571,36 @@ textarea {
   word-break: break-word;
 }
 
+.leadScore {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 10px;
+}
+
+.leadScore div {
+  display: grid;
+  gap: 2px;
+}
+
+.leadScore strong {
+  font-size: 20px;
+}
+
+.leadScore small {
+  border-radius: 999px;
+  background: var(--accent-bg);
+  color: var(--accent);
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
 .qualityRows article {
   display: flex;
   align-items: center;
@@ -1593,6 +1626,84 @@ textarea {
 
 .qualityRows strong {
   font-size: 20px;
+}
+
+.actionPanel {
+  padding: 14px;
+}
+
+.nextActionList {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.actionItem {
+  display: grid;
+  gap: 5px;
+  justify-items: start;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  color: var(--text);
+  padding: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.actionItem[data-tone="urgent"] {
+  border-color: var(--danger-line);
+  background: var(--danger-bg);
+}
+
+.actionItem[data-tone="warn"] {
+  border-color: var(--amber-line);
+  background: var(--amber-bg);
+}
+
+.actionItem span {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.actionItem strong,
+.actionItem small {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.actionItem small {
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.funnelGrid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.funnelGrid article {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  padding: 10px;
+}
+
+.funnelGrid span,
+.leadScore span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.funnelGrid strong {
+  font-size: 22px;
 }
 
 .widgetPreview {
@@ -1749,6 +1860,16 @@ textarea {
   width: auto;
 }
 
+.presetRow {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.presetRow .secondaryButton {
+  min-width: 0;
+  padding: 0 8px;
+  white-space: nowrap;
+}
+
 @media (max-width: 1180px) {
   .shell {
     grid-template-columns: 1fr;
@@ -1820,8 +1941,10 @@ textarea {
   .sampleGrid,
   .formGrid.two,
   .checkboxGrid,
+  .funnelGrid,
   .previewFields,
   .pipelineGrid,
+  .presetRow,
   .previewQuickReplies {
     grid-template-columns: 1fr;
   }

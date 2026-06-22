@@ -26,6 +26,21 @@ async function main() {
   if (env.LEAD_NOTIFICATION_EMAIL_TO) {
     serverOptions.leadNotificationEmailTo = env.LEAD_NOTIFICATION_EMAIL_TO;
   }
+  if (env.LEAD_NOTIFICATION_SMTP_HOST && env.LEAD_NOTIFICATION_EMAIL_TO) {
+    const smtpPort = env.LEAD_NOTIFICATION_SMTP_PORT ?? 465;
+    serverOptions.leadNotificationSmtp = {
+      host: env.LEAD_NOTIFICATION_SMTP_HOST,
+      port: smtpPort,
+      secure: env.LEAD_NOTIFICATION_SMTP_SECURE ?? smtpPort === 465,
+      from: env.LEAD_NOTIFICATION_EMAIL_FROM ?? env.ADMIN_USER_EMAIL,
+      ...(env.LEAD_NOTIFICATION_SMTP_USER
+        ? { username: env.LEAD_NOTIFICATION_SMTP_USER }
+        : {}),
+      ...(env.LEAD_NOTIFICATION_SMTP_PASSWORD
+        ? { password: env.LEAD_NOTIFICATION_SMTP_PASSWORD }
+        : {})
+    };
+  }
   if (env.WHATSAPP_ACCESS_TOKEN) {
     serverOptions.whatsappAccessToken = env.WHATSAPP_ACCESS_TOKEN;
   }

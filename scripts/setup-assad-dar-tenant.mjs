@@ -32,10 +32,11 @@ const tenantInput = {
     consentText:
       "Dieser Assistent beantwortet Fragen mit freigegebenem Business-Wissen. Nachrichten koennen gespeichert werden, damit das Team nachfassen kann.",
     quickReplies: [
-      "KI Beratung anfragen",
+      "KI Readiness pruefen",
       "Use Case pruefen",
+      "Termin buchen",
       "Datenschutz klaeren",
-      "Termin buchen"
+      "Beratung anfragen"
     ],
     readinessEnabled: true,
     readinessIntro:
