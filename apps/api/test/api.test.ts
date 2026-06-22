@@ -42,7 +42,9 @@ class MemoryPlatformStore
     HandoffInput & {
       id: string;
       status: string;
+      requesterMessage?: string;
       assignedTo?: string | null;
+      metadata?: Record<string, unknown>;
       createdAt: Date;
     }
   > = [];
@@ -262,6 +264,12 @@ class MemoryPlatformStore
       ...input,
       id: crypto.randomUUID(),
       status: "open",
+      requesterMessage: input.message,
+      metadata:
+        input.reason === "lead_capture" ||
+        input.reason === "readiness_assessment"
+          ? { pipelineStage: "new" }
+          : {},
       createdAt: new Date(),
     });
   }
@@ -276,6 +284,15 @@ class MemoryPlatformStore
     input: {
       status?: "open" | "in_progress" | "resolved" | "dismissed" | undefined;
       assignedTo?: string | null | undefined;
+      pipelineStage?:
+        | "new"
+        | "contacted"
+        | "qualified"
+        | "proposal"
+        | "won"
+        | "lost"
+        | undefined;
+      note?: string | undefined;
     },
   ) {
     const handoff = this.handoffs.find(
@@ -290,6 +307,18 @@ class MemoryPlatformStore
     }
     if ("assignedTo" in input) {
       handoff.assignedTo = input.assignedTo ?? null;
+    }
+    if (input.pipelineStage || input.note) {
+      handoff.metadata = {
+        ...(handoff.metadata ?? {}),
+        ...(input.pipelineStage ? { pipelineStage: input.pipelineStage } : {}),
+      };
+      if (input.note) {
+        handoff.metadata.notes = [
+          ...((handoff.metadata.notes as unknown[]) ?? []),
+          { body: input.note },
+        ];
+      }
     }
     return handoff;
   }
@@ -333,6 +362,35 @@ describe("API", () => {
   afterEach(() => {
     globalThis.fetch = originalFetch;
     vi.restoreAllMocks();
+  });
+
+  it("returns an authenticated admin session with role permissions", async () => {
+    const store = new MemoryPlatformStore();
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+      adminUser: {
+        email: "admin@example.com",
+        name: "Admin User",
+        role: "operator",
+      },
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/admin/session",
+      headers: { "x-admin-token": "test-token" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(
+      response.json<{ user: { role: string }; permissions: string[] }>(),
+    ).toMatchObject({
+      user: { role: "operator" },
+      permissions: ["knowledge:write", "leads:write"],
+    });
+    await app.close();
   });
 
   it("creates a tenant, adds knowledge, and answers via widget endpoint", async () => {
@@ -443,16 +501,25 @@ describe("API", () => {
     await app.close();
   });
 
-  it("imports website content into suggested FAQs and checks widget install", async () => {
-    globalThis.fetch = vi.fn(async () => {
+  it("imports multi-page website content into suggested FAQs and checks widget install", async () => {
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const isAbout = url.includes("/about");
       return new Response(
-        `<!doctype html>
+        isAbout
+          ? `<!doctype html>
+        <title>About Assaddar</title>
+        <main>
+          <p>Datenschutz, DSGVO und Unternehmensdaten werden vor jedem KI Projekt sauber geklaert.</p>
+        </main>`
+          : `<!doctype html>
         <title>Assaddar AI Consultancy</title>
         <meta name="description" content="AI consulting and automation for German SMEs.">
         <main>
           <h1>KI Beratung fuer KMU</h1>
           <p>Wir helfen Unternehmen mit KI Beratung, Automatisierung, Workshops und Roadmaps fuer bessere Prozesse.</p>
           <p>Kontaktieren Sie uns fuer ein Beratungsgespraech und eine konkrete Umsetzungsplanung.</p>
+          <a href="/about">About</a>
           <script src="https://assaddar-widget-production.up.railway.app/widget.js" data-assistant-id="asst_1234567890"></script>
         </main>`,
         {
@@ -479,14 +546,17 @@ describe("API", () => {
       headers: { "x-admin-token": "test-token" },
       payload: {
         url: "https://assad-dar.de",
+        maxPages: 2,
       },
     });
 
     expect(importResponse.statusCode).toBe(200);
-    expect(
-      importResponse.json<{ suggestedFaqs: Array<{ question: string }> }>()
-        .suggestedFaqs.length,
-    ).toBeGreaterThan(0);
+    const importBody = importResponse.json<{
+      pagesScanned: unknown[];
+      suggestedFaqs: Array<{ question: string }>;
+    }>();
+    expect(importBody.pagesScanned).toHaveLength(2);
+    expect(importBody.suggestedFaqs.length).toBeGreaterThan(0);
 
     const checkResponse = await app.inject({
       method: "POST",
@@ -540,6 +610,67 @@ describe("API", () => {
     expect(store.handoffs[0]).toMatchObject({
       reason: "lead_capture",
       status: "open",
+      metadata: {
+        pipelineStage: "new",
+      },
+    });
+
+    const handoff = store.handoffs[0];
+    if (!handoff) {
+      throw new Error("Expected a handoff.");
+    }
+    const updateResponse = await app.inject({
+      method: "PATCH",
+      url: `/admin/tenants/${tenant.id}/handoffs/${handoff.id}`,
+      headers: { "x-admin-token": "test-token" },
+      payload: {
+        pipelineStage: "qualified",
+        note: "Good fit",
+      },
+    });
+    expect(updateResponse.statusCode).toBe(200);
+    expect(
+      updateResponse.json<{ metadata: { pipelineStage: string } }>().metadata
+        .pipelineStage,
+    ).toBe("qualified");
+    await app.close();
+  });
+
+  it("captures AI readiness assessments as lead handoffs", async () => {
+    const store = new MemoryPlatformStore();
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+    });
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/widget/readiness",
+      payload: {
+        assistantId: tenant.publicId,
+        visitorId: "visitor-one",
+        pageUrl: "https://assad-dar.de/de",
+        answers: {
+          goal: "Automate support",
+          processPain: "Manual email sorting",
+          systems: "HubSpot and Excel",
+          timeline: "This quarter",
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json<{ score: number }>().score).toBeGreaterThan(60);
+    expect(store.handoffs[0]).toMatchObject({
+      reason: "readiness_assessment",
+      metadata: {
+        pipelineStage: "new",
+      },
     });
     await app.close();
   });
@@ -687,6 +818,19 @@ describe("API", () => {
     if (!handoff) {
       throw new Error("Expected a handoff.");
     }
+
+    const unansweredResponse = await app.inject({
+      method: "GET",
+      url: `/admin/tenants/${tenant.id}/unanswered`,
+      headers: { "x-admin-token": "test-token" },
+    });
+    expect(unansweredResponse.statusCode).toBe(200);
+    expect(
+      unansweredResponse.json<Array<{ reason: string; question: string }>>()[0],
+    ).toMatchObject({
+      reason: "competitor",
+      question: "Tell me about a competitor",
+    });
 
     const updateHandoffResponse = await app.inject({
       method: "PATCH",

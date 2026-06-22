@@ -79,6 +79,11 @@ const WidgetThemeSchema = z.object({
   leadCaptureFields: z.array(z.string().min(1).max(40)).max(10).optional(),
   ctaLabel: z.string().min(1).max(80).optional(),
   ctaUrl: z.string().url().max(500).optional(),
+  consentEnabled: z.boolean().optional(),
+  consentText: z.string().min(1).max(500).optional(),
+  quickReplies: z.array(z.string().min(1).max(120)).max(8).optional(),
+  readinessEnabled: z.boolean().optional(),
+  readinessIntro: z.string().min(1).max(500).optional(),
 });
 
 const UpdateTenantSchema = z.object({
@@ -106,6 +111,10 @@ const AddFaqSchema = z.object({
 const UpdateHandoffSchema = z.object({
   status: z.enum(["open", "in_progress", "resolved", "dismissed"]).optional(),
   assignedTo: z.string().max(120).nullable().optional(),
+  pipelineStage: z
+    .enum(["new", "contacted", "qualified", "proposal", "won", "lost"])
+    .optional(),
+  note: z.string().max(1000).optional(),
 });
 
 const TestAssistantSchema = z.object({
@@ -134,9 +143,23 @@ const WidgetLeadSchema = z.object({
     ),
 });
 
+const WidgetReadinessSchema = z.object({
+  assistantId: z.string().min(8),
+  conversationId: z.string().min(8).max(80).optional(),
+  visitorId: z.string().min(1).max(120).optional(),
+  pageUrl: z.string().url().max(500).optional(),
+  answers: z
+    .record(z.string().max(1200))
+    .refine(
+      (answers) => Object.values(answers).some((value) => value.trim()),
+      "At least one readiness answer is required.",
+    ),
+});
+
 const WebsiteImportSchema = z.object({
   url: z.string().url().max(500),
   maxFaqs: z.number().int().min(1).max(12).default(6),
+  maxPages: z.number().int().min(1).max(8).default(1),
 });
 
 const InstallCheckSchema = z.object({
@@ -214,6 +237,13 @@ export type BuildServerOptions = {
   store: PlatformStore;
   adminToken: string;
   allowedOrigins?: string[];
+  adminUser?: {
+    email: string;
+    name: string;
+    role: "owner" | "admin" | "operator" | "viewer";
+  };
+  leadNotificationWebhookUrl?: string;
+  leadNotificationEmailTo?: string;
   metaVerifyToken?: string;
   whatsappAccessToken?: string;
   messengerPageAccessToken?: string;
@@ -281,6 +311,20 @@ export async function buildServer(
   app.get("/openapi.json", async () => openApiDocument);
 
   app.get(
+    "/admin/session",
+    { preHandler: requireAdmin(options.adminToken) },
+    async () => ({
+      authenticated: true,
+      user: options.adminUser ?? {
+        email: "owner@assad-dar.de",
+        name: "Assad Dar",
+        role: "owner",
+      },
+      permissions: getPermissions(options.adminUser?.role ?? "owner"),
+    }),
+  );
+
+  app.get(
     "/admin/tenants",
     { preHandler: requireAdmin(options.adminToken) },
     async () => {
@@ -339,11 +383,21 @@ export async function buildServer(
         return reply.code(404).send({ error: "Tenant not found." });
       }
 
-      const document = await fetchTextDocument(body.url);
+      const documents = await crawlTextDocuments(body.url, body.maxPages);
+      const primary = documents[0];
       return {
-        sourceUrl: document.finalUrl,
-        statusCode: document.status,
-        ...buildWebsiteImport(document.html, document.finalUrl, body.maxFaqs),
+        sourceUrl: primary?.finalUrl ?? body.url,
+        statusCode: primary?.status ?? 0,
+        pagesScanned: documents.map((document) => ({
+          url: document.finalUrl,
+          statusCode: document.status,
+          title: extractTitle(document.html) || new URL(document.finalUrl).hostname,
+        })),
+        ...buildWebsiteImport(
+          documents.map((document) => document.html).join("\n"),
+          primary?.finalUrl ?? body.url,
+          body.maxFaqs,
+        ),
       };
     },
   );
@@ -407,6 +461,16 @@ export async function buildServer(
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       return options.store.listHandoffs(tenantId);
+    },
+  );
+
+  app.get(
+    "/admin/tenants/:tenantId/unanswered",
+    { preHandler: requireAdmin(options.adminToken) },
+    async (request) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      const handoffs = await options.store.listHandoffs(tenantId);
+      return buildUnansweredQueue(handoffs);
     },
   );
 
@@ -665,6 +729,16 @@ export async function buildServer(
       message,
     });
 
+    await notifyLead(options, {
+      tenantId: tenant.id,
+      tenantName: "unknown",
+      type: "lead_capture",
+      conversationId: conversation.publicId,
+      message,
+      fields: body.fields,
+      ...(body.pageUrl ? { pageUrl: body.pageUrl } : {}),
+    });
+
     await options.store.logUsage({
       tenantId: tenant.id,
       channel: "website",
@@ -679,6 +753,86 @@ export async function buildServer(
     return reply.code(201).send({
       conversationId: conversation.publicId,
       status: "captured",
+    });
+  });
+
+  app.post("/widget/readiness", async (request, reply) => {
+    const body = WidgetReadinessSchema.parse(request.body);
+    const tenant = await options.store.getTenantByPublicId(body.assistantId);
+    if (!tenant) {
+      return reply.code(404).send({ error: "Assistant not found." });
+    }
+
+    const conversationInput: Parameters<
+      PlatformStore["findOrCreateConversation"]
+    >[0] = {
+      tenantId: tenant.id,
+      channel: "website",
+      locale: tenant.defaultLocale,
+    };
+    if (body.conversationId) {
+      conversationInput.publicConversationId = body.conversationId;
+    }
+    if (body.visitorId) {
+      conversationInput.externalUserId = body.visitorId;
+    }
+
+    const conversation =
+      await options.store.findOrCreateConversation(conversationInput);
+    const score = scoreReadiness(body.answers);
+    const message = formatReadinessMessage(body.answers, score, body.pageUrl);
+
+    await options.store.addMessage({
+      tenantId: tenant.id,
+      conversationId: conversation.id,
+      channel: "website",
+      direction: "inbound",
+      role: "user",
+      content: message,
+      trace: {
+        type: "readiness_assessment",
+        answers: body.answers,
+        score,
+        pageUrl: body.pageUrl,
+      },
+    });
+
+    await options.store.createHandoff({
+      tenantId: tenant.id,
+      conversationId: conversation.id,
+      channel: "website",
+      reason: "readiness_assessment",
+      message,
+    });
+
+    await options.store.logUsage({
+      tenantId: tenant.id,
+      channel: "website",
+      eventType: "readiness_assessment",
+      credits: 1,
+      metadata: {
+        score,
+        fields: Object.keys(body.answers),
+        pageUrl: body.pageUrl,
+      },
+    });
+
+    await notifyLead(options, {
+      tenantId: tenant.id,
+      tenantName: "unknown",
+      type: "readiness_assessment",
+      conversationId: conversation.publicId,
+      message,
+      fields: body.answers,
+      score,
+      ...(body.pageUrl ? { pageUrl: body.pageUrl } : {}),
+    });
+
+    return reply.code(201).send({
+      conversationId: conversation.publicId,
+      status: "captured",
+      score,
+      recommendation: readinessRecommendation(score),
     });
   });
 
@@ -751,6 +905,44 @@ function requireAdmin(adminToken: string) {
   };
 }
 
+function getPermissions(role: "owner" | "admin" | "operator" | "viewer") {
+  const permissions = {
+    owner: [
+      "tenants:write",
+      "knowledge:write",
+      "leads:write",
+      "settings:write",
+      "exports:read",
+    ],
+    admin: ["knowledge:write", "leads:write", "settings:write", "exports:read"],
+    operator: ["knowledge:write", "leads:write"],
+    viewer: ["exports:read"],
+  };
+  return permissions[role];
+}
+
+async function crawlTextDocuments(url: string, maxPages: number) {
+  const first = await fetchTextDocument(url);
+  if (maxPages <= 1) {
+    return [first];
+  }
+
+  const links = extractSameOriginLinks(first.html, first.finalUrl).slice(
+    0,
+    maxPages - 1,
+  );
+  const extraPages = await Promise.allSettled(
+    links.map((link) => fetchTextDocument(link)),
+  );
+
+  return [
+    first,
+    ...extraPages.flatMap((result) =>
+      result.status === "fulfilled" ? [result.value] : [],
+    ),
+  ];
+}
+
 async function fetchTextDocument(url: string) {
   const parsed = new URL(url);
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
@@ -772,6 +964,94 @@ async function fetchTextDocument(url: string) {
     status: response.status,
     html,
   };
+}
+
+function extractSameOriginLinks(html: string, sourceUrl: string) {
+  const origin = new URL(sourceUrl).origin;
+  const links = Array.from(html.matchAll(/href=["']([^"']+)["']/gi))
+    .flatMap((match) => {
+      try {
+        const href = match[1];
+        if (!href) {
+          return [];
+        }
+        const url = new URL(href, sourceUrl);
+        url.hash = "";
+        return [url];
+      } catch {
+        return [];
+      }
+    })
+    .filter((url) => url.origin === origin)
+    .filter((url) => !/\.(pdf|png|jpg|jpeg|gif|svg|webp|zip)$/i.test(url.pathname))
+    .map((url) => url.toString());
+
+  return Array.from(new Set(links)).filter((link) => link !== sourceUrl);
+}
+
+function buildUnansweredQueue(handoffs: unknown[]) {
+  return handoffs
+    .map((handoff) => handoff as {
+      id: string;
+      conversationId?: string | null;
+      channel: string;
+      reason: string;
+      requesterMessage: string;
+      status: string;
+      createdAt: string;
+    })
+    .filter((handoff) => handoff.reason !== "lead_capture")
+    .filter((handoff) => handoff.reason !== "readiness_assessment")
+    .map((handoff) => ({
+      id: handoff.id,
+      conversationId: handoff.conversationId,
+      channel: handoff.channel,
+      reason: handoff.reason,
+      question: handoff.requesterMessage,
+      status: handoff.status,
+      createdAt: handoff.createdAt,
+      suggestedTags: ["unanswered", handoff.reason, handoff.channel].filter(Boolean),
+    }));
+}
+
+async function notifyLead(
+  options: BuildServerOptions,
+  payload: {
+    tenantId: string;
+    tenantName: string;
+    type: "lead_capture" | "readiness_assessment";
+    conversationId: string;
+    message: string;
+    fields: Record<string, string>;
+    pageUrl?: string;
+    score?: number;
+  },
+) {
+  if (!options.leadNotificationWebhookUrl) {
+    return { sent: false, reason: "not_configured" };
+  }
+
+  try {
+    const response = await fetch(options.leadNotificationWebhookUrl, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        ...payload,
+        notifyTo: options.leadNotificationEmailTo,
+        sentAt: new Date().toISOString(),
+      }),
+      signal: AbortSignal.timeout(8_000),
+    });
+
+    return { sent: response.ok, status: response.status };
+  } catch (error) {
+    return {
+      sent: false,
+      reason: error instanceof Error ? error.message : "notification_failed",
+    };
+  }
 }
 
 function buildWebsiteImport(html: string, sourceUrl: string, maxFaqs: number) {
@@ -915,6 +1195,70 @@ function formatLeadCaptureMessage(
   }
 
   return `Lead captured\n${lines.join("\n")}`;
+}
+
+function formatReadinessMessage(
+  answers: Record<string, string>,
+  score: number,
+  pageUrl?: string,
+) {
+  const labelMap: Record<string, string> = {
+    goal: "Goal",
+    processPain: "Process pain",
+    dataReadiness: "Data readiness",
+    systems: "Systems",
+    timeline: "Timeline",
+    budget: "Budget",
+    contact: "Contact",
+  };
+  const lines = Object.entries(answers)
+    .filter(([, value]) => value.trim())
+    .map(([key, value]) => `${labelMap[key] ?? titleCase(key)}: ${value.trim()}`);
+
+  lines.unshift(`Readiness score: ${score}/100`);
+  if (pageUrl) {
+    lines.push(`Page: ${pageUrl}`);
+  }
+
+  return `AI readiness assessment\n${lines.join("\n")}`;
+}
+
+function scoreReadiness(answers: Record<string, string>) {
+  const text = Object.values(answers).join(" ").toLowerCase();
+  let score = 30;
+  if (answers.goal?.trim()) {
+    score += 12;
+  }
+  if (answers.processPain?.trim()) {
+    score += 12;
+  }
+  if (answers.systems?.trim()) {
+    score += 10;
+  }
+  if (answers.timeline?.trim()) {
+    score += 10;
+  }
+  if (answers.budget?.trim()) {
+    score += 10;
+  }
+  if (/(crm|erp|sap|hubspot|salesforce|excel|database|api|datenbank)/.test(text)) {
+    score += 8;
+  }
+  if (/(manual|manuell|repetitive|wiederkehrend|email|e-mail|dokument)/.test(text)) {
+    score += 8;
+  }
+
+  return Math.min(100, score);
+}
+
+function readinessRecommendation(score: number) {
+  if (score >= 76) {
+    return "High readiness: qualify for a concrete automation use-case workshop.";
+  }
+  if (score >= 55) {
+    return "Medium readiness: start with process and data discovery.";
+  }
+  return "Early readiness: clarify goals, systems, data access, and business owner first.";
 }
 
 function extractTitle(html: string) {

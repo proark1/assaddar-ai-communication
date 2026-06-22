@@ -1307,7 +1307,10 @@ textarea {
 .suggestionStack,
 .formGrid,
 .checkboxGrid,
-.previewFields {
+.previewFields,
+.pipelineGrid,
+.crawlList,
+.previewQuickReplies {
   display: grid;
   gap: 12px;
 }
@@ -1411,6 +1414,23 @@ textarea {
   font-weight: 800;
 }
 
+.crawlList {
+  gap: 6px;
+}
+
+.crawlList span {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--muted);
+  padding: 7px 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .suggestionItem {
   display: grid;
   gap: 8px;
@@ -1434,7 +1454,31 @@ textarea {
 }
 
 .compactMetrics {
-  grid-template-columns: repeat(3, minmax(160px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.pipelineGrid {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.pipelineGrid article {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  padding: 10px;
+}
+
+.pipelineGrid span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.pipelineGrid strong {
+  font-size: 22px;
 }
 
 .leadGrid {
@@ -1604,6 +1648,41 @@ textarea {
   font-weight: 900;
 }
 
+.previewQuickReplies {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.previewQuickReplies span {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--accent);
+  padding: 7px 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.previewNotice {
+  display: grid;
+  gap: 4px;
+  border-top: 1px solid var(--line);
+  padding: 12px 14px;
+}
+
+.previewNotice strong {
+  font-size: 12px;
+}
+
+.previewNotice span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .previewLead {
   display: grid;
   gap: 10px;
@@ -1737,7 +1816,9 @@ textarea {
   .sampleGrid,
   .formGrid.two,
   .checkboxGrid,
-  .previewFields {
+  .previewFields,
+  .pipelineGrid,
+  .previewQuickReplies {
     grid-template-columns: 1fr;
   }
 

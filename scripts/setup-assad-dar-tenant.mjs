@@ -27,7 +27,19 @@ const tenantInput = {
       "Hinterlassen Sie kurz Ihre Daten, damit wir das passende KI-Projekt einschaetzen koennen.",
     leadCaptureFields: ["name", "email", "company", "projectType", "budget"],
     ctaLabel: "Beratung anfragen",
-    ctaUrl: "https://www.assad-dar.de/de"
+    ctaUrl: "https://www.assad-dar.de/de",
+    consentEnabled: true,
+    consentText:
+      "Dieser Assistent beantwortet Fragen mit freigegebenem Business-Wissen. Nachrichten koennen gespeichert werden, damit das Team nachfassen kann.",
+    quickReplies: [
+      "KI Beratung anfragen",
+      "Use Case pruefen",
+      "Datenschutz klaeren",
+      "Termin buchen"
+    ],
+    readinessEnabled: true,
+    readinessIntro:
+      "Pruefen Sie kurz, ob Ihr Unternehmen bereit fuer ein sinnvolles KI-Automatisierungsprojekt ist."
   }
 };
 

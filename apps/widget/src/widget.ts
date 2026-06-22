@@ -12,6 +12,11 @@ type WidgetTheme = {
   leadCaptureFields?: string[];
   ctaLabel?: string;
   ctaUrl?: string;
+  consentEnabled?: boolean;
+  consentText?: string;
+  quickReplies?: string[];
+  readinessEnabled?: boolean;
+  readinessIntro?: string;
 };
 
 type WidgetConfig = {
@@ -36,6 +41,13 @@ type LeadCaptureResponse = {
   status: "captured";
 };
 
+type ReadinessResponse = {
+  conversationId: string;
+  status: "captured";
+  score: number;
+  recommendation: string;
+};
+
 type StoredMessage = {
   role: "assistant" | "user";
   text: string;
@@ -44,7 +56,9 @@ type StoredMessage = {
 type WidgetState = {
   visitorId: string;
   conversationId?: string;
+  consentAccepted?: boolean;
   leadCaptured?: boolean;
+  readinessCaptured?: boolean;
   sentAt: number[];
   messages: StoredMessage[];
 };
@@ -106,6 +120,11 @@ void (() => {
     const leadFields = normalizeLeadFields(config.theme.leadCaptureFields);
     const leadCaptureVisible =
       Boolean(config.theme.leadCaptureEnabled) && !state.leadCaptured;
+    const consentVisible =
+      Boolean(config.theme.consentEnabled) && !state.consentAccepted;
+    const quickReplies = normalizeQuickReplies(config.theme.quickReplies);
+    const readinessVisible =
+      Boolean(config.theme.readinessEnabled) && !state.readinessCaptured;
     const shellSide =
       position === "bottom-left"
         ? "left: 20px; right: auto;"
@@ -145,7 +164,7 @@ void (() => {
         box-shadow: 0 18px 50px rgba(16, 24, 40, 0.22);
         overflow: hidden;
       }
-      .panel.open { display: grid; grid-template-rows: auto 1fr auto; }
+      .panel.open { display: flex; flex-direction: column; }
       .header {
         min-height: 58px;
         padding: 12px 14px;
@@ -170,6 +189,8 @@ void (() => {
         line-height: 1;
       }
       .messages {
+        flex: 1 1 auto;
+        min-height: 0;
         overflow: auto;
         display: flex;
         flex-direction: column;
@@ -215,13 +236,58 @@ void (() => {
         padding: 12px;
       }
       .lead-form[data-visible="true"] { display: grid; }
+      .consent,
+      .readiness-form,
+      .quick-replies {
+        display: none;
+        gap: 8px;
+        border-top: 1px solid rgba(23, 32, 51, 0.12);
+        background: #fff;
+        padding: 10px 12px;
+      }
+      .consent[data-visible="true"],
+      .readiness-form[data-visible="true"],
+      .quick-replies[data-visible="true"] { display: grid; }
+      .consent p,
+      .readiness-form p {
+        margin: 0;
+        color: ${textColor};
+        font-size: 12px;
+        line-height: 1.4;
+      }
+      .consent button,
+      .quick-replies button,
+      .readiness-form button {
+        border: 1px solid rgba(23, 32, 51, 0.14);
+        border-radius: 6px;
+        background: #fff;
+        color: ${primaryColor};
+        min-height: 34px;
+        cursor: pointer;
+        font-weight: 800;
+      }
+      .quick-replies {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .quick-replies button {
+        min-width: 0;
+        overflow: hidden;
+        padding: 0 8px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 12px;
+      }
+      .readiness-form input,
+      .readiness-form textarea,
       .lead-form strong {
         display: block;
         color: ${textColor};
         font-size: 13px;
       }
       .lead-form input,
-      .lead-form textarea {
+      .lead-form textarea,
+      .readiness-form input,
+      .readiness-form textarea {
         width: 100%;
         box-sizing: border-box;
         border: 1px solid rgba(23, 32, 51, 0.18);
@@ -234,11 +300,14 @@ void (() => {
         resize: vertical;
       }
       .lead-form input:focus,
-      .lead-form textarea:focus {
+      .lead-form textarea:focus,
+      .readiness-form input:focus,
+      .readiness-form textarea:focus {
         border-color: ${primaryColor};
         box-shadow: 0 0 0 3px rgba(21, 94, 239, 0.14);
       }
-      .lead-form button {
+      .lead-form button,
+      .readiness-form button.primary {
         border: 0;
         border-radius: 6px;
         background: ${primaryColor};
@@ -297,7 +366,23 @@ void (() => {
           <button class="close" aria-label="Close chat">×</button>
         </div>
         <div class="messages" part="messages"></div>
-        <form class="lead-form" data-visible="${leadCaptureVisible ? "true" : "false"}">
+        <div class="consent" data-visible="${consentVisible ? "true" : "false"}">
+          <p>${escapeHtml(config.theme.consentText ?? "This assistant uses approved business information and stores messages so the team can follow up.")}</p>
+          <button type="button">Accept</button>
+        </div>
+        <div class="quick-replies" data-visible="${quickReplies.length && !consentVisible ? "true" : "false"}">
+          ${quickReplies.map((reply) => `<button type="button">${escapeHtml(reply)}</button>`).join("")}
+        </div>
+        <form class="readiness-form" data-visible="${readinessVisible && !consentVisible ? "true" : "false"}">
+          <p>${escapeHtml(config.theme.readinessIntro ?? "Check whether your company is ready for a useful AI automation project.")}</p>
+          <input name="goal" placeholder="Main AI goal" />
+          <textarea name="processPain" rows="2" placeholder="Most painful manual process"></textarea>
+          <input name="systems" placeholder="Current systems, tools, or data sources" />
+          <input name="timeline" placeholder="Timeline" />
+          <input name="budget" placeholder="Budget range" />
+          <button class="primary">Check readiness</button>
+        </form>
+        <form class="lead-form" data-visible="${leadCaptureVisible && !consentVisible ? "true" : "false"}">
           <strong>${escapeHtml(config.theme.leadCaptureIntro ?? "Leave your details and we will follow up.")}</strong>
           ${leadFields
             .map((field) =>
@@ -321,6 +406,12 @@ void (() => {
     const panel = shadow.querySelector<HTMLDivElement>(".panel");
     const close = shadow.querySelector<HTMLButtonElement>(".close");
     const messages = shadow.querySelector<HTMLDivElement>(".messages");
+    const consent = shadow.querySelector<HTMLDivElement>(".consent");
+    const consentButton = shadow.querySelector<HTMLButtonElement>(".consent button");
+    const quickReplyButtons =
+      shadow.querySelectorAll<HTMLButtonElement>(".quick-replies button");
+    const readinessForm =
+      shadow.querySelector<HTMLFormElement>(".readiness-form");
     const leadForm = shadow.querySelector<HTMLFormElement>(".lead-form");
     const form = shadow.querySelector<HTMLFormElement>(".composer");
     const input = shadow.querySelector<HTMLInputElement>(".composer input");
@@ -332,6 +423,8 @@ void (() => {
       !panel ||
       !close ||
       !messages ||
+      !consent ||
+      !readinessForm ||
       !leadForm ||
       !form ||
       !input ||
@@ -340,17 +433,99 @@ void (() => {
       throw new Error("Widget failed to initialize.");
     }
 
-    drawMessages(messages, state.messages, context.config.theme);
+    const messagesEl = messages;
+    const inputEl = input;
+    const sendButtonEl = sendButton;
+
+    drawMessages(messagesEl, state.messages, context.config.theme);
 
     launcher.addEventListener("click", () => {
       panel.classList.add("open");
       launcher.style.display = "none";
-      input.focus();
+      inputEl.focus();
     });
 
     close.addEventListener("click", () => {
       panel.classList.remove("open");
       launcher.style.display = "inline-flex";
+    });
+
+    consentButton?.addEventListener("click", () => {
+      state.consentAccepted = true;
+      persistState(context.config.assistantId, state);
+      consent.dataset.visible = "false";
+      const quickRepliesNode = shadow.querySelector<HTMLDivElement>(".quick-replies");
+      if (quickRepliesNode && quickReplyButtons.length) {
+        quickRepliesNode.dataset.visible = "true";
+      }
+      if (readinessForm && context.config.theme.readinessEnabled && !state.readinessCaptured) {
+        readinessForm.dataset.visible = "true";
+      }
+      if (leadForm && context.config.theme.leadCaptureEnabled && !state.leadCaptured) {
+        leadForm.dataset.visible = "true";
+      }
+    });
+
+    quickReplyButtons.forEach((button) => {
+      button.addEventListener("click", () => {
+        void sendChatMessage(button.textContent?.trim() ?? "");
+      });
+    });
+
+    readinessForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const answers: Record<string, string> = {};
+      const formData = new FormData(readinessForm);
+      for (const [key, value] of formData.entries()) {
+        answers[key] = String(value).trim();
+      }
+      if (!Object.values(answers).some(Boolean)) {
+        return;
+      }
+
+      const button =
+        readinessForm.querySelector<HTMLButtonElement>("button.primary");
+      if (button) {
+        button.disabled = true;
+      }
+
+      try {
+        const response = await fetchJson<ReadinessResponse>(
+          `${context.apiBase}/widget/readiness`,
+          {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              assistantId: context.config.assistantId,
+              conversationId: state.conversationId,
+              visitorId: state.visitorId,
+              pageUrl: window.location.href,
+              answers,
+            }),
+          },
+        );
+        state.conversationId = response.conversationId;
+        state.readinessCaptured = true;
+        state.messages.push({
+          role: "assistant",
+          text: `AI readiness score: ${response.score}/100. ${response.recommendation}`,
+        });
+        persistState(context.config.assistantId, state);
+        readinessForm.dataset.visible = "false";
+        drawMessages(messagesEl, state.messages, context.config.theme);
+      } catch {
+        state.messages.push({
+          role: "assistant",
+          text: "I couldn't submit the readiness check right now. Please try again later.",
+        });
+        drawMessages(messagesEl, state.messages, context.config.theme);
+      } finally {
+        if (button) {
+          button.disabled = false;
+        }
+      }
     });
 
     leadForm.addEventListener("submit", async (event) => {
@@ -396,13 +571,13 @@ void (() => {
         });
         persistState(context.config.assistantId, state);
         leadForm.dataset.visible = "false";
-        drawMessages(messages, state.messages, context.config.theme);
+        drawMessages(messagesEl, state.messages, context.config.theme);
       } catch {
         state.messages.push({
           role: "assistant",
           text: "I couldn't send your details right now. Please try again later.",
         });
-        drawMessages(messages, state.messages, context.config.theme);
+        drawMessages(messagesEl, state.messages, context.config.theme);
       } finally {
         if (button) {
           button.disabled = false;
@@ -410,17 +585,15 @@ void (() => {
       }
     });
 
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const text = input.value.trim();
+    async function sendChatMessage(text: string) {
       if (!text || isClientRateLimited(state)) {
         return;
       }
 
-      input.value = "";
-      sendButton.disabled = true;
+      inputEl.value = "";
+      sendButtonEl.disabled = true;
       state.messages.push({ role: "user", text });
-      drawMessages(messages, state.messages, context.config.theme);
+      drawMessages(messagesEl, state.messages, context.config.theme);
       state.sentAt.push(Date.now());
 
       try {
@@ -451,9 +624,14 @@ void (() => {
           text: "I can't send this message right now. Please try again later.",
         });
       } finally {
-        sendButton.disabled = false;
-        drawMessages(messages, state.messages, context.config.theme);
+        sendButtonEl.disabled = false;
+        drawMessages(messagesEl, state.messages, context.config.theme);
       }
+    }
+
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      void sendChatMessage(inputEl.value.trim());
     });
   }
 
@@ -519,6 +697,20 @@ void (() => {
     const defaults = ["name", "email", "company", "projectType", "timeline"];
     const values = fields?.length ? fields : defaults;
     return Array.from(new Set(values)).slice(0, 8);
+  }
+
+  function normalizeQuickReplies(replies?: string[]) {
+    const defaults = [
+      "KI Beratung anfragen",
+      "Use Case prüfen",
+      "Datenschutz klären",
+      "Termin buchen",
+    ];
+    const values = replies?.length ? replies : defaults;
+    return Array.from(new Set(values.map((reply) => reply.trim()).filter(Boolean))).slice(
+      0,
+      8,
+    );
   }
 
   function leadFieldLabel(field: string) {

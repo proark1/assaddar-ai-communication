@@ -13,8 +13,19 @@ async function main() {
     store,
     adminToken: env.ADMIN_API_TOKEN,
     allowedOrigins: env.WIDGET_ALLOWED_ORIGINS.split(",").map((origin) => origin.trim()),
-    metaVerifyToken: env.META_VERIFY_TOKEN
+    metaVerifyToken: env.META_VERIFY_TOKEN,
+    adminUser: {
+      email: env.ADMIN_USER_EMAIL,
+      name: env.ADMIN_USER_NAME,
+      role: env.ADMIN_USER_ROLE
+    }
   };
+  if (env.LEAD_NOTIFICATION_WEBHOOK_URL) {
+    serverOptions.leadNotificationWebhookUrl = env.LEAD_NOTIFICATION_WEBHOOK_URL;
+  }
+  if (env.LEAD_NOTIFICATION_EMAIL_TO) {
+    serverOptions.leadNotificationEmailTo = env.LEAD_NOTIFICATION_EMAIL_TO;
+  }
   if (env.WHATSAPP_ACCESS_TOKEN) {
     serverOptions.whatsappAccessToken = env.WHATSAPP_ACCESS_TOKEN;
   }

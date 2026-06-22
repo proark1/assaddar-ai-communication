@@ -10,6 +10,11 @@ export const EnvSchema = z.object({
   META_VERIFY_TOKEN: z.string().default("change-me-meta-verify-token"),
   WHATSAPP_ACCESS_TOKEN: z.string().optional(),
   MESSENGER_PAGE_ACCESS_TOKEN: z.string().optional(),
+  ADMIN_USER_EMAIL: z.string().email().default("owner@assad-dar.de"),
+  ADMIN_USER_NAME: z.string().default("Assad Dar"),
+  ADMIN_USER_ROLE: z.enum(["owner", "admin", "operator", "viewer"]).default("owner"),
+  LEAD_NOTIFICATION_WEBHOOK_URL: z.string().url().optional(),
+  LEAD_NOTIFICATION_EMAIL_TO: z.string().email().optional(),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

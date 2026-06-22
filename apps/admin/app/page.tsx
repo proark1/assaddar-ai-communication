@@ -63,6 +63,11 @@ type WidgetTheme = {
   leadCaptureFields?: string[];
   ctaLabel?: string;
   ctaUrl?: string;
+  consentEnabled?: boolean;
+  consentText?: string;
+  quickReplies?: string[];
+  readinessEnabled?: boolean;
+  readinessIntro?: string;
 };
 
 type KnowledgeItem = {
@@ -104,6 +109,11 @@ type Handoff = {
   requesterMessage: string;
   status: string;
   assignedTo?: string | null;
+  metadata?: {
+    pipelineStage?: LeadPipelineStage;
+    notes?: Array<{ body: string; createdAt: string }>;
+    [key: string]: unknown;
+  };
   createdAt: string;
 };
 
@@ -125,6 +135,11 @@ type TenantAnalytics = {
 type WebsiteImportResult = {
   sourceUrl: string;
   statusCode: number;
+  pagesScanned?: Array<{
+    url: string;
+    statusCode: number;
+    title: string;
+  }>;
   title: string;
   detectedLanguage: string;
   summary: string;
@@ -133,6 +148,27 @@ type WebsiteImportResult = {
     answer: string;
     tags: string[];
   }>;
+};
+
+type AdminSession = {
+  authenticated: boolean;
+  user: {
+    email: string;
+    name: string;
+    role: "owner" | "admin" | "operator" | "viewer";
+  };
+  permissions: string[];
+};
+
+type UnansweredQuestion = {
+  id: string;
+  conversationId?: string | null;
+  channel: string;
+  reason: string;
+  question: string;
+  status: string;
+  createdAt: string;
+  suggestedTags: string[];
 };
 
 type InstallCheckResult = {
@@ -168,6 +204,13 @@ type KnowledgeStatusFilter = "all" | "approved" | "draft";
 type InboxFilter = "all" | "needs_human" | "recent";
 type HandoffFilter = "open" | "in_progress" | "resolved" | "all";
 type WidgetPlatform = "html" | "wordpress" | "webflow" | "shopify";
+type LeadPipelineStage =
+  | "new"
+  | "contacted"
+  | "qualified"
+  | "proposal"
+  | "won"
+  | "lost";
 
 const productionApiBase = "https://assaddar-api-production.up.railway.app";
 const defaultApiBase =
@@ -229,6 +272,15 @@ const leadFieldOptions = [
   "message",
 ];
 
+const pipelineStages: Array<{ key: LeadPipelineStage; label: string }> = [
+  { key: "new", label: "New" },
+  { key: "contacted", label: "Contacted" },
+  { key: "qualified", label: "Qualified" },
+  { key: "proposal", label: "Proposal" },
+  { key: "won", label: "Won" },
+  { key: "lost", label: "Lost" },
+];
+
 const defaultTheme: Required<
   Pick<
     WidgetTheme,
@@ -243,10 +295,15 @@ const defaultTheme: Required<
     | "leadCaptureIntro"
     | "ctaLabel"
     | "ctaUrl"
+    | "consentText"
+    | "readinessIntro"
   >
 > & {
   leadCaptureEnabled: boolean;
   leadCaptureFields: string[];
+  consentEnabled: boolean;
+  quickReplies: string[];
+  readinessEnabled: boolean;
 } = {
   primaryColor: "#2557d6",
   backgroundColor: "#ffffff",
@@ -263,6 +320,18 @@ const defaultTheme: Required<
   leadCaptureFields: ["name", "email", "company", "projectType", "budget"],
   ctaLabel: "Beratung anfragen",
   ctaUrl: "https://www.assad-dar.de/de",
+  consentEnabled: true,
+  consentText:
+    "Dieser Assistent beantwortet Fragen mit freigegebenem Business-Wissen. Nachrichten koennen gespeichert werden, damit das Team nachfassen kann.",
+  quickReplies: [
+    "KI Beratung anfragen",
+    "Use Case prüfen",
+    "Datenschutz klären",
+    "Termin buchen",
+  ],
+  readinessEnabled: true,
+  readinessIntro:
+    "Pruefen Sie kurz, ob Ihr Unternehmen bereit fuer ein sinnvolles KI-Automatisierungsprojekt ist.",
 };
 
 const starterFaqs = [
@@ -491,6 +560,10 @@ function parseLeadDetails(message: string) {
     .filter((item) => item.label && item.value);
 }
 
+function getPipelineStage(handoff: Handoff): LeadPipelineStage {
+  return handoff.metadata?.pipelineStage ?? "new";
+}
+
 function getPriority(handoff: Handoff) {
   const text = `${handoff.reason} ${handoff.requesterMessage}`.toLowerCase();
 
@@ -526,6 +599,7 @@ function buildWidgetSnippets(
 export default function DashboardPage() {
   const [apiBase, setApiBase] = useState(defaultApiBase);
   const [adminToken, setAdminToken] = useState("");
+  const [adminSession, setAdminSession] = useState<AdminSession | null>(null);
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [selectedTenantId, setSelectedTenantId] = useState("");
   const [tenantName, setTenantName] = useState("");
@@ -544,6 +618,9 @@ export default function DashboardPage() {
     ConversationMessage[]
   >([]);
   const [handoffs, setHandoffs] = useState<Handoff[]>([]);
+  const [unansweredQuestions, setUnansweredQuestions] = useState<
+    UnansweredQuestion[]
+  >([]);
   const [editingKnowledgeId, setEditingKnowledgeId] = useState("");
   const [editQuestion, setEditQuestion] = useState("");
   const [editAnswer, setEditAnswer] = useState("");
@@ -560,6 +637,7 @@ export default function DashboardPage() {
   const [widgetPlatform, setWidgetPlatform] = useState<WidgetPlatform>("html");
   const [copiedSnippet, setCopiedSnippet] = useState("");
   const [siteUrl, setSiteUrl] = useState(defaultSiteUrl);
+  const [crawlMaxPages, setCrawlMaxPages] = useState(4);
   const [websiteImport, setWebsiteImport] =
     useState<WebsiteImportResult | null>(null);
   const [installCheck, setInstallCheck] = useState<InstallCheckResult | null>(
@@ -598,6 +676,19 @@ export default function DashboardPage() {
   );
   const [ctaLabel, setCtaLabel] = useState(defaultTheme.ctaLabel);
   const [ctaUrl, setCtaUrl] = useState(defaultTheme.ctaUrl);
+  const [consentEnabled, setConsentEnabled] = useState(
+    defaultTheme.consentEnabled,
+  );
+  const [consentText, setConsentText] = useState(defaultTheme.consentText);
+  const [quickReplies, setQuickReplies] = useState(
+    defaultTheme.quickReplies.join("\n"),
+  );
+  const [readinessEnabled, setReadinessEnabled] = useState(
+    defaultTheme.readinessEnabled,
+  );
+  const [readinessIntro, setReadinessIntro] = useState(
+    defaultTheme.readinessIntro,
+  );
   const [tenantLocale, setTenantLocale] = useState(defaultTheme.language);
   const [tenantTone, setTenantTone] = useState<"friendly" | "neutral" | "formal">(
     "friendly",
@@ -618,10 +709,13 @@ export default function DashboardPage() {
     (conversation) => conversation.id === selectedConversationId,
   );
   const openHandoffs = handoffs.filter((handoff) => handoff.status === "open");
-  const leadHandoffs = handoffs.filter(
-    (handoff) => handoff.reason === "lead_capture",
+  const leadHandoffs = handoffs.filter((handoff) =>
+    ["lead_capture", "readiness_assessment"].includes(handoff.reason),
   );
   const openLeads = leadHandoffs.filter((handoff) => handoff.status === "open");
+  const readinessLeads = handoffs.filter(
+    (handoff) => handoff.reason === "readiness_assessment",
+  );
   const unansweredCount = getUsageTotal(analytics, ["handoff", "refused"]);
   const answeredCount = getUsageTotal(analytics, ["answered"]);
   const handoffConversationIds = new Set(
@@ -661,6 +755,14 @@ export default function DashboardPage() {
     leadCaptureEnabled,
     leadCaptureIntro,
     leadCaptureFields,
+    consentEnabled,
+    consentText,
+    quickReplies: quickReplies
+      .split("\n")
+      .map((reply) => reply.trim())
+      .filter(Boolean),
+    readinessEnabled,
+    readinessIntro,
   };
   if (ctaLabel) {
     currentTheme.ctaLabel = ctaLabel;
@@ -799,6 +901,11 @@ export default function DashboardPage() {
     setLeadCaptureFields(theme.leadCaptureFields);
     setCtaLabel(theme.ctaLabel);
     setCtaUrl(theme.ctaUrl);
+    setConsentEnabled(theme.consentEnabled);
+    setConsentText(theme.consentText);
+    setQuickReplies(theme.quickReplies.join("\n"));
+    setReadinessEnabled(theme.readinessEnabled);
+    setReadinessIntro(theme.readinessIntro);
     setTenantLocale(selectedTenant.defaultLocale ?? theme.language);
     setTenantTone(selectedTenant.tone ?? "friendly");
     setConfidenceThreshold(Number(selectedTenant.confidenceThreshold ?? 0.18));
@@ -855,7 +962,9 @@ export default function DashboardPage() {
 
     setBusy(true);
     try {
+      const session = await apiFetch<AdminSession>("/admin/session");
       const nextTenants = await apiFetch<Tenant[]>("/admin/tenants");
+      setAdminSession(session);
       setTenants(nextTenants);
       setConnectionAttempted(true);
       if (
@@ -887,6 +996,7 @@ export default function DashboardPage() {
       refreshAnalytics(tenantId),
       refreshConversations(tenantId),
       refreshHandoffs(tenantId),
+      refreshUnanswered(tenantId),
     ]);
   }
 
@@ -974,6 +1084,22 @@ export default function DashboardPage() {
         `/admin/tenants/${tenantId}/handoffs`,
       );
       setHandoffs(items);
+    } catch (error) {
+      setStatus(readableError(error));
+    }
+  }
+
+  async function refreshUnanswered(tenantId = selectedTenant?.id) {
+    if (!tenantId) {
+      setUnansweredQuestions([]);
+      return;
+    }
+
+    try {
+      const items = await apiFetch<UnansweredQuestion[]>(
+        `/admin/tenants/${tenantId}/unanswered`,
+      );
+      setUnansweredQuestions(items);
     } catch (error) {
       setStatus(readableError(error));
     }
@@ -1108,6 +1234,7 @@ export default function DashboardPage() {
           body: JSON.stringify({
             url: siteUrl,
             maxFaqs: 6,
+            maxPages: crawlMaxPages,
           }),
         },
       );
@@ -1179,6 +1306,14 @@ export default function DashboardPage() {
         ? current.filter((item) => item !== field)
         : [...current, field],
     );
+  }
+
+  function draftFaqFromUnanswered(item: UnansweredQuestion) {
+    setQuestion(item.question);
+    setAnswer("");
+    setTagInput(item.suggestedTags.join(", "));
+    setActiveTab("knowledge");
+    setStatus("FAQ draft prepared from unanswered question");
   }
 
   async function importFaqBlocks() {
@@ -1277,6 +1412,8 @@ export default function DashboardPage() {
     handoff: Handoff,
     statusValue: Handoff["status"],
     assignedTo = handoff.assignedTo,
+    pipelineStage?: LeadPipelineStage,
+    note?: string,
   ) {
     if (!selectedTenant) {
       return;
@@ -1294,6 +1431,8 @@ export default function DashboardPage() {
               statusValue === "resolved"
                 ? (assignedTo ?? "Assad Dar")
                 : (assignedTo ?? null),
+            pipelineStage,
+            note,
           }),
         },
       );
@@ -1864,6 +2003,18 @@ export default function DashboardPage() {
                 onChange={(event) => setSiteUrl(event.target.value)}
               />
             </label>
+            <label className="field">
+              <span>Pages to scan</span>
+              <input
+                type="number"
+                min="1"
+                max="8"
+                value={crawlMaxPages}
+                onChange={(event) =>
+                  setCrawlMaxPages(Number(event.target.value))
+                }
+              />
+            </label>
             <button
               className="primaryButton full"
               disabled={busy || !selectedTenant || !siteUrl}
@@ -1882,6 +2033,15 @@ export default function DashboardPage() {
                     {websiteImport.statusCode}
                   </span>
                 </div>
+                {websiteImport.pagesScanned?.length ? (
+                  <div className="crawlList">
+                    {websiteImport.pagesScanned.map((page) => (
+                      <span key={page.url}>
+                        {page.statusCode} · {page.title}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
                 {websiteImport.suggestedFaqs.map((item) => (
                   <article className="suggestionItem" key={item.question}>
                     <strong>{item.question}</strong>
@@ -1932,6 +2092,41 @@ export default function DashboardPage() {
               Import pasted FAQs
             </button>
           </section>
+
+          <section className="panel">
+            <div className="panelHeader">
+              <div className="panelTitle">
+                <AlertCircle size={18} />
+                <h2>Unanswered queue</h2>
+              </div>
+              <span className="countPill">{unansweredQuestions.length}</span>
+            </div>
+            <div className="suggestionStack">
+              {unansweredQuestions.length ? (
+                unansweredQuestions.slice(0, 8).map((item) => (
+                  <article className="suggestionItem" key={item.id}>
+                    <strong>{item.question}</strong>
+                    <p>
+                      {titleCase(item.reason)} · {item.channel} ·{" "}
+                      {formatDate(item.createdAt)}
+                    </p>
+                    <button
+                      className="secondaryButton"
+                      type="button"
+                      onClick={() => draftFaqFromUnanswered(item)}
+                    >
+                      <Plus size={15} />
+                      Create FAQ draft
+                    </button>
+                  </article>
+                ))
+              ) : (
+                <div className="emptyState compact">
+                  No unanswered customer questions.
+                </div>
+              )}
+            </div>
+          </section>
         </div>
       </div>
     );
@@ -1961,6 +2156,34 @@ export default function DashboardPage() {
               }
             </strong>
           </article>
+          <article className="metricCard">
+            <Sparkles size={18} />
+            <span>Readiness</span>
+            <strong>{readinessLeads.length}</strong>
+          </article>
+        </section>
+
+        <section className="panel">
+          <div className="panelHeader">
+            <div className="panelTitle">
+              <BarChart3 size={18} />
+              <h2>Pipeline</h2>
+            </div>
+          </div>
+          <div className="pipelineGrid">
+            {pipelineStages.map((stage) => (
+              <article key={stage.key}>
+                <span>{stage.label}</span>
+                <strong>
+                  {
+                    leadHandoffs.filter(
+                      (handoff) => getPipelineStage(handoff) === stage.key,
+                    ).length
+                  }
+                </strong>
+              </article>
+            ))}
+          </div>
         </section>
 
         <section className="panel">
@@ -1989,7 +2212,7 @@ export default function DashboardPage() {
                         <span>{formatDate(handoff.createdAt)}</span>
                       </div>
                       <small data-status={handoff.status}>
-                        {handoff.status}
+                        {getPipelineStage(handoff)}
                       </small>
                     </div>
                     <dl>
@@ -2000,6 +2223,26 @@ export default function DashboardPage() {
                         </div>
                       ))}
                     </dl>
+                    <label className="field">
+                      <span>Pipeline stage</span>
+                      <select
+                        value={getPipelineStage(handoff)}
+                        onChange={(event) =>
+                          updateHandoff(
+                            handoff,
+                            handoff.status,
+                            handoff.assignedTo,
+                            event.target.value as LeadPipelineStage,
+                          )
+                        }
+                      >
+                        {pipelineStages.map((stage) => (
+                          <option key={stage.key} value={stage.key}>
+                            {stage.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
                     <div className="rowActions">
                       <button
                         className="secondaryButton"
@@ -2428,7 +2671,29 @@ export default function DashboardPage() {
                 {ctaLabel ? (
                   <a style={{ color: widgetPrimaryColor }}>{ctaLabel}</a>
                 ) : null}
+                <div className="previewQuickReplies">
+                  {quickReplies
+                    .split("\n")
+                    .map((reply) => reply.trim())
+                    .filter(Boolean)
+                    .slice(0, 4)
+                    .map((reply) => (
+                      <span key={reply}>{reply}</span>
+                    ))}
+                </div>
               </div>
+              {consentEnabled ? (
+                <div className="previewNotice">
+                  <strong>Consent</strong>
+                  <span>{consentText}</span>
+                </div>
+              ) : null}
+              {readinessEnabled ? (
+                <div className="previewNotice">
+                  <strong>AI readiness</strong>
+                  <span>{readinessIntro}</span>
+                </div>
+              ) : null}
               {leadCaptureEnabled ? (
                 <div className="previewLead">
                   <strong>{leadCaptureIntro}</strong>
@@ -2592,6 +2857,55 @@ export default function DashboardPage() {
                 />
               </label>
             </div>
+          </section>
+
+          <section className="panel">
+            <div className="panelHeader">
+              <div className="panelTitle">
+                <ShieldCheck size={18} />
+                <h2>Consent and readiness</h2>
+              </div>
+            </div>
+            <label className="toggle">
+              <input
+                type="checkbox"
+                checked={consentEnabled}
+                onChange={(event) => setConsentEnabled(event.target.checked)}
+              />
+              <span>Show consent notice</span>
+            </label>
+            <label className="field">
+              <span>Consent text</span>
+              <textarea
+                value={consentText}
+                onChange={(event) => setConsentText(event.target.value)}
+                rows={3}
+              />
+            </label>
+            <label className="field">
+              <span>Quick replies</span>
+              <textarea
+                value={quickReplies}
+                onChange={(event) => setQuickReplies(event.target.value)}
+                rows={4}
+              />
+            </label>
+            <label className="toggle">
+              <input
+                type="checkbox"
+                checked={readinessEnabled}
+                onChange={(event) => setReadinessEnabled(event.target.checked)}
+              />
+              <span>Enable AI readiness check</span>
+            </label>
+            <label className="field">
+              <span>Readiness intro</span>
+              <textarea
+                value={readinessIntro}
+                onChange={(event) => setReadinessIntro(event.target.value)}
+                rows={3}
+              />
+            </label>
           </section>
         </div>
       </div>
@@ -2759,11 +3073,15 @@ export default function DashboardPage() {
           <div className="identityList">
             <article>
               <span>Role</span>
-              <strong>Owner</strong>
+              <strong>{adminSession?.user.role ?? "Owner"}</strong>
             </article>
             <article>
               <span>Session</span>
-              <strong>{connectionAttempted ? "Connected" : "Locked"}</strong>
+              <strong>
+                {connectionAttempted
+                  ? (adminSession?.user.email ?? "Connected")
+                  : "Locked"}
+              </strong>
             </article>
           </div>
           <button

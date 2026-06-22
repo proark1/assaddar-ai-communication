@@ -640,12 +640,37 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     input: {
       status?: "open" | "in_progress" | "resolved" | "dismissed" | undefined;
       assignedTo?: string | null | undefined;
+      pipelineStage?:
+        | "new"
+        | "contacted"
+        | "qualified"
+        | "proposal"
+        | "won"
+        | "lost"
+        | undefined;
+      note?: string | undefined;
     },
   ) {
     assertTenantId(tenantId);
+    const [existing] = await this.db
+      .select()
+      .from(handoffRequests)
+      .where(
+        and(
+          eq(handoffRequests.tenantId, tenantId),
+          eq(handoffRequests.id, handoffId),
+        ),
+      )
+      .limit(1);
+
+    if (!existing) {
+      throw new Error("Handoff request not found.");
+    }
+
     const values: {
       status?: "open" | "in_progress" | "resolved" | "dismissed";
       assignedTo?: string | null;
+      metadata?: Record<string, unknown>;
       updatedAt: SQL;
     } = {
       updatedAt: sql`now()`,
@@ -656,6 +681,26 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     }
     if ("assignedTo" in input) {
       values.assignedTo = input.assignedTo ?? null;
+    }
+    if (input.pipelineStage || input.note) {
+      const metadata = {
+        ...(existing.metadata ?? {}),
+      };
+      if (input.pipelineStage) {
+        metadata.pipelineStage = input.pipelineStage;
+        metadata.pipelineUpdatedAt = new Date().toISOString();
+      }
+      if (input.note) {
+        const notes = Array.isArray(metadata.notes) ? metadata.notes : [];
+        metadata.notes = [
+          ...notes,
+          {
+            body: input.note,
+            createdAt: new Date().toISOString(),
+          },
+        ];
+      }
+      values.metadata = metadata;
     }
 
     const [handoff] = await this.db
@@ -695,6 +740,11 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       channel: input.channel,
       reason: input.reason,
       requesterMessage: input.message,
+      metadata:
+        input.reason === "lead_capture" ||
+        input.reason === "readiness_assessment"
+          ? { pipelineStage: "new" }
+          : {},
     });
   }
 
