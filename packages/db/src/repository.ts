@@ -6,10 +6,10 @@ import type {
   HandoffInput,
   HandoffStore,
   KnowledgeChunk,
-  TenantPolicy
+  TenantPolicy,
 } from "@assaddar/core";
 import { createDefaultTenantPolicy, rankChunks } from "@assaddar/core";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, sql, type SQL } from "drizzle-orm";
 import type { Database } from "./client";
 import {
   allowedIntents,
@@ -24,7 +24,7 @@ import {
   messages,
   tenants,
   usageEvents,
-  type WidgetTheme
+  type WidgetTheme,
 } from "./schema";
 import { assertTenantId } from "./tenant-scope";
 
@@ -43,6 +43,8 @@ export type AddFaqInput = {
   tags?: string[];
 };
 
+export type UpdateFaqInput = AddFaqInput;
+
 export type ConversationRecord = typeof conversations.$inferSelect;
 
 export type MessageRecord = typeof messages.$inferSelect;
@@ -60,8 +62,8 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
         defaultLocale: input.defaultLocale ?? "en",
         theme: input.theme ?? {
           primaryColor: "#155eef",
-          openingMessage: "Hi, how can I help?"
-        }
+          openingMessage: "Hi, how can I help?",
+        },
       })
       .returning();
 
@@ -72,7 +74,7 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     await this.createDefaultEscalationRule(tenant.id);
     await this.audit(tenant.id, "tenant.created", "tenant", tenant.id, {
       name: tenant.name,
-      slug: tenant.slug
+      slug: tenant.slug,
     });
 
     return tenant;
@@ -84,12 +86,20 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
 
   async getTenant(tenantId: string) {
     assertTenantId(tenantId);
-    const [tenant] = await this.db.select().from(tenants).where(eq(tenants.id, tenantId)).limit(1);
+    const [tenant] = await this.db
+      .select()
+      .from(tenants)
+      .where(eq(tenants.id, tenantId))
+      .limit(1);
     return tenant ?? null;
   }
 
   async getTenantBySlug(slug: string) {
-    const [tenant] = await this.db.select().from(tenants).where(eq(tenants.slug, slug)).limit(1);
+    const [tenant] = await this.db
+      .select()
+      .from(tenants)
+      .where(eq(tenants.slug, slug))
+      .limit(1);
     return tenant ?? null;
   }
 
@@ -114,8 +124,8 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       defaultLocale: tenant.defaultLocale,
       theme: tenant.theme,
       limits: {
-        maxMessageLength: tenant.maxMessageLength
-      }
+        maxMessageLength: tenant.maxMessageLength,
+      },
     };
   }
 
@@ -133,8 +143,8 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
         type: "manual_faq",
         name: "Manual FAQ",
         metadata: {
-          entryType: "faq"
-        }
+          entryType: "faq",
+        },
       })
       .returning();
 
@@ -152,8 +162,8 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
         content,
         metadata: {
           question: input.question,
-          answer: input.answer
-        }
+          answer: input.answer,
+        },
       })
       .returning();
 
@@ -172,8 +182,8 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
         tags: input.tags ?? ["faq"],
         metadata: {
           question: input.question,
-          answer: input.answer
-        }
+          answer: input.answer,
+        },
       })
       .returning();
 
@@ -181,9 +191,15 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       throw new Error("Failed to create knowledge chunk.");
     }
 
-    await this.audit(tenantId, "knowledge.faq.created", "knowledge_document", document.id, {
-      question: input.question
-    });
+    await this.audit(
+      tenantId,
+      "knowledge.faq.created",
+      "knowledge_document",
+      document.id,
+      {
+        question: input.question,
+      },
+    );
 
     return { source, document, chunk };
   }
@@ -193,16 +209,128 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     return this.db
       .select({
         id: knowledgeChunks.id,
+        documentId: knowledgeChunks.documentId,
+        sourceId: knowledgeChunks.sourceId,
         title: knowledgeChunks.title,
         content: knowledgeChunks.content,
         tags: knowledgeChunks.tags,
         status: knowledgeChunks.status,
         metadata: knowledgeChunks.metadata,
-        createdAt: knowledgeChunks.createdAt
+        createdAt: knowledgeChunks.createdAt,
+        updatedAt: knowledgeChunks.updatedAt,
       })
       .from(knowledgeChunks)
       .where(eq(knowledgeChunks.tenantId, tenantId))
       .orderBy(desc(knowledgeChunks.createdAt));
+  }
+
+  async updateFaq(
+    tenantId: string,
+    knowledgeId: string,
+    input: UpdateFaqInput,
+  ) {
+    assertTenantId(tenantId);
+    const [chunk] = await this.db
+      .select()
+      .from(knowledgeChunks)
+      .where(
+        and(
+          eq(knowledgeChunks.tenantId, tenantId),
+          eq(knowledgeChunks.id, knowledgeId),
+        ),
+      )
+      .limit(1);
+
+    if (!chunk) {
+      throw new Error("Knowledge item not found.");
+    }
+
+    const content = `Question: ${input.question}\nAnswer: ${input.answer}`;
+    const metadata = {
+      question: input.question,
+      answer: input.answer,
+    };
+
+    await this.db
+      .update(knowledgeDocuments)
+      .set({
+        title: input.question,
+        content,
+        metadata,
+        updatedAt: sql`now()`,
+      })
+      .where(
+        and(
+          eq(knowledgeDocuments.tenantId, tenantId),
+          eq(knowledgeDocuments.id, chunk.documentId),
+        ),
+      );
+
+    const [updatedChunk] = await this.db
+      .update(knowledgeChunks)
+      .set({
+        title: input.question,
+        content,
+        tags: input.tags ?? chunk.tags,
+        metadata,
+        updatedAt: sql`now()`,
+      })
+      .where(
+        and(
+          eq(knowledgeChunks.tenantId, tenantId),
+          eq(knowledgeChunks.id, knowledgeId),
+        ),
+      )
+      .returning();
+
+    await this.audit(
+      tenantId,
+      "knowledge.faq.updated",
+      "knowledge_chunk",
+      knowledgeId,
+      {
+        question: input.question,
+      },
+    );
+
+    return updatedChunk;
+  }
+
+  async deleteKnowledge(tenantId: string, knowledgeId: string) {
+    assertTenantId(tenantId);
+    const [chunk] = await this.db
+      .select()
+      .from(knowledgeChunks)
+      .where(
+        and(
+          eq(knowledgeChunks.tenantId, tenantId),
+          eq(knowledgeChunks.id, knowledgeId),
+        ),
+      )
+      .limit(1);
+
+    if (!chunk) {
+      throw new Error("Knowledge item not found.");
+    }
+
+    await this.db
+      .delete(knowledgeSources)
+      .where(
+        and(
+          eq(knowledgeSources.tenantId, tenantId),
+          eq(knowledgeSources.id, chunk.sourceId),
+        ),
+      );
+
+    await this.audit(
+      tenantId,
+      "knowledge.faq.deleted",
+      "knowledge_chunk",
+      knowledgeId,
+      {
+        title: chunk.title,
+      },
+    );
   }
 
   async getTenantPolicy(tenantId: string): Promise<TenantPolicy> {
@@ -212,21 +340,33 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       throw new Error("Tenant not found.");
     }
 
-    const [storedAllowedIntents, storedBlockedTopics, [escalationRule]] = await Promise.all([
-      this.db.select().from(allowedIntents).where(eq(allowedIntents.tenantId, tenantId)),
-      this.db.select().from(blockedTopics).where(eq(blockedTopics.tenantId, tenantId)),
-      this.db
-        .select()
-        .from(escalationRules)
-        .where(and(eq(escalationRules.tenantId, tenantId), eq(escalationRules.enabled, true)))
-        .limit(1)
-    ]);
+    const [storedAllowedIntents, storedBlockedTopics, [escalationRule]] =
+      await Promise.all([
+        this.db
+          .select()
+          .from(allowedIntents)
+          .where(eq(allowedIntents.tenantId, tenantId)),
+        this.db
+          .select()
+          .from(blockedTopics)
+          .where(eq(blockedTopics.tenantId, tenantId)),
+        this.db
+          .select()
+          .from(escalationRules)
+          .where(
+            and(
+              eq(escalationRules.tenantId, tenantId),
+              eq(escalationRules.enabled, true),
+            ),
+          )
+          .limit(1),
+      ]);
 
     const blocked: BlockedTopic[] = storedBlockedTopics.map((topic) => {
       const mapped: BlockedTopic = {
         name: topic.name,
         terms: topic.terms,
-        enabled: topic.enabled
+        enabled: topic.enabled,
       };
       if (topic.response) {
         mapped.response = topic.response;
@@ -234,23 +374,25 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       return mapped;
     });
 
-    const mappedAllowedIntents: AllowedIntent[] = storedAllowedIntents.map((intent) => {
-      const mapped: AllowedIntent = {
-        name: intent.name,
-        keywords: intent.keywords,
-        examples: intent.examples,
-        enabled: intent.enabled
-      };
-      if (intent.description) {
-        mapped.description = intent.description;
-      }
-      return mapped;
-    });
+    const mappedAllowedIntents: AllowedIntent[] = storedAllowedIntents.map(
+      (intent) => {
+        const mapped: AllowedIntent = {
+          name: intent.name,
+          keywords: intent.keywords,
+          examples: intent.examples,
+          enabled: intent.enabled,
+        };
+        if (intent.description) {
+          mapped.description = intent.description;
+        }
+        return mapped;
+      },
+    );
 
     const escalation = {
       enabled: escalationRule?.enabled ?? true,
       contactLabel: escalationRule?.contactLabel ?? "team",
-      createHandoffRequest: escalationRule?.createHandoffRequest ?? true
+      createHandoffRequest: escalationRule?.createHandoffRequest ?? true,
     };
     if (escalationRule?.contactValue) {
       Object.assign(escalation, { contactValue: escalationRule.contactValue });
@@ -264,17 +406,29 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       confidenceThreshold: Number(tenant.confidenceThreshold),
       maxMessageLength: tenant.maxMessageLength,
       defaultLocale: tenant.defaultLocale,
-      tone: tenant.tone === "formal" || tenant.tone === "neutral" ? tenant.tone : "friendly",
-      escalation
+      tone:
+        tenant.tone === "formal" || tenant.tone === "neutral"
+          ? tenant.tone
+          : "friendly",
+      escalation,
     };
   }
 
-  async searchKnowledge(tenantId: string, query: string, limit: number): Promise<KnowledgeChunk[]> {
+  async searchKnowledge(
+    tenantId: string,
+    query: string,
+    limit: number,
+  ): Promise<KnowledgeChunk[]> {
     assertTenantId(tenantId);
     const rows = await this.db
       .select()
       .from(knowledgeChunks)
-      .where(and(eq(knowledgeChunks.tenantId, tenantId), eq(knowledgeChunks.status, "approved")))
+      .where(
+        and(
+          eq(knowledgeChunks.tenantId, tenantId),
+          eq(knowledgeChunks.status, "approved"),
+        ),
+      )
       .limit(Math.max(limit * 5, limit));
 
     return rankChunks(
@@ -287,13 +441,13 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
           sourceId: row.sourceId,
           content: row.content,
           tags: row.tags,
-          metadata: row.metadata
+          metadata: row.metadata,
         };
         if (row.title) {
           chunk.title = row.title;
         }
         return chunk;
-      })
+      }),
     ).slice(0, limit);
   }
 
@@ -312,8 +466,8 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
         .where(
           and(
             eq(conversations.tenantId, input.tenantId),
-            eq(conversations.publicId, input.publicConversationId)
-          )
+            eq(conversations.publicId, input.publicConversationId),
+          ),
         )
         .limit(1);
       if (existing) {
@@ -328,7 +482,7 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
         publicId: input.publicConversationId ?? createPublicConversationId(),
         channel: input.channel,
         externalUserId: input.externalUserId,
-        locale: input.locale ?? "en"
+        locale: input.locale ?? "en",
       })
       .returning();
 
@@ -358,7 +512,7 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
         direction: input.direction,
         role: input.role,
         content: input.content,
-        trace: input.trace ?? {}
+        trace: input.trace ?? {},
       })
       .returning();
 
@@ -374,8 +528,86 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     return this.db
       .select()
       .from(messages)
-      .where(and(eq(messages.tenantId, tenantId), eq(messages.conversationId, conversationId)))
+      .where(
+        and(
+          eq(messages.tenantId, tenantId),
+          eq(messages.conversationId, conversationId),
+        ),
+      )
       .orderBy(messages.createdAt);
+  }
+
+  async listConversations(tenantId: string) {
+    assertTenantId(tenantId);
+    return this.db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.tenantId, tenantId))
+      .orderBy(desc(conversations.createdAt))
+      .limit(100);
+  }
+
+  async listHandoffs(tenantId: string) {
+    assertTenantId(tenantId);
+    return this.db
+      .select()
+      .from(handoffRequests)
+      .where(eq(handoffRequests.tenantId, tenantId))
+      .orderBy(desc(handoffRequests.createdAt))
+      .limit(100);
+  }
+
+  async updateHandoff(
+    tenantId: string,
+    handoffId: string,
+    input: {
+      status?: "open" | "in_progress" | "resolved" | "dismissed" | undefined;
+      assignedTo?: string | null | undefined;
+    },
+  ) {
+    assertTenantId(tenantId);
+    const values: {
+      status?: "open" | "in_progress" | "resolved" | "dismissed";
+      assignedTo?: string | null;
+      updatedAt: SQL;
+    } = {
+      updatedAt: sql`now()`,
+    };
+
+    if (input.status) {
+      values.status = input.status;
+    }
+    if ("assignedTo" in input) {
+      values.assignedTo = input.assignedTo ?? null;
+    }
+
+    const [handoff] = await this.db
+      .update(handoffRequests)
+      .set(values)
+      .where(
+        and(
+          eq(handoffRequests.tenantId, tenantId),
+          eq(handoffRequests.id, handoffId),
+        ),
+      )
+      .returning();
+
+    if (!handoff) {
+      throw new Error("Handoff request not found.");
+    }
+
+    await this.audit(
+      tenantId,
+      "handoff.updated",
+      "handoff_request",
+      handoffId,
+      {
+        status: handoff.status,
+        assignedTo: handoff.assignedTo,
+      },
+    );
+
+    return handoff;
   }
 
   async createHandoff(input: HandoffInput) {
@@ -385,7 +617,7 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       conversationId: input.conversationId,
       channel: input.channel,
       reason: input.reason,
-      requesterMessage: input.message
+      requesterMessage: input.message,
     });
   }
 
@@ -404,24 +636,106 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       eventType: input.eventType,
       credits: input.credits,
       estimatedCostCents: input.estimatedCostCents ?? 0,
-      metadata: input.metadata ?? {}
+      metadata: input.metadata ?? {},
     });
+  }
+
+  async getTenantAnalytics(tenantId: string) {
+    assertTenantId(tenantId);
+    const [
+      [conversationStats],
+      [messageStats],
+      [knowledgeStats],
+      [openHandoffStats],
+      [totalHandoffStats],
+      usageByStatus,
+    ] = await Promise.all([
+      this.db
+        .select({
+          total: sql<number>`count(*)::int`,
+          lastAt: sql<Date | null>`max(${conversations.createdAt})`,
+        })
+        .from(conversations)
+        .where(eq(conversations.tenantId, tenantId)),
+      this.db
+        .select({
+          total: sql<number>`count(*)::int`,
+          lastAt: sql<Date | null>`max(${messages.createdAt})`,
+        })
+        .from(messages)
+        .where(eq(messages.tenantId, tenantId)),
+      this.db
+        .select({
+          total: sql<number>`count(*)::int`,
+        })
+        .from(knowledgeChunks)
+        .where(
+          and(
+            eq(knowledgeChunks.tenantId, tenantId),
+            eq(knowledgeChunks.status, "approved"),
+          ),
+        ),
+      this.db
+        .select({
+          total: sql<number>`count(*)::int`,
+        })
+        .from(handoffRequests)
+        .where(
+          and(
+            eq(handoffRequests.tenantId, tenantId),
+            eq(handoffRequests.status, "open"),
+          ),
+        ),
+      this.db
+        .select({
+          total: sql<number>`count(*)::int`,
+        })
+        .from(handoffRequests)
+        .where(eq(handoffRequests.tenantId, tenantId)),
+      this.db
+        .select({
+          eventType: usageEvents.eventType,
+          total: sql<number>`count(*)::int`,
+          credits: sql<number>`coalesce(sum(${usageEvents.credits}), 0)::int`,
+        })
+        .from(usageEvents)
+        .where(eq(usageEvents.tenantId, tenantId))
+        .groupBy(usageEvents.eventType),
+    ]);
+
+    return {
+      conversations: conversationStats?.total ?? 0,
+      messages: messageStats?.total ?? 0,
+      approvedKnowledge: knowledgeStats?.total ?? 0,
+      openHandoffs: openHandoffStats?.total ?? 0,
+      totalHandoffs: totalHandoffStats?.total ?? 0,
+      lastConversationAt: conversationStats?.lastAt ?? null,
+      lastMessageAt: messageStats?.lastAt ?? null,
+      usageByStatus,
+    };
   }
 
   async exportTenantData(tenantId: string) {
     assertTenantId(tenantId);
-    const [tenant, knowledge, tenantConversations, handoffs] = await Promise.all([
-      this.getTenant(tenantId),
-      this.listKnowledge(tenantId),
-      this.db.select().from(conversations).where(eq(conversations.tenantId, tenantId)),
-      this.db.select().from(handoffRequests).where(eq(handoffRequests.tenantId, tenantId))
-    ]);
+    const [tenant, knowledge, tenantConversations, handoffs] =
+      await Promise.all([
+        this.getTenant(tenantId),
+        this.listKnowledge(tenantId),
+        this.db
+          .select()
+          .from(conversations)
+          .where(eq(conversations.tenantId, tenantId)),
+        this.db
+          .select()
+          .from(handoffRequests)
+          .where(eq(handoffRequests.tenantId, tenantId)),
+      ]);
 
     return {
       tenant,
       knowledge,
       conversations: tenantConversations,
-      handoffRequests: handoffs
+      handoffRequests: handoffs,
     };
   }
 
@@ -437,7 +751,7 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       channel: "all",
       contactLabel: "team",
       enabled: true,
-      createHandoffRequest: true
+      createHandoffRequest: true,
     });
   }
 
@@ -446,7 +760,7 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     action: string,
     targetType: string,
     targetId: string,
-    metadata: Record<string, unknown>
+    metadata: Record<string, unknown>,
   ) {
     await this.db.insert(auditLogs).values({
       tenantId,
@@ -454,7 +768,7 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       action,
       targetType,
       targetId,
-      metadata
+      metadata,
     });
   }
 }
@@ -469,5 +783,7 @@ export function createPublicConversationId() {
 
 export async function setTenantSession(db: Database, tenantId: string) {
   assertTenantId(tenantId);
-  await db.execute(sql`select set_config('app.current_tenant_id', ${tenantId}, true)`);
+  await db.execute(
+    sql`select set_config('app.current_tenant_id', ${tenantId}, true)`,
+  );
 }

@@ -35,11 +35,21 @@ body {
 body {
   margin: 0;
   background:
-    linear-gradient(180deg, rgba(37, 87, 214, 0.05), rgba(245, 247, 251, 0) 260px),
+    linear-gradient(
+      180deg,
+      rgba(37, 87, 214, 0.05),
+      rgba(245, 247, 251, 0) 260px
+    ),
     var(--bg);
   color: var(--text);
   font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
 }
 
 button,
@@ -183,6 +193,7 @@ textarea {
 
 .primaryButton,
 .secondaryButton,
+.dangerButton,
 .iconButton,
 .tenantButton {
   display: inline-flex;
@@ -223,8 +234,20 @@ textarea {
   color: var(--accent);
 }
 
+.dangerButton {
+  border: 1px solid var(--danger-line);
+  background: var(--danger-bg);
+  color: var(--danger);
+  padding: 0 14px;
+}
+
+.dangerButton:hover:not(:disabled) {
+  border-color: var(--danger);
+}
+
 .primaryButton:disabled,
 .secondaryButton:disabled,
+.dangerButton:disabled,
 .iconButton:disabled {
   cursor: not-allowed;
   opacity: 0.55;
@@ -422,11 +445,63 @@ textarea {
   color: var(--danger);
 }
 
+.workspaceStack {
+  display: grid;
+  gap: 16px;
+}
+
+.metricsGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(160px, 1fr));
+  gap: 12px;
+}
+
+.metricCard {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  grid-template-areas:
+    "icon label"
+    "icon value";
+  column-gap: 10px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 6px 20px rgba(16, 24, 40, 0.05);
+  padding: 14px;
+}
+
+.metricCard svg {
+  grid-area: icon;
+  color: var(--accent);
+}
+
+.metricCard span {
+  grid-area: label;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.metricCard strong {
+  grid-area: value;
+  font-size: 24px;
+  line-height: 1.1;
+}
+
+.metricCard[data-alert="true"] {
+  border-color: var(--amber-line);
+  background: var(--amber-bg);
+}
+
 .dashboardGrid {
   display: grid;
   grid-template-columns: minmax(420px, 1fr) minmax(300px, 400px);
   grid-template-areas:
     "knowledge test"
+    "knowledge inbox"
+    "knowledge handoffs"
     "knowledge embed";
   align-items: start;
   gap: 16px;
@@ -450,6 +525,14 @@ textarea {
 }
 
 .sidePanel:nth-of-type(3) {
+  grid-area: inbox;
+}
+
+.sidePanel:nth-of-type(4) {
+  grid-area: handoffs;
+}
+
+.sidePanel:nth-of-type(5) {
   grid-area: embed;
 }
 
@@ -547,6 +630,18 @@ textarea {
   white-space: pre-wrap;
 }
 
+.editStack {
+  display: grid;
+  gap: 12px;
+}
+
+.rowActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
 .testRow {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 42px;
@@ -584,6 +679,135 @@ textarea {
 }
 
 .answerBox small {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.conversationList,
+.handoffList {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.conversationButton {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  color: var(--text);
+  padding: 10px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.conversationButton:hover,
+.conversationButton.active {
+  border-color: var(--accent);
+  background: #f1f5ff;
+}
+
+.conversationButton strong {
+  font-size: 13px;
+  text-transform: capitalize;
+}
+
+.conversationButton span,
+.conversationButton small {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.messagePreview {
+  display: grid;
+  gap: 8px;
+  max-height: 280px;
+  margin-top: 12px;
+  overflow: auto;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.messagePreview > strong {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.messagePreview p {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  border-radius: 8px;
+  background: var(--surface-muted);
+  padding: 9px;
+  color: var(--text-soft);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.messagePreview p[data-role="assistant"] {
+  background: var(--green-bg);
+}
+
+.messagePreview span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.handoffItem {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  padding: 10px;
+}
+
+.handoffItem > div:first-child {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.handoffItem strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.handoffItem span {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--amber-bg);
+  color: var(--amber);
+  padding: 2px 7px;
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.handoffItem span[data-status="resolved"] {
+  background: var(--green-bg);
+  color: var(--green);
+}
+
+.handoffItem p,
+.handoffItem small {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.handoffItem small {
   color: var(--muted);
   font-weight: 700;
 }
@@ -657,7 +881,13 @@ textarea {
     grid-template-areas:
       "knowledge"
       "test"
+      "inbox"
+      "handoffs"
       "embed";
+  }
+
+  .metricsGrid {
+    grid-template-columns: repeat(2, minmax(160px, 1fr));
   }
 }
 
@@ -673,5 +903,17 @@ textarea {
 
   .status {
     max-width: 100%;
+  }
+
+  .metricsGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .rowActions {
+    justify-content: stretch;
+  }
+
+  .rowActions > button {
+    flex: 1;
   }
 }

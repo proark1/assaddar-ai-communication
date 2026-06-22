@@ -2,31 +2,47 @@ import {
   MetaMessengerAdapter,
   WhatsAppCloudAdapter,
   WebsiteAdapter,
-  type ChannelAdapter
+  type ChannelAdapter,
 } from "@assaddar/channels";
 import {
   createAnswerEngine,
   InboundMessageSchema,
   type AnswerDataStore,
   type Channel,
-  type HandoffStore
+  type HandoffStore,
 } from "@assaddar/core";
 import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
-import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
+import Fastify, {
+  type FastifyInstance,
+  type FastifyReply,
+  type FastifyRequest,
+} from "fastify";
 import { z } from "zod";
 import { openApiDocument } from "./openapi";
 
 const ParamsTenantSchema = z.object({
-  tenantId: z.string().uuid()
+  tenantId: z.string().uuid(),
+});
+
+const ParamsKnowledgeSchema = ParamsTenantSchema.extend({
+  knowledgeId: z.string().uuid(),
+});
+
+const ParamsConversationSchema = ParamsTenantSchema.extend({
+  conversationId: z.string().uuid(),
+});
+
+const ParamsHandoffSchema = ParamsTenantSchema.extend({
+  handoffId: z.string().uuid(),
 });
 
 const ParamsAssistantSchema = z.object({
-  assistantId: z.string().min(8)
+  assistantId: z.string().min(8),
 });
 
 const ParamsMetaChannelSchema = z.object({
-  channel: z.enum(["whatsapp", "messenger", "instagram"])
+  channel: z.enum(["whatsapp", "messenger", "instagram"]),
 });
 
 const CreateTenantSchema = z.object({
@@ -44,20 +60,25 @@ const CreateTenantSchema = z.object({
       textColor: z.string().optional(),
       launcherLabel: z.string().optional(),
       openingMessage: z.string().optional(),
-      language: z.string().optional()
+      language: z.string().optional(),
     })
-    .optional()
+    .optional(),
 });
 
 const AddFaqSchema = z.object({
   question: z.string().min(3).max(500),
   answer: z.string().min(3).max(4000),
-  tags: z.array(z.string().min(1).max(60)).max(20).optional()
+  tags: z.array(z.string().min(1).max(60)).max(20).optional(),
+});
+
+const UpdateHandoffSchema = z.object({
+  status: z.enum(["open", "in_progress", "resolved", "dismissed"]).optional(),
+  assignedTo: z.string().max(120).nullable().optional(),
 });
 
 const TestAssistantSchema = z.object({
   message: z.string().min(1).max(1200),
-  locale: z.string().min(2).max(16).optional()
+  locale: z.string().min(2).max(16).optional(),
 });
 
 const WidgetChatSchema = z.object({
@@ -65,21 +86,44 @@ const WidgetChatSchema = z.object({
   message: z.string().min(1).max(1200),
   conversationId: z.string().min(8).max(80).optional(),
   visitorId: z.string().min(1).max(120).optional(),
-  locale: z.string().min(2).max(16).optional()
+  locale: z.string().min(2).max(16).optional(),
 });
 
 type CreateTenantInput = z.infer<typeof CreateTenantSchema>;
 type AddFaqInput = z.infer<typeof AddFaqSchema>;
+type UpdateHandoffInput = z.infer<typeof UpdateHandoffSchema>;
 
 export type PlatformStore = AnswerDataStore &
   HandoffStore & {
     createTenant(input: CreateTenantInput): Promise<unknown>;
     listTenants(): Promise<unknown[]>;
-    getTenant(tenantId: string): Promise<{ id: string; publicId: string; defaultLocale: string } | null>;
-    getTenantByPublicId(publicId: string): Promise<{ id: string; publicId: string; defaultLocale: string } | null>;
+    getTenant(
+      tenantId: string,
+    ): Promise<{ id: string; publicId: string; defaultLocale: string } | null>;
+    getTenantByPublicId(
+      publicId: string,
+    ): Promise<{ id: string; publicId: string; defaultLocale: string } | null>;
     getWidgetConfig(publicId: string): Promise<unknown | null>;
     addFaq(tenantId: string, input: AddFaqInput): Promise<unknown>;
+    updateFaq(
+      tenantId: string,
+      knowledgeId: string,
+      input: AddFaqInput,
+    ): Promise<unknown>;
+    deleteKnowledge(tenantId: string, knowledgeId: string): Promise<void>;
     listKnowledge(tenantId: string): Promise<unknown[]>;
+    listConversations(tenantId: string): Promise<unknown[]>;
+    listConversationMessages(
+      tenantId: string,
+      conversationId: string,
+    ): Promise<unknown[]>;
+    listHandoffs(tenantId: string): Promise<unknown[]>;
+    updateHandoff(
+      tenantId: string,
+      handoffId: string,
+      input: UpdateHandoffInput,
+    ): Promise<unknown>;
+    getTenantAnalytics(tenantId: string): Promise<unknown>;
     findOrCreateConversation(input: {
       tenantId: string;
       publicConversationId?: string;
@@ -117,64 +161,84 @@ export type BuildServerOptions = {
   messengerPageAccessToken?: string;
 };
 
-export async function buildServer(options: BuildServerOptions): Promise<FastifyInstance> {
+export async function buildServer(
+  options: BuildServerOptions,
+): Promise<FastifyInstance> {
   const app = Fastify({
     logger: {
-      level: process.env.LOG_LEVEL ?? "info"
-    }
+      level: process.env.LOG_LEVEL ?? "info",
+    },
   });
 
   const allowedOrigins = options.allowedOrigins ?? [];
   await app.register(cors, {
     origin(origin, callback) {
-      if (!origin || allowedOrigins.includes("*") || allowedOrigins.includes(origin)) {
+      if (
+        !origin ||
+        allowedOrigins.includes("*") ||
+        allowedOrigins.includes(origin)
+      ) {
         callback(null, true);
         return;
       }
       callback(new Error("Origin not allowed"), false);
-    }
+    },
   });
 
   await app.register(rateLimit, {
     max: 120,
-    timeWindow: "1 minute"
+    timeWindow: "1 minute",
   });
 
   const engine = createAnswerEngine({
     dataStore: options.store,
-    handoffStore: options.store
+    handoffStore: options.store,
   });
   const websiteAdapter = new WebsiteAdapter();
-  const metaAdapters: Record<"whatsapp" | "messenger" | "instagram", ChannelAdapter> = {
-    whatsapp: new WhatsAppCloudAdapter(options.metaVerifyToken ?? "change-me-meta-verify-token", options.whatsappAccessToken),
+  const metaAdapters: Record<
+    "whatsapp" | "messenger" | "instagram",
+    ChannelAdapter
+  > = {
+    whatsapp: new WhatsAppCloudAdapter(
+      options.metaVerifyToken ?? "change-me-meta-verify-token",
+      options.whatsappAccessToken,
+    ),
     messenger: new MetaMessengerAdapter(
       "messenger",
       options.metaVerifyToken ?? "change-me-meta-verify-token",
-      options.messengerPageAccessToken
+      options.messengerPageAccessToken,
     ),
     instagram: new MetaMessengerAdapter(
       "instagram",
       options.metaVerifyToken ?? "change-me-meta-verify-token",
-      options.messengerPageAccessToken
-    )
+      options.messengerPageAccessToken,
+    ),
   };
 
   app.get("/health", async () => ({
     ok: true,
-    service: "assaddar-ai-communication-api"
+    service: "assaddar-ai-communication-api",
   }));
 
   app.get("/openapi.json", async () => openApiDocument);
 
-  app.get("/admin/tenants", { preHandler: requireAdmin(options.adminToken) }, async () => {
-    return options.store.listTenants();
-  });
+  app.get(
+    "/admin/tenants",
+    { preHandler: requireAdmin(options.adminToken) },
+    async () => {
+      return options.store.listTenants();
+    },
+  );
 
-  app.post("/admin/tenants", { preHandler: requireAdmin(options.adminToken) }, async (request, reply) => {
-    const body = CreateTenantSchema.parse(request.body);
-    const tenant = await options.store.createTenant(body);
-    return reply.code(201).send(tenant);
-  });
+  app.post(
+    "/admin/tenants",
+    { preHandler: requireAdmin(options.adminToken) },
+    async (request, reply) => {
+      const body = CreateTenantSchema.parse(request.body);
+      const tenant = await options.store.createTenant(body);
+      return reply.code(201).send(tenant);
+    },
+  );
 
   app.post(
     "/admin/tenants/:tenantId/knowledge/faqs",
@@ -184,7 +248,7 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
       const body = AddFaqSchema.parse(request.body);
       const result = await options.store.addFaq(tenantId, body);
       return reply.code(201).send(result);
-    }
+    },
   );
 
   app.get(
@@ -193,7 +257,79 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       return options.store.listKnowledge(tenantId);
-    }
+    },
+  );
+
+  app.put(
+    "/admin/tenants/:tenantId/knowledge/:knowledgeId",
+    { preHandler: requireAdmin(options.adminToken) },
+    async (request) => {
+      const { tenantId, knowledgeId } = ParamsKnowledgeSchema.parse(
+        request.params,
+      );
+      const body = AddFaqSchema.parse(request.body);
+      return options.store.updateFaq(tenantId, knowledgeId, body);
+    },
+  );
+
+  app.delete(
+    "/admin/tenants/:tenantId/knowledge/:knowledgeId",
+    { preHandler: requireAdmin(options.adminToken) },
+    async (request, reply) => {
+      const { tenantId, knowledgeId } = ParamsKnowledgeSchema.parse(
+        request.params,
+      );
+      await options.store.deleteKnowledge(tenantId, knowledgeId);
+      return reply.code(204).send();
+    },
+  );
+
+  app.get(
+    "/admin/tenants/:tenantId/analytics",
+    { preHandler: requireAdmin(options.adminToken) },
+    async (request) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      return options.store.getTenantAnalytics(tenantId);
+    },
+  );
+
+  app.get(
+    "/admin/tenants/:tenantId/conversations",
+    { preHandler: requireAdmin(options.adminToken) },
+    async (request) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      return options.store.listConversations(tenantId);
+    },
+  );
+
+  app.get(
+    "/admin/tenants/:tenantId/conversations/:conversationId/messages",
+    { preHandler: requireAdmin(options.adminToken) },
+    async (request) => {
+      const { tenantId, conversationId } = ParamsConversationSchema.parse(
+        request.params,
+      );
+      return options.store.listConversationMessages(tenantId, conversationId);
+    },
+  );
+
+  app.get(
+    "/admin/tenants/:tenantId/handoffs",
+    { preHandler: requireAdmin(options.adminToken) },
+    async (request) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      return options.store.listHandoffs(tenantId);
+    },
+  );
+
+  app.patch(
+    "/admin/tenants/:tenantId/handoffs/:handoffId",
+    { preHandler: requireAdmin(options.adminToken) },
+    async (request) => {
+      const { tenantId, handoffId } = ParamsHandoffSchema.parse(request.params);
+      const body = UpdateHandoffSchema.parse(request.body);
+      return options.store.updateHandoff(tenantId, handoffId, body);
+    },
   );
 
   app.post(
@@ -210,7 +346,7 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
       const conversation = await options.store.findOrCreateConversation({
         tenantId,
         channel: "admin_test",
-        locale: body.locale ?? tenant.defaultLocale
+        locale: body.locale ?? tenant.defaultLocale,
       });
 
       await options.store.addMessage({
@@ -219,7 +355,7 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
         channel: "admin_test",
         direction: "inbound",
         role: "user",
-        content: body.message
+        content: body.message,
       });
 
       const answer = await engine.answer(
@@ -229,8 +365,8 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
           channel: "admin_test",
           text: body.message,
           locale: body.locale ?? tenant.defaultLocale,
-          metadata: {}
-        })
+          metadata: {},
+        }),
       );
 
       await options.store.addMessage({
@@ -240,7 +376,7 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
         direction: "outbound",
         role: "assistant",
         content: answer.text,
-        trace: { answer }
+        trace: { answer },
       });
 
       await options.store.logUsage({
@@ -248,14 +384,14 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
         channel: "admin_test",
         eventType: answer.status,
         credits: answer.usage.estimatedCredits,
-        metadata: { intent: answer.intent, confidence: answer.confidence }
+        metadata: { intent: answer.intent, confidence: answer.confidence },
       });
 
       return {
         conversationId: conversation.publicId,
-        answer
+        answer,
       };
-    }
+    },
   );
 
   app.get(
@@ -264,7 +400,7 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       return options.store.exportTenantData(tenantId);
-    }
+    },
   );
 
   app.delete(
@@ -274,7 +410,7 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       await options.store.deleteTenantData(tenantId);
       return reply.code(204).send();
-    }
+    },
   );
 
   app.get("/widget/config/:assistantId", async (request, reply) => {
@@ -298,18 +434,20 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
       {
         message: body.message,
         conversationId: body.conversationId,
-        visitorId: body.visitorId
+        visitorId: body.visitorId,
       },
-      tenant.id
+      tenant.id,
     );
     if (!event) {
       return reply.code(400).send({ error: "No message event found." });
     }
 
-    const conversationInput: Parameters<PlatformStore["findOrCreateConversation"]>[0] = {
+    const conversationInput: Parameters<
+      PlatformStore["findOrCreateConversation"]
+    >[0] = {
       tenantId: tenant.id,
       channel: "website",
-      locale: body.locale ?? tenant.defaultLocale
+      locale: body.locale ?? tenant.defaultLocale,
     };
     if (body.conversationId) {
       conversationInput.publicConversationId = body.conversationId;
@@ -318,7 +456,8 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
       conversationInput.externalUserId = body.visitorId;
     }
 
-    const conversation = await options.store.findOrCreateConversation(conversationInput);
+    const conversation =
+      await options.store.findOrCreateConversation(conversationInput);
 
     await options.store.addMessage({
       tenantId: tenant.id,
@@ -326,7 +465,7 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
       channel: "website",
       direction: "inbound",
       role: "user",
-      content: event.text
+      content: event.text,
     });
 
     const answer = await engine.answer(
@@ -337,8 +476,8 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
         externalUserId: body.visitorId,
         text: event.text,
         locale: body.locale ?? tenant.defaultLocale,
-        metadata: {}
-      })
+        metadata: {},
+      }),
     );
 
     await options.store.addMessage({
@@ -348,7 +487,7 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
       direction: "outbound",
       role: "assistant",
       content: answer.text,
-      trace: { answer }
+      trace: { answer },
     });
 
     await options.store.logUsage({
@@ -358,8 +497,8 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
       credits: answer.usage.estimatedCredits,
       metadata: {
         intent: answer.intent,
-        confidence: answer.confidence
-      }
+        confidence: answer.confidence,
+      },
     });
 
     return {
@@ -367,7 +506,7 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
       status: answer.status,
       reply: answer.text,
       citations: answer.citations,
-      handoffRecommended: answer.handoffRecommended
+      handoffRecommended: answer.handoffRecommended,
     };
   });
 
@@ -377,7 +516,7 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
       .object({
         "hub.mode": z.string().optional(),
         "hub.verify_token": z.string().optional(),
-        "hub.challenge": z.string().optional()
+        "hub.challenge": z.string().optional(),
       })
       .parse(request.query);
 
@@ -386,13 +525,16 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
       Object.assign(verificationRequest, { mode: query["hub.mode"] });
     }
     if (query["hub.verify_token"]) {
-      Object.assign(verificationRequest, { verifyToken: query["hub.verify_token"] });
+      Object.assign(verificationRequest, {
+        verifyToken: query["hub.verify_token"],
+      });
     }
     if (query["hub.challenge"]) {
       Object.assign(verificationRequest, { challenge: query["hub.challenge"] });
     }
 
-    const challenge = metaAdapters[channel].verifyWebhook?.(verificationRequest);
+    const challenge =
+      metaAdapters[channel].verifyWebhook?.(verificationRequest);
 
     if (!challenge) {
       return reply.code(403).send({ error: "Webhook verification failed." });
@@ -407,7 +549,7 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
       received: true,
       channel,
       adapter: metaAdapters[channel].provider,
-      note: "Webhook payload stored/processed once channel connection credential mapping is configured."
+      note: "Webhook payload stored/processed once channel connection credential mapping is configured.",
     };
   });
 
@@ -415,13 +557,13 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
     if (error instanceof z.ZodError) {
       return reply.code(400).send({
         error: "Validation failed.",
-        issues: error.issues
+        issues: error.issues,
       });
     }
 
     _request.log.error(error);
     return reply.code(500).send({
-      error: "Internal server error."
+      error: "Internal server error.",
     });
   });
 
