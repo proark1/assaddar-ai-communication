@@ -343,14 +343,16 @@ class MemoryPlatformStore
         ? { pipelineStage: "new", ...(input.metadata ?? {}) }
         : (input.metadata ?? {});
 
-    this.handoffs.push({
+    const handoff = {
       ...input,
       id: crypto.randomUUID(),
       status: "open",
       requesterMessage: input.message,
       metadata,
       createdAt: new Date(),
-    });
+    };
+    this.handoffs.push(handoff);
+    return handoff;
   }
 
   async listHandoffs(tenantId: string) {
@@ -723,6 +725,7 @@ describe("API", () => {
       store,
       adminToken: "test-token",
       allowedOrigins: ["*"],
+      adminPublicUrl: "https://admin.example.com",
       leadNotificationEmailTo: "owner@example.com",
       leadNotificationEmailSender: async (email) => {
         sentEmails.push(email);
@@ -757,6 +760,9 @@ describe("API", () => {
     });
     expect(sentEmails[0]?.text).toContain("ada@example.com");
     expect(sentEmails[0]?.text).toContain("https://assad-dar.de/de");
+    expect(sentEmails[0]?.text).toContain(
+      `https://admin.example.com/?tenantId=${tenant.id}&tab=leads&handoffId=${store.handoffs[0]?.id}`,
+    );
     expect(sentEmails[1]).toMatchObject({
       to: "ada@example.com",
       subject: "AI consultation request received - Tenant One",

@@ -21,6 +21,9 @@ async function main() {
       role: env.ADMIN_USER_ROLE
     }
   };
+  if (env.ADMIN_PUBLIC_URL) {
+    serverOptions.adminPublicUrl = env.ADMIN_PUBLIC_URL;
+  }
   if (env.LEAD_NOTIFICATION_WEBHOOK_URL) {
     serverOptions.leadNotificationWebhookUrl = env.LEAD_NOTIFICATION_WEBHOOK_URL;
   }

@@ -794,7 +794,49 @@ function buildWidgetSnippets(
   return script;
 }
 
+type AdminDeepLink = {
+  tenantId?: string;
+  tab?: TabKey;
+  handoffId?: string;
+  conversationId?: string;
+};
+
+function readAdminDeepLink(): AdminDeepLink {
+  if (typeof window === "undefined") {
+    return {};
+  }
+
+  const params = new URLSearchParams(window.location.search);
+  const rawTab = params.get("tab");
+  const deepLink: AdminDeepLink = {};
+  const tenantId = params.get("tenantId");
+  const handoffId = params.get("handoffId");
+  const conversationId = params.get("conversationId");
+  if (tenantId) {
+    deepLink.tenantId = tenantId;
+  }
+  if (isTabKey(rawTab)) {
+    deepLink.tab = rawTab;
+  }
+  if (handoffId) {
+    deepLink.handoffId = handoffId;
+  }
+  if (conversationId) {
+    deepLink.conversationId = conversationId;
+  }
+  return deepLink;
+}
+
+function isTabKey(value: string | null): value is TabKey {
+  return tabs.some((tab) => tab.key === value);
+}
+
+function isHandoffFilter(value: string): value is HandoffFilter {
+  return ["open", "in_progress", "resolved", "all"].includes(value);
+}
+
 export default function DashboardPage() {
+  const [deepLink] = useState<AdminDeepLink>(() => readAdminDeepLink());
   const [apiBase, setApiBase] = useState(defaultApiBase);
   const [adminToken, setAdminToken] = useState("");
   const [adminSession, setAdminSession] = useState<AdminSession | null>(null);
@@ -1235,6 +1277,22 @@ export default function DashboardPage() {
   }, [siteUrl]);
 
   useEffect(() => {
+    if (deepLink.tab) {
+      setActiveTab(deepLink.tab);
+    }
+  }, [deepLink.tab]);
+
+  useEffect(() => {
+    if (
+      deepLink.tenantId &&
+      tenants.some((tenant) => tenant.id === deepLink.tenantId) &&
+      selectedTenantId !== deepLink.tenantId
+    ) {
+      setSelectedTenantId(deepLink.tenantId);
+    }
+  }, [deepLink.tenantId, selectedTenantId, tenants]);
+
+  useEffect(() => {
     if (!selectedTenant) {
       return;
     }
@@ -1286,6 +1344,47 @@ export default function DashboardPage() {
     }
   }, [selectedTenant?.id, selectedConversationId]);
 
+  useEffect(() => {
+    if (!deepLink.handoffId || !handoffs.length) {
+      return;
+    }
+
+    const handoff = handoffs.find((item) => item.id === deepLink.handoffId);
+    if (!handoff) {
+      return;
+    }
+
+    if (["lead_capture", "readiness_assessment"].includes(handoff.reason)) {
+      setActiveTab("leads");
+      setSelectedLeadId(handoff.id);
+    } else {
+      setActiveTab("handoffs");
+      setHandoffFilter(isHandoffFilter(handoff.status) ? handoff.status : "all");
+    }
+    setStatus("Opened linked request");
+  }, [deepLink.handoffId, handoffs]);
+
+  useEffect(() => {
+    if (!deepLink.conversationId || !conversations.length) {
+      return;
+    }
+
+    const conversation = conversations.find(
+      (item) =>
+        item.id === deepLink.conversationId ||
+        item.publicId === deepLink.conversationId,
+    );
+    if (!conversation) {
+      return;
+    }
+
+    setSelectedConversationId(conversation.id);
+    if (!deepLink.handoffId) {
+      setActiveTab("inbox");
+      setStatus("Opened linked conversation");
+    }
+  }, [deepLink.conversationId, deepLink.handoffId, conversations]);
+
   async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     const response = await fetch(`${normalizedApiBase}${path}`, {
       ...init,
@@ -1321,7 +1420,14 @@ export default function DashboardPage() {
       setAdminSession(session);
       setTenants(nextTenants);
       setConnectionAttempted(true);
-      if (
+      const linkedTenantId =
+        deepLink.tenantId &&
+        nextTenants.some((tenant) => tenant.id === deepLink.tenantId)
+          ? deepLink.tenantId
+          : "";
+      if (linkedTenantId && selectedTenantId !== linkedTenantId) {
+        setSelectedTenantId(linkedTenantId);
+      } else if (
         nextTenants[0] &&
         !nextTenants.some((tenant) => tenant.id === selectedTenantId)
       ) {

@@ -33,6 +33,7 @@ API:
 ADMIN_API_TOKEN=<random 32+ byte token>
 WIDGET_ALLOWED_ORIGINS=https://your-admin-domain,https://your-widget-domain,https://customer-site.example
 API_PUBLIC_URL=https://your-api-domain
+ADMIN_PUBLIC_URL=https://your-admin-domain
 META_VERIFY_TOKEN=<random verify token>
 META_GRAPH_API_VERSION=v25.0
 WHATSAPP_ACCESS_TOKEN=<only when WhatsApp sending is enabled>

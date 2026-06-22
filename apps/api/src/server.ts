@@ -318,6 +318,7 @@ export type BuildServerOptions = {
     password?: string;
   };
   leadNotificationEmailSender?: (email: LeadNotificationEmail) => Promise<void>;
+  adminPublicUrl?: string;
   metaVerifyToken?: string;
   metaGraphApiVersion?: string;
   whatsappAccessToken?: string;
@@ -329,10 +330,12 @@ type LeadNotificationPayload = {
   tenantName: string;
   type: "lead_capture" | "readiness_assessment";
   conversationId: string;
+  handoffId?: string;
   message: string;
   fields: Record<string, string>;
   pageUrl?: string;
   score?: number;
+  adminUrl?: string;
 };
 
 type LeadNotificationEmail = {
@@ -351,6 +354,8 @@ const defaultAutomationSettings: AutomationSettings = {
   staleLeadReminderDays: 3,
   readinessQualificationScore: 70,
 };
+const defaultAdminPublicUrl =
+  "https://assaddar-admin-production.up.railway.app";
 
 export async function buildServer(
   options: BuildServerOptions,
@@ -933,7 +938,7 @@ export async function buildServer(
       },
     });
 
-    await options.store.createHandoff({
+    const handoff = await options.store.createHandoff({
       tenantId: tenant.id,
       conversationId: conversation.id,
       channel: "website",
@@ -949,6 +954,7 @@ export async function buildServer(
           : {}),
       },
     });
+    const handoffId = getStringProperty(handoff, "id");
 
     if (automation.ownerLeadEmailEnabled) {
       await notifyLead(options, {
@@ -958,6 +964,7 @@ export async function buildServer(
         conversationId: conversation.publicId,
         message,
         fields: body.fields,
+        ...(handoffId ? { handoffId } : {}),
         ...(body.pageUrl ? { pageUrl: body.pageUrl } : {}),
       });
     }
@@ -1039,7 +1046,7 @@ export async function buildServer(
       },
     });
 
-    await options.store.createHandoff({
+    const handoff = await options.store.createHandoff({
       tenantId: tenant.id,
       conversationId: conversation.id,
       channel: "website",
@@ -1056,6 +1063,7 @@ export async function buildServer(
           : {}),
       },
     });
+    const handoffId = getStringProperty(handoff, "id");
 
     await options.store.logUsage({
       tenantId: tenant.id,
@@ -1079,6 +1087,7 @@ export async function buildServer(
         conversationId: conversation.publicId,
         message,
         fields: body.answers,
+        ...(handoffId ? { handoffId } : {}),
         score,
         ...(body.pageUrl ? { pageUrl: body.pageUrl } : {}),
       });
@@ -1583,6 +1592,10 @@ async function notifyLead(
   payload: LeadNotificationPayload,
 ) {
   const results: Array<Record<string, unknown>> = [];
+  const notificationPayload: LeadNotificationPayload = {
+    ...payload,
+    adminUrl: buildLeadAdminUrl(payload, options.adminPublicUrl),
+  };
 
   if (!options.leadNotificationWebhookUrl && !options.leadNotificationEmailTo) {
     return { sent: false, reason: "not_configured" };
@@ -1596,7 +1609,7 @@ async function notifyLead(
           "content-type": "application/json",
         },
         body: JSON.stringify({
-          ...payload,
+          ...notificationPayload,
           notifyTo: options.leadNotificationEmailTo,
           sentAt: new Date().toISOString(),
         }),
@@ -1624,7 +1637,7 @@ async function notifyLead(
         options.adminUser?.email ??
         "owner@assad-dar.de";
       const email = buildLeadNotificationEmail(
-        payload,
+        notificationPayload,
         options.leadNotificationEmailTo,
         from,
       );
@@ -1724,6 +1737,7 @@ function buildLeadNotificationEmail(
       `${typeLabel} captured for ${payload.tenantName}`,
       "",
       `Conversation: ${payload.conversationId}`,
+      payload.adminUrl ? `Open in admin: ${payload.adminUrl}` : "",
       payload.score ? `Readiness score: ${payload.score}/100` : "",
       payload.pageUrl ? `Page: ${payload.pageUrl}` : "",
       "",
@@ -1784,6 +1798,22 @@ function buildVisitorConfirmationEmail(
       .filter((line) => line !== "")
       .join("\n"),
   };
+}
+
+function buildLeadAdminUrl(
+  payload: LeadNotificationPayload,
+  adminPublicUrl = defaultAdminPublicUrl,
+) {
+  const url = new URL(adminPublicUrl);
+  url.searchParams.set("tenantId", payload.tenantId);
+  url.searchParams.set("tab", "leads");
+  if (payload.handoffId) {
+    url.searchParams.set("handoffId", payload.handoffId);
+  }
+  if (payload.conversationId) {
+    url.searchParams.set("conversationId", payload.conversationId);
+  }
+  return url.toString();
 }
 
 function buildWeeklyReportEmail(
@@ -1946,6 +1976,11 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object"
     ? (value as Record<string, unknown>)
     : {};
+}
+
+function getStringProperty(value: unknown, key: string) {
+  const record = asRecord(value);
+  return typeof record[key] === "string" ? record[key] : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

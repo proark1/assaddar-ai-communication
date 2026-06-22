@@ -833,14 +833,19 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
         ? { pipelineStage: "new", ...(input.metadata ?? {}) }
         : (input.metadata ?? {});
 
-    await this.db.insert(handoffRequests).values({
-      tenantId: input.tenantId,
-      conversationId: input.conversationId,
-      channel: input.channel,
-      reason: input.reason,
-      requesterMessage: input.message,
-      metadata,
-    });
+    const [handoff] = await this.db
+      .insert(handoffRequests)
+      .values({
+        tenantId: input.tenantId,
+        conversationId: input.conversationId,
+        channel: input.channel,
+        reason: input.reason,
+        requesterMessage: input.message,
+        metadata,
+      })
+      .returning();
+
+    return handoff;
   }
 
   async logUsage(input: {

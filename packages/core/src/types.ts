@@ -120,5 +120,5 @@ export type HandoffInput = {
 };
 
 export type HandoffStore = {
-  createHandoff(input: HandoffInput): Promise<void>;
+  createHandoff(input: HandoffInput): Promise<unknown>;
 };
