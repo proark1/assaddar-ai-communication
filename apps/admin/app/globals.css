@@ -1,26 +1,30 @@
 :root {
-  --bg: #f4f7fb;
+  --bg: #f7f5f1;
   --surface: #ffffff;
-  --surface-muted: #f8fafc;
-  --surface-raised: #eef6f2;
-  --text: #111827;
-  --text-soft: #334155;
-  --muted: #64748b;
-  --line: #d8dee8;
-  --line-strong: #c2ccda;
-  --accent: #2557d6;
-  --accent-hover: #1f47b8;
-  --green: #16704a;
-  --green-bg: #ecfdf3;
-  --green-line: #b9e5ca;
-  --amber: #9a5b00;
-  --amber-bg: #fff7e6;
-  --amber-line: #f2d08b;
-  --danger: #b42318;
-  --danger-bg: #fff1f0;
-  --danger-line: #f3b8b3;
-  --code: #101828;
-  --shadow: 0 10px 28px rgba(16, 24, 40, 0.07);
+  --surface-muted: #f1ece2;
+  --surface-raised: #f8f5ee;
+  --text: #16191e;
+  --text-soft: #454c57;
+  --muted: #5f6671;
+  --line: #ddd6ca;
+  --line-strong: #c6bfb1;
+  --accent: #a66e2f;
+  --accent-hover: #8c5a24;
+  --accent-bg: #fbf4ea;
+  --slate: #3e5573;
+  --slate-bg: #edf2f6;
+  --slate-line: #cfdae4;
+  --green: #1f7a4d;
+  --green-bg: #edf7f1;
+  --green-line: #c6e0d1;
+  --amber: #8c5a24;
+  --amber-bg: #fbf4ea;
+  --amber-line: #e7cfae;
+  --danger: #b4453e;
+  --danger-bg: #fff0ef;
+  --danger-line: #edc0bc;
+  --code: #13161b;
+  --shadow: 0 1px 2px rgba(22, 25, 30, 0.04), 0 8px 24px -8px rgba(22, 25, 30, 0.12);
 }
 
 * {
@@ -37,9 +41,9 @@ body {
   background:
     linear-gradient(
       180deg,
-      rgba(37, 87, 214, 0.05),
-      rgba(22, 112, 74, 0.03) 260px,
-      rgba(244, 247, 251, 0) 520px
+      rgba(166, 110, 47, 0.06),
+      rgba(62, 85, 115, 0.04) 260px,
+      rgba(247, 245, 241, 0) 520px
     ),
     var(--bg);
   color: var(--text);
@@ -186,7 +190,7 @@ input:focus,
 select:focus,
 textarea:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(37, 87, 214, 0.14);
+  box-shadow: 0 0 0 3px rgba(166, 110, 47, 0.16);
 }
 
 input[type="color"] {
@@ -516,7 +520,7 @@ textarea {
 
 .tabBar button[data-active="true"] {
   border-color: var(--accent);
-  background: #f1f5ff;
+  background: var(--accent-bg);
   color: var(--accent);
 }
 
@@ -542,7 +546,7 @@ textarea {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.94);
-  box-shadow: 0 6px 20px rgba(16, 24, 40, 0.05);
+  box-shadow: 0 6px 20px rgba(22, 25, 30, 0.05);
   padding: 14px;
 }
 
@@ -728,7 +732,7 @@ textarea {
 
 .plainListButton:hover {
   border-color: var(--accent);
-  background: #f1f5ff;
+  background: var(--accent-bg);
 }
 
 .plainListButton strong,
@@ -860,7 +864,7 @@ textarea {
 
 .tagRow small {
   border-radius: 999px;
-  background: #eef2f8;
+  background: var(--slate-bg);
   color: var(--muted);
   padding: 3px 7px;
   font-size: 11px;
@@ -899,7 +903,7 @@ textarea {
 .segmented button[data-active="true"],
 .platformTabs button[data-active="true"] {
   border-color: var(--accent);
-  background: #f1f5ff;
+  background: var(--accent-bg);
   color: var(--accent);
 }
 
@@ -939,7 +943,7 @@ textarea {
 .conversationButton:hover,
 .conversationButton.active {
   border-color: var(--accent);
-  background: #f1f5ff;
+  background: var(--accent-bg);
 }
 
 .conversationButton strong {
@@ -1098,7 +1102,7 @@ textarea {
 
 .handoffMeta small {
   border-radius: 999px;
-  background: #eef2f8;
+  background: var(--slate-bg);
   color: var(--muted);
   padding: 3px 7px;
   font-weight: 800;
@@ -1178,10 +1182,10 @@ textarea {
   min-height: 146px;
   max-height: 280px;
   overflow: auto;
-  border: 1px solid #263244;
+  border: 1px solid #272c34;
   border-radius: 8px;
   background: var(--code);
-  color: #d1fae5;
+  color: #f4f2ee;
   padding: 12px;
   white-space: pre-wrap;
   word-break: break-word;
@@ -1240,7 +1244,7 @@ textarea {
   z-index: 20;
   display: grid;
   place-items: center;
-  background: rgba(15, 23, 42, 0.38);
+  background: rgba(22, 25, 30, 0.38);
   padding: 16px;
 }
 
@@ -1251,7 +1255,7 @@ textarea {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface);
-  box-shadow: 0 18px 60px rgba(15, 23, 42, 0.2);
+  box-shadow: 0 18px 60px rgba(22, 25, 30, 0.2);
   padding: 18px;
 }
 
@@ -1266,7 +1270,7 @@ textarea {
   min-height: 100vh;
   place-items: center;
   background:
-    linear-gradient(180deg, rgba(37, 87, 214, 0.08), rgba(22, 112, 74, 0.05)),
+    linear-gradient(180deg, rgba(166, 110, 47, 0.08), rgba(62, 85, 115, 0.05)),
     var(--bg);
   padding: 20px;
 }
@@ -1422,7 +1426,7 @@ textarea {
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 7px;
-  background: #fff;
+  background: var(--surface);
   color: var(--muted);
   padding: 7px 9px;
   text-overflow: ellipsis;
@@ -1623,7 +1627,7 @@ textarea {
   align-content: start;
   gap: 10px;
   min-height: 128px;
-  background: #f6f7f9;
+  background: var(--surface-muted);
   padding: 14px;
 }
 
@@ -1631,9 +1635,9 @@ textarea {
   width: fit-content;
   max-width: 90%;
   margin: 0;
-  border: 1px solid rgba(23, 32, 51, 0.12);
+  border: 1px solid rgba(22, 25, 30, 0.12);
   border-radius: 8px;
-  background: #fff;
+  background: var(--surface);
   padding: 10px 12px;
   font-size: 13px;
   line-height: 1.45;
@@ -1642,7 +1646,7 @@ textarea {
 .previewMessages a {
   width: fit-content;
   border-radius: 7px;
-  background: rgba(37, 87, 214, 0.1);
+  background: rgba(166, 110, 47, 0.12);
   padding: 8px 10px;
   font-size: 13px;
   font-weight: 900;
@@ -1657,7 +1661,7 @@ textarea {
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 7px;
-  background: #fff;
+  background: var(--surface);
   color: var(--accent);
   padding: 7px 8px;
   text-overflow: ellipsis;
@@ -1702,7 +1706,7 @@ textarea {
 .previewFields span {
   border: 1px solid var(--line);
   border-radius: 7px;
-  background: #fff;
+  background: var(--surface);
   color: var(--muted);
   padding: 8px;
   font-size: 12px;

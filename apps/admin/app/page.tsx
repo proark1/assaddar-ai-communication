@@ -305,9 +305,9 @@ const defaultTheme: Required<
   quickReplies: string[];
   readinessEnabled: boolean;
 } = {
-  primaryColor: "#2557d6",
+  primaryColor: "#a66e2f",
   backgroundColor: "#ffffff",
-  textColor: "#111827",
+  textColor: "#16191e",
   launcherLabel: "AI Beratung",
   openingMessage:
     "Hallo, ich bin der Assaddar AI Assistent. Wie kann ich bei KI, Automatisierung oder Prozessberatung helfen?",

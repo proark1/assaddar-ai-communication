@@ -111,9 +111,9 @@ void (() => {
     },
   ) {
     const { config, state } = context;
-    const primaryColor = config.theme.primaryColor ?? "#155eef";
+    const primaryColor = config.theme.primaryColor ?? "#a66e2f";
     const backgroundColor = config.theme.backgroundColor ?? "#ffffff";
-    const textColor = config.theme.textColor ?? "#172033";
+    const textColor = config.theme.textColor ?? "#16191e";
     const launcherLabel = config.theme.launcherLabel ?? "Chat";
     const assistantName = config.theme.assistantName ?? config.tenantName;
     const position = config.theme.position ?? "bottom-right";
@@ -152,16 +152,16 @@ void (() => {
         font-size: 15px;
         font-weight: 800;
         cursor: pointer;
-        box-shadow: 0 14px 34px rgba(16, 24, 40, 0.22);
+        box-shadow: 0 14px 34px rgba(22, 25, 30, 0.22);
       }
       .panel {
         display: none;
         width: min(372px, calc(100vw - 28px));
         height: min(620px, calc(100vh - 96px));
         background: ${backgroundColor};
-        border: 1px solid rgba(23, 32, 51, 0.14);
+        border: 1px solid rgba(22, 25, 30, 0.14);
         border-radius: 8px;
-        box-shadow: 0 18px 50px rgba(16, 24, 40, 0.22);
+        box-shadow: 0 18px 50px rgba(22, 25, 30, 0.22);
         overflow: hidden;
       }
       .panel.open { display: flex; flex-direction: column; }
@@ -196,7 +196,7 @@ void (() => {
         flex-direction: column;
         gap: 10px;
         padding: 14px;
-        background: #f6f7f9;
+        background: #f7f5f1;
       }
       .bubble {
         max-width: 86%;
@@ -210,7 +210,7 @@ void (() => {
       .bubble.assistant {
         align-self: flex-start;
         background: #fff;
-        border: 1px solid rgba(23, 32, 51, 0.12);
+        border: 1px solid rgba(22, 25, 30, 0.12);
       }
       .bubble.user {
         align-self: flex-end;
@@ -221,7 +221,7 @@ void (() => {
         display: inline-flex;
         align-self: flex-start;
         border-radius: 7px;
-        background: rgba(21, 94, 239, 0.1);
+        background: rgba(166, 110, 47, 0.12);
         color: ${primaryColor};
         padding: 8px 10px;
         text-decoration: none;
@@ -231,7 +231,7 @@ void (() => {
       .lead-form {
         display: none;
         gap: 8px;
-        border-top: 1px solid rgba(23, 32, 51, 0.12);
+        border-top: 1px solid rgba(22, 25, 30, 0.12);
         background: #fff;
         padding: 12px;
       }
@@ -241,7 +241,7 @@ void (() => {
       .quick-replies {
         display: none;
         gap: 8px;
-        border-top: 1px solid rgba(23, 32, 51, 0.12);
+        border-top: 1px solid rgba(22, 25, 30, 0.12);
         background: #fff;
         padding: 10px 12px;
       }
@@ -258,7 +258,7 @@ void (() => {
       .consent button,
       .quick-replies button,
       .readiness-form button {
-        border: 1px solid rgba(23, 32, 51, 0.14);
+        border: 1px solid rgba(22, 25, 30, 0.14);
         border-radius: 6px;
         background: #fff;
         color: ${primaryColor};
@@ -290,7 +290,7 @@ void (() => {
       .readiness-form textarea {
         width: 100%;
         box-sizing: border-box;
-        border: 1px solid rgba(23, 32, 51, 0.18);
+        border: 1px solid rgba(22, 25, 30, 0.18);
         border-radius: 6px;
         min-height: 38px;
         padding: 8px 10px;
@@ -304,7 +304,7 @@ void (() => {
       .readiness-form input:focus,
       .readiness-form textarea:focus {
         border-color: ${primaryColor};
-        box-shadow: 0 0 0 3px rgba(21, 94, 239, 0.14);
+        box-shadow: 0 0 0 3px rgba(166, 110, 47, 0.16);
       }
       .lead-form button,
       .readiness-form button.primary {
@@ -325,11 +325,11 @@ void (() => {
         grid-template-columns: 1fr 44px;
         gap: 8px;
         padding: 10px;
-        border-top: 1px solid rgba(23, 32, 51, 0.12);
+        border-top: 1px solid rgba(22, 25, 30, 0.12);
         background: #fff;
       }
       .composer input {
-        border: 1px solid rgba(23, 32, 51, 0.18);
+        border: 1px solid rgba(22, 25, 30, 0.18);
         border-radius: 6px;
         min-height: 42px;
         padding: 0 11px;
@@ -338,7 +338,7 @@ void (() => {
       }
       .composer input:focus {
         border-color: ${primaryColor};
-        box-shadow: 0 0 0 3px rgba(21, 94, 239, 0.14);
+        box-shadow: 0 0 0 3px rgba(166, 110, 47, 0.16);
       }
       .composer button {
         width: 44px;

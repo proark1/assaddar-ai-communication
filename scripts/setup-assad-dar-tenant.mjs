@@ -13,9 +13,9 @@ const tenantInput = {
   slug: tenantSlug,
   defaultLocale: "de",
   theme: {
-    primaryColor: "#2557d6",
+    primaryColor: "#a66e2f",
     backgroundColor: "#ffffff",
-    textColor: "#111827",
+    textColor: "#16191e",
     assistantName: "Assaddar AI Consultant",
     launcherLabel: "AI Beratung",
     openingMessage:
