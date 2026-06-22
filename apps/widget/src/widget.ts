@@ -12,6 +12,7 @@ type WidgetTheme = {
   leadCaptureFields?: string[];
   ctaLabel?: string;
   ctaUrl?: string;
+  bookingUrl?: string;
   consentEnabled?: boolean;
   consentText?: string;
   quickReplies?: string[];
@@ -46,6 +47,8 @@ type ReadinessResponse = {
   status: "captured";
   score: number;
   recommendation: string;
+  qualified?: boolean;
+  bookingUrl?: string;
 };
 
 type StoredMessage = {
@@ -514,16 +517,13 @@ void (() => {
           return;
         }
 
-        if (action === "cta" && context.config.theme.ctaUrl) {
+        const ctaUrl = getPrimaryCtaUrl(context.config.theme);
+        if (action === "cta" && ctaUrl) {
           void trackWidgetEvent(context, state, "cta_clicked", {
             label: context.config.theme.ctaLabel ?? reply,
-            url: context.config.theme.ctaUrl,
+            url: ctaUrl,
           });
-          window.open(
-            context.config.theme.ctaUrl,
-            "_blank",
-            "noopener,noreferrer",
-          );
+          window.open(ctaUrl, "_blank", "noopener,noreferrer");
           return;
         }
 
@@ -569,7 +569,14 @@ void (() => {
         state.readinessCaptured = true;
         state.messages.push({
           role: "assistant",
-          text: `AI readiness score: ${response.score}/100. ${response.recommendation}`,
+          text: [
+            `AI readiness score: ${response.score}/100. ${response.recommendation}`,
+            response.qualified
+              ? "Das sieht nach einem qualifizierten Use Case aus. Der naechste sinnvolle Schritt ist ein kurzes Erstgespraech."
+              : "",
+          ]
+            .filter(Boolean)
+            .join("\n"),
         });
         persistState(context.config.assistantId, state);
         readinessForm.dataset.visible = "false";
@@ -743,13 +750,18 @@ void (() => {
           `<div class="bubble ${message.role}">${escapeHtml(message.text)}</div>`,
       )
       .join("");
-    if (theme?.ctaUrl && theme.ctaLabel) {
+    const ctaUrl = getPrimaryCtaUrl(theme);
+    if (ctaUrl && theme?.ctaLabel) {
       container.insertAdjacentHTML(
         "beforeend",
-        `<a class="cta" href="${escapeHtml(theme.ctaUrl)}" target="_blank" rel="noreferrer">${escapeHtml(theme.ctaLabel)}</a>`,
+        `<a class="cta" href="${escapeHtml(ctaUrl)}" target="_blank" rel="noreferrer">${escapeHtml(theme.ctaLabel)}</a>`,
       );
     }
     container.scrollTop = container.scrollHeight;
+  }
+
+  function getPrimaryCtaUrl(theme?: WidgetTheme) {
+    return theme?.bookingUrl ?? theme?.ctaUrl;
   }
 
   function normalizeLeadFields(fields?: string[]) {

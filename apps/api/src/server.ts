@@ -67,6 +67,16 @@ const CreateTenantSchema = z.object({
     .optional(),
 });
 
+const AutomationSettingsSchema = z.object({
+  ownerLeadEmailEnabled: z.boolean().optional(),
+  visitorConfirmationEmailEnabled: z.boolean().optional(),
+  autoQualifyReadinessEnabled: z.boolean().optional(),
+  autoQualifyLeadDetailsEnabled: z.boolean().optional(),
+  weeklySummaryEmailEnabled: z.boolean().optional(),
+  staleLeadReminderDays: z.number().int().min(1).max(30).optional(),
+  readinessQualificationScore: z.number().int().min(1).max(100).optional(),
+});
+
 const WidgetThemeSchema = z.object({
   primaryColor: z.string().min(3).max(32).optional(),
   backgroundColor: z.string().min(3).max(32).optional(),
@@ -81,11 +91,13 @@ const WidgetThemeSchema = z.object({
   leadCaptureFields: z.array(z.string().min(1).max(40)).max(10).optional(),
   ctaLabel: z.string().min(1).max(80).optional(),
   ctaUrl: z.string().url().max(500).optional(),
+  bookingUrl: z.string().url().max(500).optional(),
   consentEnabled: z.boolean().optional(),
   consentText: z.string().min(1).max(500).optional(),
   quickReplies: z.array(z.string().min(1).max(120)).max(8).optional(),
   readinessEnabled: z.boolean().optional(),
   readinessIntro: z.string().min(1).max(500).optional(),
+  automation: AutomationSettingsSchema.optional(),
 });
 
 const UpdateTenantSchema = z.object({
@@ -183,18 +195,32 @@ type CreateTenantInput = z.infer<typeof CreateTenantSchema>;
 type UpdateTenantInput = z.infer<typeof UpdateTenantSchema>;
 type AddFaqInput = z.infer<typeof AddFaqSchema>;
 type UpdateHandoffInput = z.infer<typeof UpdateHandoffSchema>;
+type WidgetThemeInput = z.infer<typeof WidgetThemeSchema>;
+type AutomationSettings = {
+  ownerLeadEmailEnabled: boolean;
+  visitorConfirmationEmailEnabled: boolean;
+  autoQualifyReadinessEnabled: boolean;
+  autoQualifyLeadDetailsEnabled: boolean;
+  weeklySummaryEmailEnabled: boolean;
+  staleLeadReminderDays: number;
+  readinessQualificationScore: number;
+};
+
+type StoreTenant = {
+  id: string;
+  publicId: string;
+  name: string;
+  defaultLocale: string;
+  theme?: WidgetThemeInput | null;
+};
 
 export type PlatformStore = AnswerDataStore &
   HandoffStore & {
     createTenant(input: CreateTenantInput): Promise<unknown>;
     updateTenant(tenantId: string, input: UpdateTenantInput): Promise<unknown>;
     listTenants(): Promise<unknown[]>;
-    getTenant(
-      tenantId: string,
-    ): Promise<{ id: string; publicId: string; name: string; defaultLocale: string } | null>;
-    getTenantByPublicId(
-      publicId: string,
-    ): Promise<{ id: string; publicId: string; name: string; defaultLocale: string } | null>;
+    getTenant(tenantId: string): Promise<StoreTenant | null>;
+    getTenantByPublicId(publicId: string): Promise<StoreTenant | null>;
     getWidgetConfig(publicId: string): Promise<unknown | null>;
     addFaq(tenantId: string, input: AddFaqInput): Promise<unknown>;
     updateFaq(
@@ -285,6 +311,16 @@ type LeadNotificationEmail = {
   from: string;
   subject: string;
   text: string;
+};
+
+const defaultAutomationSettings: AutomationSettings = {
+  ownerLeadEmailEnabled: true,
+  visitorConfirmationEmailEnabled: true,
+  autoQualifyReadinessEnabled: true,
+  autoQualifyLeadDetailsEnabled: true,
+  weeklySummaryEmailEnabled: true,
+  staleLeadReminderDays: 3,
+  readinessQualificationScore: 70,
 };
 
 export async function buildServer(
@@ -509,6 +545,54 @@ export async function buildServer(
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const handoffs = await options.store.listHandoffs(tenantId);
       return buildUnansweredQueue(handoffs);
+    },
+  );
+
+  app.post(
+    "/admin/tenants/:tenantId/weekly-report",
+    { preHandler: requireAdmin(options.adminToken) },
+    async (request, reply) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      const tenant = await options.store.getTenant(tenantId);
+      if (!tenant) {
+        return reply.code(404).send({ error: "Tenant not found." });
+      }
+      const theme = tenant.theme ?? {};
+      const automation = getAutomationSettings(theme);
+      if (!automation.weeklySummaryEmailEnabled) {
+        return {
+          sent: false,
+          reason: "weekly_summary_disabled",
+        };
+      }
+      if (!options.leadNotificationEmailTo) {
+        return {
+          sent: false,
+          reason: "owner_email_not_configured",
+        };
+      }
+
+      const [analytics, handoffs] = await Promise.all([
+        options.store.getTenantAnalytics(tenantId),
+        options.store.listHandoffs(tenantId),
+      ]);
+      const from =
+        options.leadNotificationSmtp?.from ??
+        options.adminUser?.email ??
+        "owner@assad-dar.de";
+      const email = buildWeeklyReportEmail(
+        tenant,
+        analytics,
+        handoffs,
+        options.leadNotificationEmailTo,
+        from,
+        automation,
+      );
+      const result = await sendNotificationEmail(options, email);
+      return {
+        ...result,
+        sentAt: new Date().toISOString(),
+      };
     },
   );
 
@@ -749,6 +833,13 @@ export async function buildServer(
     if (!tenant) {
       return reply.code(404).send({ error: "Assistant not found." });
     }
+    const theme = tenant.theme ?? {};
+    const automation = getAutomationSettings(theme);
+    const autoQualified = shouldAutoQualifyLeadDetails(
+      body.fields,
+      automation,
+    );
+    const pipelineStage = autoQualified ? "qualified" : "new";
 
     const conversationInput: Parameters<
       PlatformStore["findOrCreateConversation"]
@@ -788,17 +879,39 @@ export async function buildServer(
       channel: "website",
       reason: "lead_capture",
       message,
+      metadata: {
+        pipelineStage,
+        ...(autoQualified
+          ? {
+              automationReason: "lead_details",
+              pipelineUpdatedAt: new Date().toISOString(),
+            }
+          : {}),
+      },
     });
 
-    await notifyLead(options, {
-      tenantId: tenant.id,
-      tenantName: tenant.name,
-      type: "lead_capture",
-      conversationId: conversation.publicId,
-      message,
-      fields: body.fields,
-      ...(body.pageUrl ? { pageUrl: body.pageUrl } : {}),
-    });
+    if (automation.ownerLeadEmailEnabled) {
+      await notifyLead(options, {
+        tenantId: tenant.id,
+        tenantName: tenant.name,
+        type: "lead_capture",
+        conversationId: conversation.publicId,
+        message,
+        fields: body.fields,
+        ...(body.pageUrl ? { pageUrl: body.pageUrl } : {}),
+      });
+    }
+
+    if (automation.visitorConfirmationEmailEnabled) {
+      const bookingUrl = getBookingUrl(theme);
+      await notifyVisitorConfirmation(options, {
+        tenantName: tenant.name,
+        type: "lead_capture",
+        fields: body.fields,
+        ...(body.pageUrl ? { pageUrl: body.pageUrl } : {}),
+        ...(bookingUrl ? { bookingUrl } : {}),
+      });
+    }
 
     await options.store.logUsage({
       tenantId: tenant.id,
@@ -808,6 +921,8 @@ export async function buildServer(
       metadata: {
         fields: Object.keys(body.fields),
         pageUrl: body.pageUrl,
+        pipelineStage,
+        autoQualified,
       },
     });
 
@@ -823,6 +938,8 @@ export async function buildServer(
     if (!tenant) {
       return reply.code(404).send({ error: "Assistant not found." });
     }
+    const theme = tenant.theme ?? {};
+    const automation = getAutomationSettings(theme);
 
     const conversationInput: Parameters<
       PlatformStore["findOrCreateConversation"]
@@ -842,6 +959,10 @@ export async function buildServer(
       await options.store.findOrCreateConversation(conversationInput);
     const score = scoreReadiness(body.answers);
     const message = formatReadinessMessage(body.answers, score, body.pageUrl);
+    const autoQualified =
+      automation.autoQualifyReadinessEnabled &&
+      score >= automation.readinessQualificationScore;
+    const pipelineStage = autoQualified ? "qualified" : "new";
 
     await options.store.addMessage({
       tenantId: tenant.id,
@@ -864,6 +985,16 @@ export async function buildServer(
       channel: "website",
       reason: "readiness_assessment",
       message,
+      metadata: {
+        pipelineStage,
+        score,
+        ...(autoQualified
+          ? {
+              automationReason: "readiness_score",
+              pipelineUpdatedAt: new Date().toISOString(),
+            }
+          : {}),
+      },
     });
 
     await options.store.logUsage({
@@ -875,25 +1006,43 @@ export async function buildServer(
         score,
         fields: Object.keys(body.answers),
         pageUrl: body.pageUrl,
+        pipelineStage,
+        autoQualified,
       },
     });
 
-    await notifyLead(options, {
-      tenantId: tenant.id,
-      tenantName: tenant.name,
-      type: "readiness_assessment",
-      conversationId: conversation.publicId,
-      message,
-      fields: body.answers,
-      score,
-      ...(body.pageUrl ? { pageUrl: body.pageUrl } : {}),
-    });
+    if (automation.ownerLeadEmailEnabled) {
+      await notifyLead(options, {
+        tenantId: tenant.id,
+        tenantName: tenant.name,
+        type: "readiness_assessment",
+        conversationId: conversation.publicId,
+        message,
+        fields: body.answers,
+        score,
+        ...(body.pageUrl ? { pageUrl: body.pageUrl } : {}),
+      });
+    }
+
+    if (automation.visitorConfirmationEmailEnabled) {
+      const bookingUrl = getBookingUrl(theme);
+      await notifyVisitorConfirmation(options, {
+        tenantName: tenant.name,
+        type: "readiness_assessment",
+        fields: body.answers,
+        score,
+        ...(body.pageUrl ? { pageUrl: body.pageUrl } : {}),
+        ...(bookingUrl ? { bookingUrl } : {}),
+      });
+    }
 
     return reply.code(201).send({
       conversationId: conversation.publicId,
       status: "captured",
       score,
       recommendation: readinessRecommendation(score),
+      qualified: autoQualified,
+      bookingUrl: getBookingUrl(theme),
     });
   });
 
@@ -1156,6 +1305,49 @@ async function notifyLead(
   };
 }
 
+async function notifyVisitorConfirmation(
+  options: BuildServerOptions,
+  payload: {
+    tenantName: string;
+    type: "lead_capture" | "readiness_assessment";
+    fields: Record<string, string>;
+    pageUrl?: string;
+    score?: number;
+    bookingUrl?: string;
+  },
+) {
+  const visitorEmail = findEmail(payload.fields);
+  if (!visitorEmail) {
+    return { sent: false, reason: "visitor_email_missing" };
+  }
+
+  const from =
+    options.leadNotificationSmtp?.from ??
+    options.adminUser?.email ??
+    "owner@assad-dar.de";
+  return sendNotificationEmail(
+    options,
+    buildVisitorConfirmationEmail(payload, visitorEmail, from),
+  );
+}
+
+async function sendNotificationEmail(
+  options: BuildServerOptions,
+  email: LeadNotificationEmail,
+) {
+  if (options.leadNotificationEmailSender) {
+    await options.leadNotificationEmailSender(email);
+    return { sent: true, channel: "email" };
+  }
+
+  if (options.leadNotificationSmtp) {
+    await sendSmtpEmail(options.leadNotificationSmtp, email);
+    return { sent: true, channel: "email" };
+  }
+
+  return { sent: false, reason: "smtp_not_configured" };
+}
+
 function buildLeadNotificationEmail(
   payload: LeadNotificationPayload,
   to: string,
@@ -1192,6 +1384,214 @@ function buildLeadNotificationEmail(
       .filter((line) => line !== "")
       .join("\n"),
   };
+}
+
+function buildVisitorConfirmationEmail(
+  payload: {
+    tenantName: string;
+    type: "lead_capture" | "readiness_assessment";
+    fields: Record<string, string>;
+    pageUrl?: string;
+    score?: number;
+    bookingUrl?: string;
+  },
+  to: string,
+  from: string,
+): LeadNotificationEmail {
+  const typeLabel =
+    payload.type === "readiness_assessment"
+      ? "AI readiness check"
+      : "AI consultation request";
+  const firstName =
+    payload.fields.name?.trim().split(/\s+/)[0] ||
+    payload.fields.Name?.trim().split(/\s+/)[0] ||
+    "there";
+
+  return {
+    to,
+    from,
+    subject: `${typeLabel} received - ${payload.tenantName}`,
+    text: [
+      `Hi ${firstName},`,
+      "",
+      `Thanks for contacting ${payload.tenantName}. Your request was received and the team can follow up with the context you shared.`,
+      payload.score ? `AI readiness score: ${payload.score}/100` : "",
+      payload.bookingUrl ? `Book a time directly: ${payload.bookingUrl}` : "",
+      payload.pageUrl ? `Page: ${payload.pageUrl}` : "",
+      "",
+      "Shared details:",
+      ...Object.entries(payload.fields)
+        .filter(([, value]) => value.trim())
+        .map(([key, value]) => `${titleCase(key)}: ${value.trim()}`),
+      "",
+      "Best regards",
+      payload.tenantName,
+    ]
+      .filter((line) => line !== "")
+      .join("\n"),
+  };
+}
+
+function buildWeeklyReportEmail(
+  tenant: StoreTenant,
+  analytics: unknown,
+  handoffs: unknown[],
+  to: string,
+  from: string,
+  automation: AutomationSettings,
+): LeadNotificationEmail {
+  const analyticsRecord =
+    analytics && typeof analytics === "object"
+      ? (analytics as Record<string, unknown>)
+      : {};
+  const leadHandoffs = handoffs.filter((handoff) =>
+    isLeadHandoff(asRecord(handoff)),
+  );
+  const openLeads = leadHandoffs.filter(
+    (handoff) => asRecord(handoff).status === "open",
+  );
+  const qualifiedLeads = leadHandoffs.filter(
+    (handoff) => getHandoffPipelineStage(handoff) === "qualified",
+  );
+  const unanswered = buildUnansweredQueue(handoffs).slice(0, 5);
+  const staleLeads = openLeads.filter((handoff) =>
+    isOlderThanDays(asRecord(handoff).createdAt, automation.staleLeadReminderDays),
+  );
+
+  return {
+    to,
+    from,
+    subject: `Weekly AI assistant report - ${tenant.name}`,
+    text: [
+      `Weekly report for ${tenant.name}`,
+      "",
+      `Conversations: ${analyticsRecord.conversations ?? 0}`,
+      `Messages: ${analyticsRecord.messages ?? 0}`,
+      `Total leads: ${leadHandoffs.length}`,
+      `Open leads: ${openLeads.length}`,
+      `Qualified leads: ${qualifiedLeads.length}`,
+      `Stale follow-ups: ${staleLeads.length}`,
+      `Unanswered questions: ${unanswered.length}`,
+      "",
+      "Top follow-ups:",
+      ...(openLeads.length
+        ? openLeads.slice(0, 5).map((handoff, index) => {
+            const record = asRecord(handoff);
+            return `${index + 1}. ${String(record.reason ?? "lead")} - ${String(record.requesterMessage ?? record.message ?? "").slice(0, 220)}`;
+          })
+        : ["None"]),
+      "",
+      "Knowledge gaps:",
+      ...(unanswered.length
+        ? unanswered.map((item, index) => `${index + 1}. ${item.question}`)
+        : ["None"]),
+    ].join("\n"),
+  };
+}
+
+function getAutomationSettings(theme?: WidgetThemeInput | null): AutomationSettings {
+  const automation = theme?.automation;
+  return {
+    ownerLeadEmailEnabled:
+      automation?.ownerLeadEmailEnabled ??
+      defaultAutomationSettings.ownerLeadEmailEnabled,
+    visitorConfirmationEmailEnabled:
+      automation?.visitorConfirmationEmailEnabled ??
+      defaultAutomationSettings.visitorConfirmationEmailEnabled,
+    autoQualifyReadinessEnabled:
+      automation?.autoQualifyReadinessEnabled ??
+      defaultAutomationSettings.autoQualifyReadinessEnabled,
+    autoQualifyLeadDetailsEnabled:
+      automation?.autoQualifyLeadDetailsEnabled ??
+      defaultAutomationSettings.autoQualifyLeadDetailsEnabled,
+    weeklySummaryEmailEnabled:
+      automation?.weeklySummaryEmailEnabled ??
+      defaultAutomationSettings.weeklySummaryEmailEnabled,
+    staleLeadReminderDays:
+      automation?.staleLeadReminderDays ??
+      defaultAutomationSettings.staleLeadReminderDays,
+    readinessQualificationScore:
+      automation?.readinessQualificationScore ??
+      defaultAutomationSettings.readinessQualificationScore,
+  };
+}
+
+function getBookingUrl(theme?: WidgetThemeInput | null) {
+  return theme?.bookingUrl ?? theme?.ctaUrl;
+}
+
+function shouldAutoQualifyLeadDetails(
+  fields: Record<string, string>,
+  automation: AutomationSettings,
+) {
+  if (!automation.autoQualifyLeadDetailsEnabled) {
+    return false;
+  }
+
+  const normalized = normalizeFieldMap(fields);
+  const hasEmail = Boolean(normalized.email);
+  const hasCompany = Boolean(normalized.company);
+  const hasBudget = Boolean(normalized.budget);
+  const hasProject =
+    Boolean(normalized.projecttype) ||
+    Boolean(normalized.project) ||
+    Boolean(normalized.message);
+
+  return hasEmail && hasCompany && (hasBudget || hasProject);
+}
+
+function normalizeFieldMap(fields: Record<string, string>) {
+  return Object.fromEntries(
+    Object.entries(fields).map(([key, value]) => [
+      key.toLowerCase().replace(/[^a-z0-9]/g, ""),
+      value.trim(),
+    ]),
+  );
+}
+
+function findEmail(fields: Record<string, string>) {
+  const emailField = Object.entries(fields).find(
+    ([key, value]) => key.toLowerCase().includes("email") && value.trim(),
+  )?.[1];
+  const candidate =
+    emailField ??
+    Object.values(fields).find((value) =>
+      /[^\s@]+@[^\s@]+\.[^\s@]+/.test(value),
+    );
+
+  return candidate?.match(/[^\s@]+@[^\s@]+\.[^\s@]+/)?.[0];
+}
+
+function isLeadHandoff(handoff: Record<string, unknown>) {
+  return (
+    handoff.reason === "lead_capture" ||
+    handoff.reason === "readiness_assessment"
+  );
+}
+
+function getHandoffPipelineStage(handoff: unknown) {
+  const metadata = asRecord(asRecord(handoff).metadata);
+  return typeof metadata.pipelineStage === "string"
+    ? metadata.pipelineStage
+    : "new";
+}
+
+function isOlderThanDays(value: unknown, days: number) {
+  if (!value) {
+    return false;
+  }
+  const timestamp =
+    value instanceof Date ? value.getTime() : new Date(String(value)).getTime();
+  if (!Number.isFinite(timestamp)) {
+    return false;
+  }
+  return Date.now() - timestamp >= days * 24 * 60 * 60 * 1000;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : {};
 }
 
 async function sendSmtpEmail(

@@ -116,6 +116,7 @@ export type HandoffInput = {
   channel: Channel;
   reason: string;
   message: string;
+  metadata?: Record<string, unknown>;
 };
 
 export type HandoffStore = {

@@ -28,6 +28,7 @@ const tenantInput = {
     leadCaptureFields: ["name", "email", "company", "projectType", "budget"],
     ctaLabel: "Beratung anfragen",
     ctaUrl: "https://www.assad-dar.de/de",
+    bookingUrl: "https://www.assad-dar.de/de",
     consentEnabled: true,
     consentText:
       "Dieser Assistent beantwortet Fragen mit freigegebenem Business-Wissen. Nachrichten koennen gespeichert werden, damit das Team nachfassen kann.",
@@ -40,7 +41,16 @@ const tenantInput = {
     ],
     readinessEnabled: true,
     readinessIntro:
-      "Pruefen Sie kurz, ob Ihr Unternehmen bereit fuer ein sinnvolles KI-Automatisierungsprojekt ist."
+      "Pruefen Sie kurz, ob Ihr Unternehmen bereit fuer ein sinnvolles KI-Automatisierungsprojekt ist.",
+    automation: {
+      ownerLeadEmailEnabled: true,
+      visitorConfirmationEmailEnabled: true,
+      autoQualifyReadinessEnabled: true,
+      autoQualifyLeadDetailsEnabled: true,
+      weeklySummaryEmailEnabled: true,
+      staleLeadReminderDays: 3,
+      readinessQualificationScore: 70
+    }
   }
 };
 

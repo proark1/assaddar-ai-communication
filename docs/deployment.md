@@ -50,6 +50,11 @@ LEAD_NOTIFICATION_SMTP_USER=<smtp username>
 LEAD_NOTIFICATION_SMTP_PASSWORD=<smtp password>
 ```
 
+These SMTP settings power owner lead alerts, visitor confirmation emails, and
+the admin weekly report action. The per-tenant Automation tab controls whether
+owner alerts, visitor confirmations, auto-qualification, stale lead reminders,
+and weekly summaries are enabled.
+
 Admin:
 
 ```text

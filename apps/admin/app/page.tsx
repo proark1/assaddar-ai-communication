@@ -63,11 +63,23 @@ type WidgetTheme = {
   leadCaptureFields?: string[];
   ctaLabel?: string;
   ctaUrl?: string;
+  bookingUrl?: string;
   consentEnabled?: boolean;
   consentText?: string;
   quickReplies?: string[];
   readinessEnabled?: boolean;
   readinessIntro?: string;
+  automation?: WidgetAutomationSettings;
+};
+
+type WidgetAutomationSettings = {
+  ownerLeadEmailEnabled?: boolean;
+  visitorConfirmationEmailEnabled?: boolean;
+  autoQualifyReadinessEnabled?: boolean;
+  autoQualifyLeadDetailsEnabled?: boolean;
+  weeklySummaryEmailEnabled?: boolean;
+  staleLeadReminderDays?: number;
+  readinessQualificationScore?: number;
 };
 
 type KnowledgeItem = {
@@ -111,7 +123,7 @@ type Handoff = {
   assignedTo?: string | null;
   metadata?: {
     pipelineStage?: LeadPipelineStage;
-    notes?: Array<{ body: string; createdAt: string }>;
+    notes?: Array<{ body: string; createdAt?: string }>;
     [key: string]: unknown;
   };
   createdAt: string;
@@ -194,6 +206,7 @@ type TabKey =
   | "overview"
   | "knowledge"
   | "leads"
+  | "automation"
   | "inbox"
   | "handoffs"
   | "test"
@@ -225,6 +238,7 @@ const tabs: Array<{ key: TabKey; label: string; icon: typeof BarChart3 }> = [
   { key: "overview", label: "Overview", icon: BarChart3 },
   { key: "knowledge", label: "Knowledge", icon: Database },
   { key: "leads", label: "Leads", icon: UserCheck },
+  { key: "automation", label: "Automation", icon: Sparkles },
   { key: "inbox", label: "Inbox", icon: Inbox },
   { key: "handoffs", label: "Handoffs", icon: AlertCircle },
   { key: "test", label: "Test", icon: MessageCircle },
@@ -295,6 +309,7 @@ const defaultTheme: Required<
     | "leadCaptureIntro"
     | "ctaLabel"
     | "ctaUrl"
+    | "bookingUrl"
     | "consentText"
     | "readinessIntro"
   >
@@ -304,6 +319,7 @@ const defaultTheme: Required<
   consentEnabled: boolean;
   quickReplies: string[];
   readinessEnabled: boolean;
+  automation: Required<WidgetAutomationSettings>;
 } = {
   primaryColor: "#a66e2f",
   backgroundColor: "#ffffff",
@@ -320,6 +336,7 @@ const defaultTheme: Required<
   leadCaptureFields: ["name", "email", "company", "projectType", "budget"],
   ctaLabel: "Beratung anfragen",
   ctaUrl: "https://www.assad-dar.de/de",
+  bookingUrl: "https://www.assad-dar.de/de",
   consentEnabled: true,
   consentText:
     "Dieser Assistent beantwortet Fragen mit freigegebenem Business-Wissen. Nachrichten koennen gespeichert werden, damit das Team nachfassen kann.",
@@ -333,6 +350,15 @@ const defaultTheme: Required<
   readinessEnabled: true,
   readinessIntro:
     "Pruefen Sie kurz, ob Ihr Unternehmen bereit fuer ein sinnvolles KI-Automatisierungsprojekt ist.",
+  automation: {
+    ownerLeadEmailEnabled: true,
+    visitorConfirmationEmailEnabled: true,
+    autoQualifyReadinessEnabled: true,
+    autoQualifyLeadDetailsEnabled: true,
+    weeklySummaryEmailEnabled: true,
+    staleLeadReminderDays: 3,
+    readinessQualificationScore: 70,
+  },
 };
 
 const starterFaqs = [
@@ -530,9 +556,17 @@ function mergeTheme(theme?: WidgetTheme) {
   return {
     ...defaultTheme,
     ...(theme ?? {}),
+    bookingUrl: theme?.bookingUrl ?? theme?.ctaUrl ?? defaultTheme.bookingUrl,
     leadCaptureFields: theme?.leadCaptureFields?.length
       ? theme.leadCaptureFields
       : defaultTheme.leadCaptureFields,
+    quickReplies: theme?.quickReplies?.length
+      ? theme.quickReplies
+      : defaultTheme.quickReplies,
+    automation: {
+      ...defaultTheme.automation,
+      ...(theme?.automation ?? {}),
+    },
   };
 }
 
@@ -573,6 +607,82 @@ function parseLeadDetails(message: string) {
       };
     })
     .filter((item) => item.label && item.value);
+}
+
+function getLeadDetailValue(handoff: Handoff, label: string) {
+  const normalizedLabel = label.toLowerCase();
+  return (
+    parseLeadDetails(handoff.requesterMessage).find(
+      (item) => item.label.toLowerCase() === normalizedLabel,
+    )?.value ?? ""
+  );
+}
+
+function getLeadContactEmail(handoff: Handoff) {
+  const emailDetail =
+    parseLeadDetails(handoff.requesterMessage).find((item) =>
+      item.label.toLowerCase().includes("email"),
+    )?.value ?? "";
+  return emailDetail.match(/[^\s@]+@[^\s@]+\.[^\s@]+/)?.[0] ?? "";
+}
+
+function buildLeadSummary(handoff: Handoff) {
+  const details = parseLeadDetails(handoff.requesterMessage);
+  return [
+    `Lead: ${getLeadDisplayName(handoff)}`,
+    `Score: ${getLeadScore(handoff)}/100`,
+    `Stage: ${getPipelineStage(handoff)}`,
+    `Status: ${handoff.status}`,
+    `Created: ${formatDate(handoff.createdAt)}`,
+    "",
+    ...details.map((item) => `${item.label}: ${item.value}`),
+  ].join("\n");
+}
+
+function getLeadDisplayName(handoff: Handoff) {
+  return (
+    getLeadDetailValue(handoff, "Company") ||
+    getLeadDetailValue(handoff, "Name") ||
+    "Website lead"
+  );
+}
+
+function groupUnansweredQuestions(items: UnansweredQuestion[]) {
+  const groups = new Map<
+    string,
+    {
+      label: string;
+      items: UnansweredQuestion[];
+      tags: string[];
+    }
+  >();
+
+  for (const item of items) {
+    const label =
+      item.suggestedTags.find((tag) => !["unanswered", item.channel].includes(tag)) ??
+      item.reason ??
+      "question";
+    const key = label.toLowerCase();
+    const existing = groups.get(key) ?? {
+      label: titleCase(label),
+      items: [],
+      tags: item.suggestedTags,
+    };
+    existing.items.push(item);
+    groups.set(key, existing);
+  }
+
+  return Array.from(groups.values()).sort(
+    (left, right) => right.items.length - left.items.length,
+  );
+}
+
+function isLeadOlderThan(handoff: Handoff, days: number) {
+  const createdAt = new Date(handoff.createdAt).getTime();
+  if (!Number.isFinite(createdAt)) {
+    return false;
+  }
+  return Date.now() - createdAt >= days * 24 * 60 * 60 * 1000;
 }
 
 function getLeadScore(handoff: Handoff) {
@@ -707,6 +817,9 @@ export default function DashboardPage() {
   const [connectionAttempted, setConnectionAttempted] = useState(false);
   const [confirmDeleteItem, setConfirmDeleteItem] =
     useState<KnowledgeItem | null>(null);
+  const [selectedLeadId, setSelectedLeadId] = useState("");
+  const [leadNote, setLeadNote] = useState("");
+  const [leadFollowUpDate, setLeadFollowUpDate] = useState("");
   const [widgetPlatform, setWidgetPlatform] = useState<WidgetPlatform>("html");
   const [copiedSnippet, setCopiedSnippet] = useState("");
   const [siteUrl, setSiteUrl] = useState(defaultSiteUrl);
@@ -749,6 +862,7 @@ export default function DashboardPage() {
   );
   const [ctaLabel, setCtaLabel] = useState(defaultTheme.ctaLabel);
   const [ctaUrl, setCtaUrl] = useState(defaultTheme.ctaUrl);
+  const [bookingUrl, setBookingUrl] = useState(defaultTheme.bookingUrl);
   const [consentEnabled, setConsentEnabled] = useState(
     defaultTheme.consentEnabled,
   );
@@ -762,6 +876,9 @@ export default function DashboardPage() {
   const [readinessIntro, setReadinessIntro] = useState(
     defaultTheme.readinessIntro,
   );
+  const [automationSettings, setAutomationSettings] = useState<
+    Required<WidgetAutomationSettings>
+  >(defaultTheme.automation);
   const [tenantLocale, setTenantLocale] = useState(defaultTheme.language);
   const [tenantTone, setTenantTone] = useState<"friendly" | "neutral" | "formal">(
     "friendly",
@@ -789,6 +906,18 @@ export default function DashboardPage() {
   const readinessLeads = handoffs.filter(
     (handoff) => handoff.reason === "readiness_assessment",
   );
+  const selectedLead =
+    leadHandoffs.find((handoff) => handoff.id === selectedLeadId) ?? null;
+  const staleLeads = leadHandoffs.filter(
+    (handoff) =>
+      ["open", "in_progress"].includes(handoff.status) &&
+      isLeadOlderThan(handoff, automationSettings.staleLeadReminderDays),
+  );
+  const highIntentLeads = leadHandoffs.filter(
+    (handoff) =>
+      getLeadScore(handoff) >= automationSettings.readinessQualificationScore ||
+      ["qualified", "proposal"].includes(getPipelineStage(handoff)),
+  );
   const unansweredCount = getUsageTotal(analytics, ["handoff", "refused"]);
   const answeredCount = getUsageTotal(analytics, ["answered"]);
   const handoffConversationIds = new Set(
@@ -808,6 +937,7 @@ export default function DashboardPage() {
   const missingKnowledgeChecks = businessKnowledgeChecks.filter(
     (check) => !check.terms.some((term) => knowledgeText.includes(term)),
   );
+  const unansweredTopicGroups = groupUnansweredQuestions(unansweredQuestions);
   const matchedKnowledge = findBestKnowledgeMatch(testMessage, knowledge);
   const currentSnippet = selectedTenant
     ? buildWidgetSnippets(
@@ -836,12 +966,16 @@ export default function DashboardPage() {
       .filter(Boolean),
     readinessEnabled,
     readinessIntro,
+    automation: automationSettings,
   };
   if (ctaLabel) {
     currentTheme.ctaLabel = ctaLabel;
   }
   if (ctaUrl) {
     currentTheme.ctaUrl = ctaUrl;
+  }
+  if (bookingUrl) {
+    currentTheme.bookingUrl = bookingUrl;
   }
   const statusKind = statusTone(status);
 
@@ -895,6 +1029,14 @@ export default function DashboardPage() {
           tab: "leads" as TabKey,
         }
       : null,
+    staleLeads.length
+      ? {
+          tone: "urgent",
+          title: "Stale lead follow-up",
+          detail: `${staleLeads.length} lead${staleLeads.length === 1 ? "" : "s"} older than ${automationSettings.staleLeadReminderDays} days.`,
+          tab: "leads" as TabKey,
+        }
+      : null,
     unansweredQuestions.length
       ? {
           tone: "urgent",
@@ -928,6 +1070,14 @@ export default function DashboardPage() {
           title: "Enable lead capture",
           detail: "Lead capture is currently off for the widget.",
           tab: "widget" as TabKey,
+        }
+      : null,
+    !automationSettings.visitorConfirmationEmailEnabled
+      ? {
+          tone: "info",
+          title: "Enable visitor confirmation",
+          detail: "Visitors can receive a clear email after submitting a lead.",
+          tab: "automation" as TabKey,
         }
       : null,
     conversations.length === 0
@@ -988,6 +1138,15 @@ export default function DashboardPage() {
       action: "Verify install",
       tab: "widget" as TabKey,
     },
+    {
+      label: "Automation",
+      done: Boolean(
+        automationSettings.ownerLeadEmailEnabled &&
+          automationSettings.autoQualifyReadinessEnabled,
+      ),
+      action: "Review rules",
+      tab: "automation" as TabKey,
+    },
   ];
   const completedSteps = setupSteps.filter((step) => step.done).length;
 
@@ -1046,11 +1205,13 @@ export default function DashboardPage() {
     setLeadCaptureFields(theme.leadCaptureFields);
     setCtaLabel(theme.ctaLabel);
     setCtaUrl(theme.ctaUrl);
+    setBookingUrl(theme.bookingUrl);
     setConsentEnabled(theme.consentEnabled);
     setConsentText(theme.consentText);
     setQuickReplies(theme.quickReplies.join("\n"));
     setReadinessEnabled(theme.readinessEnabled);
     setReadinessIntro(theme.readinessIntro);
+    setAutomationSettings(theme.automation);
     setTenantLocale(selectedTenant.defaultLocale ?? theme.language);
     setTenantTone(selectedTenant.tone ?? "friendly");
     setConfidenceThreshold(Number(selectedTenant.confidenceThreshold ?? 0.18));
@@ -1306,6 +1467,41 @@ export default function DashboardPage() {
         ),
       );
       setStatus("Business settings saved");
+    } catch (error) {
+      setStatus(readableError(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function updateAutomationSetting<Key extends keyof WidgetAutomationSettings>(
+    key: Key,
+    value: Required<WidgetAutomationSettings>[Key],
+  ) {
+    setAutomationSettings((current) => ({
+      ...current,
+      [key]: value,
+    }));
+  }
+
+  async function sendWeeklyReport() {
+    if (!selectedTenant) {
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const result = await apiFetch<{ sent: boolean; reason?: string }>(
+        `/admin/tenants/${selectedTenant.id}/weekly-report`,
+        {
+          method: "POST",
+        },
+      );
+      setStatus(
+        result.sent
+          ? "Weekly report sent"
+          : `Weekly report not sent: ${result.reason ?? "not configured"}`,
+      );
     } catch (error) {
       setStatus(readableError(error));
     } finally {
@@ -1624,6 +1820,34 @@ export default function DashboardPage() {
     }
   }
 
+  async function saveSelectedLeadNote() {
+    if (!selectedLead || !leadNote.trim()) {
+      return;
+    }
+    await updateHandoff(
+      selectedLead,
+      selectedLead.status,
+      selectedLead.assignedTo,
+      getPipelineStage(selectedLead),
+      leadNote.trim(),
+    );
+    setLeadNote("");
+  }
+
+  async function saveSelectedLeadFollowUp() {
+    if (!selectedLead || !leadFollowUpDate) {
+      return;
+    }
+    await updateHandoff(
+      selectedLead,
+      selectedLead.status,
+      selectedLead.assignedTo,
+      getPipelineStage(selectedLead),
+      `Follow up on ${leadFollowUpDate}`,
+    );
+    setLeadFollowUpDate("");
+  }
+
   async function testAssistant(event: FormEvent) {
     event.preventDefault();
     if (!selectedTenant || !testMessage) {
@@ -1857,10 +2081,65 @@ export default function DashboardPage() {
     );
   }
 
+  function renderTodayPanel() {
+    const activeAutomationCount = [
+      automationSettings.ownerLeadEmailEnabled,
+      automationSettings.visitorConfirmationEmailEnabled,
+      automationSettings.autoQualifyReadinessEnabled,
+      automationSettings.autoQualifyLeadDetailsEnabled,
+      automationSettings.weeklySummaryEmailEnabled,
+    ].filter(Boolean).length;
+
+    return (
+      <section className="panel todayPanel">
+        <div className="panelHeader">
+          <div className="panelTitle">
+            <Sparkles size={18} />
+            <h2>Today</h2>
+          </div>
+          <span className="countPill">
+            {openLeads.length + unansweredQuestions.length + staleLeads.length}
+          </span>
+        </div>
+        <div className="todayGrid">
+          <button
+            type="button"
+            onClick={() => setActiveTab("leads")}
+            data-alert={openLeads.length ? "true" : "false"}
+          >
+            <span>Follow up</span>
+            <strong>{openLeads.length}</strong>
+            <small>Open leads</small>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("leads")}
+            data-alert={staleLeads.length ? "true" : "false"}
+          >
+            <span>Reminder</span>
+            <strong>{staleLeads.length}</strong>
+            <small>Stale leads</small>
+          </button>
+          <button type="button" onClick={() => setActiveTab("knowledge")}>
+            <span>Knowledge</span>
+            <strong>{unansweredQuestions.length}</strong>
+            <small>FAQ drafts</small>
+          </button>
+          <button type="button" onClick={() => setActiveTab("automation")}>
+            <span>Automation</span>
+            <strong>{activeAutomationCount}/5</strong>
+            <small>Rules active</small>
+          </button>
+        </div>
+      </section>
+    );
+  }
+
   function renderOverview() {
     return (
       <div className="workspaceStack">
         {renderMetrics()}
+        {renderTodayPanel()}
         <section className="panel actionPanel">
           <div className="panelHeader">
             <div className="panelTitle">
@@ -2340,10 +2619,42 @@ export default function DashboardPage() {
             <div className="panelHeader">
               <div className="panelTitle">
                 <AlertCircle size={18} />
-                <h2>Unanswered queue</h2>
+                <h2>Knowledge autopilot</h2>
               </div>
               <span className="countPill">{unansweredQuestions.length}</span>
             </div>
+            {unansweredTopicGroups.length ? (
+              <div className="topicGroupList">
+                {unansweredTopicGroups.slice(0, 4).map((group) => {
+                  const firstItem = group.items[0];
+                  if (!firstItem) {
+                    return null;
+                  }
+                  return (
+                    <article key={group.label}>
+                      <div>
+                        <strong>{group.label}</strong>
+                        <span>{group.items.length}</span>
+                      </div>
+                      <p>{firstItem.question}</p>
+                      <button
+                        className="secondaryButton"
+                        type="button"
+                        onClick={() => draftFaqFromUnanswered(firstItem)}
+                      >
+                        <Plus size={15} />
+                        Draft answer
+                      </button>
+                    </article>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="emptyState compact">
+                No repeated knowledge gaps detected.
+              </div>
+            )}
+            <div className="divider" />
             <div className="suggestionStack">
               {unansweredQuestions.length ? (
                 unansweredQuestions.slice(0, 8).map((item) => (
@@ -2419,6 +2730,16 @@ export default function DashboardPage() {
             <span>Readiness</span>
             <strong>{readinessLeads.length}</strong>
           </article>
+          <article className="metricCard" data-alert={staleLeads.length ? "true" : "false"}>
+            <AlertCircle size={18} />
+            <span>Stale</span>
+            <strong>{staleLeads.length}</strong>
+          </article>
+          <article className="metricCard">
+            <BarChart3 size={18} />
+            <span>High intent</span>
+            <strong>{highIntentLeads.length}</strong>
+          </article>
         </section>
 
         <section className="panel">
@@ -2461,13 +2782,7 @@ export default function DashboardPage() {
                   <article className="leadCard" key={handoff.id}>
                     <div className="leadHeader">
                       <div>
-                        <strong>
-                          {details.find((item) => item.label === "Company")
-                            ?.value ??
-                            details.find((item) => item.label === "Name")
-                              ?.value ??
-                            "Website lead"}
-                        </strong>
+                        <strong>{getLeadDisplayName(handoff)}</strong>
                         <span>{formatDate(handoff.createdAt)}</span>
                       </div>
                       <small data-status={handoff.status}>
@@ -2489,6 +2804,12 @@ export default function DashboardPage() {
                       </div>
                       <small>{getLeadNextStep(handoff)}</small>
                     </div>
+                    {handoff.metadata?.automationReason ? (
+                      <div className="automationBadge">
+                        <Sparkles size={14} />
+                        Auto-qualified: {String(handoff.metadata.automationReason)}
+                      </div>
+                    ) : null}
                     <label className="field">
                       <span>Pipeline stage</span>
                       <select
@@ -2510,6 +2831,17 @@ export default function DashboardPage() {
                       </select>
                     </label>
                     <div className="rowActions">
+                      <button
+                        className="secondaryButton"
+                        type="button"
+                        onClick={() => {
+                          setSelectedLeadId(handoff.id);
+                          setLeadNote("");
+                          setLeadFollowUpDate("");
+                        }}
+                      >
+                        Details
+                      </button>
                       <button
                         className="secondaryButton"
                         type="button"
@@ -2542,6 +2874,222 @@ export default function DashboardPage() {
             )}
           </div>
         </section>
+      </div>
+    );
+  }
+
+  function renderLeadDetailDrawer() {
+    if (!selectedLead) {
+      return null;
+    }
+
+    const details = parseLeadDetails(selectedLead.requesterMessage);
+    const email = getLeadContactEmail(selectedLead);
+    const notes = selectedLead.metadata?.notes ?? [];
+
+    return (
+      <div className="drawerBackdrop" role="presentation">
+        <aside className="leadDrawer" aria-label="Lead details">
+          <div className="drawerHeader">
+            <div>
+              <span>Lead detail</span>
+              <strong>{getLeadDisplayName(selectedLead)}</strong>
+            </div>
+            <button
+              className="iconButton neutral"
+              type="button"
+              aria-label="Close lead details"
+              onClick={() => setSelectedLeadId("")}
+            >
+              <X size={18} />
+            </button>
+          </div>
+
+          <div className="drawerBody">
+            <div className="leadScore large">
+              <div>
+                <span>Lead score</span>
+                <strong>{getLeadScore(selectedLead)}/100</strong>
+              </div>
+              <small>{getLeadNextStep(selectedLead)}</small>
+            </div>
+
+            <div className="formGrid two">
+              <label className="field">
+                <span>Pipeline stage</span>
+                <select
+                  value={getPipelineStage(selectedLead)}
+                  onChange={(event) =>
+                    updateHandoff(
+                      selectedLead,
+                      selectedLead.status,
+                      selectedLead.assignedTo,
+                      event.target.value as LeadPipelineStage,
+                    )
+                  }
+                >
+                  {pipelineStages.map((stage) => (
+                    <option key={stage.key} value={stage.key}>
+                      {stage.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>Follow-up date</span>
+                <input
+                  type="date"
+                  value={leadFollowUpDate}
+                  onChange={(event) => setLeadFollowUpDate(event.target.value)}
+                />
+              </label>
+            </div>
+
+            <div className="rowActions">
+              <button
+                className="secondaryButton"
+                type="button"
+                onClick={() =>
+                  updateHandoff(
+                    selectedLead,
+                    "in_progress",
+                    "Assad Dar",
+                    "contacted",
+                  )
+                }
+              >
+                Contacted
+              </button>
+              <button
+                className="secondaryButton"
+                type="button"
+                onClick={() =>
+                  updateHandoff(
+                    selectedLead,
+                    selectedLead.status,
+                    selectedLead.assignedTo,
+                    "qualified",
+                  )
+                }
+              >
+                Qualified
+              </button>
+              <button
+                className="secondaryButton"
+                type="button"
+                onClick={() =>
+                  updateHandoff(
+                    selectedLead,
+                    selectedLead.status,
+                    selectedLead.assignedTo,
+                    "proposal",
+                  )
+                }
+              >
+                Proposal
+              </button>
+              <button
+                className="primaryButton"
+                type="button"
+                onClick={() =>
+                  updateHandoff(selectedLead, "resolved", "Assad Dar", "won")
+                }
+              >
+                Won
+              </button>
+              <button
+                className="dangerButton"
+                type="button"
+                onClick={() =>
+                  updateHandoff(selectedLead, "resolved", "Assad Dar", "lost")
+                }
+              >
+                Lost
+              </button>
+            </div>
+
+            <dl className="detailList">
+              {details.map((item) => (
+                <div key={`${selectedLead.id}-${item.label}`}>
+                  <dt>{item.label}</dt>
+                  <dd>{item.value}</dd>
+                </div>
+              ))}
+            </dl>
+
+            <div className="rowActions">
+              {email ? (
+                <a
+                  className="secondaryButton linkButton"
+                  href={`mailto:${email}`}
+                >
+                  <Send size={15} />
+                  Email lead
+                </a>
+              ) : null}
+              {bookingUrl ? (
+                <a
+                  className="secondaryButton linkButton"
+                  href={bookingUrl}
+                  rel="noreferrer"
+                  target="_blank"
+                >
+                  <ExternalLink size={15} />
+                  Booking link
+                </a>
+              ) : null}
+              <button
+                className="secondaryButton"
+                type="button"
+                onClick={() =>
+                  copyText(buildLeadSummary(selectedLead), "Lead summary")
+                }
+              >
+                <Copy size={15} />
+                Copy summary
+              </button>
+              <button
+                className="secondaryButton"
+                type="button"
+                disabled={!leadFollowUpDate}
+                onClick={saveSelectedLeadFollowUp}
+              >
+                Save follow-up
+              </button>
+            </div>
+
+            <label className="field">
+              <span>Note</span>
+              <textarea
+                value={leadNote}
+                onChange={(event) => setLeadNote(event.target.value)}
+                rows={3}
+              />
+            </label>
+            <button
+              className="primaryButton full"
+              type="button"
+              disabled={busy || !leadNote.trim()}
+              onClick={saveSelectedLeadNote}
+            >
+              <Save size={16} />
+              Save note
+            </button>
+
+            <div className="noteList">
+              {notes.length ? (
+                notes.map((note, index) => (
+                  <article key={`${selectedLead.id}-note-${index}`}>
+                    <p>{note.body}</p>
+                    <span>{note.createdAt ? formatDate(note.createdAt) : "Saved"}</span>
+                  </article>
+                ))
+              ) : (
+                <div className="emptyState compact">No notes yet.</div>
+              )}
+            </div>
+          </div>
+        </aside>
       </div>
     );
   }
@@ -3122,6 +3670,13 @@ export default function DashboardPage() {
                   onChange={(event) => setCtaUrl(event.target.value)}
                 />
               </label>
+              <label className="field">
+                <span>Booking URL</span>
+                <input
+                  value={bookingUrl}
+                  onChange={(event) => setBookingUrl(event.target.value)}
+                />
+              </label>
             </div>
           </section>
 
@@ -3195,6 +3750,180 @@ export default function DashboardPage() {
                 rows={3}
               />
             </label>
+          </section>
+        </div>
+      </div>
+    );
+  }
+
+  function renderAutomation() {
+    const rules = [
+      {
+        key: "ownerLeadEmailEnabled" as const,
+        title: "Notify owner on every lead",
+        detail: "Sends the owner a structured email when a lead or readiness check is captured.",
+        enabled: automationSettings.ownerLeadEmailEnabled,
+      },
+      {
+        key: "visitorConfirmationEmailEnabled" as const,
+        title: "Confirm receipt to visitor",
+        detail: "Sends the visitor a short confirmation email when they provide an email address.",
+        enabled: automationSettings.visitorConfirmationEmailEnabled,
+      },
+      {
+        key: "autoQualifyReadinessEnabled" as const,
+        title: "Qualify high readiness leads",
+        detail: `Moves readiness leads to qualified at ${automationSettings.readinessQualificationScore}/100 or higher.`,
+        enabled: automationSettings.autoQualifyReadinessEnabled,
+      },
+      {
+        key: "autoQualifyLeadDetailsEnabled" as const,
+        title: "Qualify complete lead forms",
+        detail: "Moves leads with email, company, and budget or project context to qualified.",
+        enabled: automationSettings.autoQualifyLeadDetailsEnabled,
+      },
+      {
+        key: "weeklySummaryEmailEnabled" as const,
+        title: "Weekly owner summary",
+        detail: "Keeps a weekly report ready with leads, stale follow-ups, and missing knowledge.",
+        enabled: automationSettings.weeklySummaryEmailEnabled,
+      },
+    ];
+
+    return (
+      <div className="workspaceStack">
+        <section className="panel automationHero">
+          <div className="panelHeader">
+            <div className="panelTitle">
+              <Sparkles size={18} />
+              <h2>Automation Center</h2>
+            </div>
+            <span className="countPill">
+              {rules.filter((rule) => rule.enabled).length}/{rules.length} active
+            </span>
+          </div>
+          <div className="automationSummary">
+            <article>
+              <span>Qualified leads</span>
+              <strong>{highIntentLeads.length}</strong>
+            </article>
+            <article data-alert={staleLeads.length ? "true" : "false"}>
+              <span>Follow-up reminders</span>
+              <strong>{staleLeads.length}</strong>
+            </article>
+            <article>
+              <span>Booking CTA</span>
+              <strong>{bookingUrl ? "Ready" : "Missing"}</strong>
+            </article>
+          </div>
+        </section>
+
+        <div className="automationGrid">
+          <section className="panel">
+            <div className="panelHeader">
+              <div className="panelTitle">
+                <Settings size={18} />
+                <h2>Playbooks</h2>
+              </div>
+            </div>
+            <div className="automationRuleList">
+              {rules.map((rule) => (
+                <article className="automationRule" key={rule.key}>
+                  <div>
+                    <strong>{rule.title}</strong>
+                    <p>{rule.detail}</p>
+                  </div>
+                  <label className="ruleSwitch">
+                    <input
+                      type="checkbox"
+                      checked={rule.enabled}
+                      onChange={(event) =>
+                        updateAutomationSetting(rule.key, event.target.checked)
+                      }
+                    />
+                    <span>{rule.enabled ? "On" : "Off"}</span>
+                  </label>
+                </article>
+              ))}
+            </div>
+          </section>
+
+          <section className="panel">
+            <div className="panelHeader">
+              <div className="panelTitle">
+                <UserCheck size={18} />
+                <h2>Lead routing</h2>
+              </div>
+            </div>
+            <div className="formGrid two">
+              <label className="field">
+                <span>Readiness threshold</span>
+                <input
+                  type="number"
+                  min="1"
+                  max="100"
+                  value={automationSettings.readinessQualificationScore}
+                  onChange={(event) =>
+                    updateAutomationSetting(
+                      "readinessQualificationScore",
+                      Number(event.target.value),
+                    )
+                  }
+                />
+              </label>
+              <label className="field">
+                <span>Stale after days</span>
+                <input
+                  type="number"
+                  min="1"
+                  max="30"
+                  value={automationSettings.staleLeadReminderDays}
+                  onChange={(event) =>
+                    updateAutomationSetting(
+                      "staleLeadReminderDays",
+                      Number(event.target.value),
+                    )
+                  }
+                />
+              </label>
+            </div>
+            <label className="field">
+              <span>Booking URL</span>
+              <input
+                value={bookingUrl}
+                onChange={(event) => setBookingUrl(event.target.value)}
+                placeholder="https://cal.com/..."
+              />
+            </label>
+            <div className="rowActions">
+              <button
+                className="primaryButton"
+                type="button"
+                disabled={busy || !selectedTenant}
+                onClick={saveTenantSettings}
+              >
+                <Save size={16} />
+                Save automation
+              </button>
+              <button
+                className="secondaryButton"
+                type="button"
+                disabled={busy || !selectedTenant}
+                onClick={sendWeeklyReport}
+              >
+                <Send size={16} />
+                Send weekly report
+              </button>
+              <button
+                className="secondaryButton"
+                type="button"
+                disabled={!bookingUrl}
+                onClick={() => copyText(bookingUrl, "Booking URL")}
+              >
+                <Copy size={16} />
+                Copy booking URL
+              </button>
+            </div>
           </section>
         </div>
       </div>
@@ -3409,6 +4138,9 @@ export default function DashboardPage() {
     }
     if (activeTab === "leads") {
       return renderLeads();
+    }
+    if (activeTab === "automation") {
+      return renderAutomation();
     }
     if (activeTab === "inbox") {
       return renderInbox();
@@ -3678,6 +4410,8 @@ export default function DashboardPage() {
 
         {renderActiveTab()}
       </section>
+
+      {renderLeadDetailDrawer()}
 
       {confirmDeleteItem ? (
         <div className="modalBackdrop" role="presentation">

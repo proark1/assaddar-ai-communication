@@ -53,11 +53,21 @@ export type WidgetTheme = {
   leadCaptureFields?: string[];
   ctaLabel?: string;
   ctaUrl?: string;
+  bookingUrl?: string;
   consentEnabled?: boolean;
   consentText?: string;
   quickReplies?: string[];
   readinessEnabled?: boolean;
   readinessIntro?: string;
+  automation?: {
+    ownerLeadEmailEnabled?: boolean;
+    visitorConfirmationEmailEnabled?: boolean;
+    autoQualifyReadinessEnabled?: boolean;
+    autoQualifyLeadDetailsEnabled?: boolean;
+    weeklySummaryEmailEnabled?: boolean;
+    staleLeadReminderDays?: number;
+    readinessQualificationScore?: number;
+  };
 };
 
 export const tenants = pgTable("tenants", {

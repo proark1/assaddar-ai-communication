@@ -734,17 +734,19 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
 
   async createHandoff(input: HandoffInput) {
     assertTenantId(input.tenantId);
+    const metadata =
+      input.reason === "lead_capture" ||
+      input.reason === "readiness_assessment"
+        ? { pipelineStage: "new", ...(input.metadata ?? {}) }
+        : (input.metadata ?? {});
+
     await this.db.insert(handoffRequests).values({
       tenantId: input.tenantId,
       conversationId: input.conversationId,
       channel: input.channel,
       reason: input.reason,
       requesterMessage: input.message,
-      metadata:
-        input.reason === "lead_capture" ||
-        input.reason === "readiness_assessment"
-          ? { pipelineStage: "new" }
-          : {},
+      metadata,
     });
   }
 

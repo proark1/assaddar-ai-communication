@@ -61,6 +61,11 @@ export const openApiDocument = {
         summary: "Update a tenant handoff request",
       },
     },
+    "/admin/tenants/{tenantId}/weekly-report": {
+      post: {
+        summary: "Send the tenant weekly automation summary email",
+      },
+    },
     "/admin/tenants/{tenantId}/test-assistant": {
       post: {
         summary: "Test the grounded answer engine for a tenant",

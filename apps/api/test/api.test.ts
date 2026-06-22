@@ -265,16 +265,18 @@ class MemoryPlatformStore
   }
 
   async createHandoff(input: HandoffInput) {
+    const metadata =
+      input.reason === "lead_capture" ||
+      input.reason === "readiness_assessment"
+        ? { pipelineStage: "new", ...(input.metadata ?? {}) }
+        : (input.metadata ?? {});
+
     this.handoffs.push({
       ...input,
       id: crypto.randomUUID(),
       status: "open",
       requesterMessage: input.message,
-      metadata:
-        input.reason === "lead_capture" ||
-        input.reason === "readiness_assessment"
-          ? { pipelineStage: "new" }
-          : {},
+      metadata,
       createdAt: new Date(),
     });
   }
@@ -616,7 +618,8 @@ describe("API", () => {
       reason: "lead_capture",
       status: "open",
       metadata: {
-        pipelineStage: "new",
+        pipelineStage: "qualified",
+        automationReason: "lead_details",
       },
     });
 
@@ -675,13 +678,21 @@ describe("API", () => {
     });
 
     expect(response.statusCode).toBe(201);
-    expect(sentEmails).toHaveLength(1);
+    expect(sentEmails).toHaveLength(2);
     expect(sentEmails[0]).toMatchObject({
       to: "owner@example.com",
       subject: "Website lead - Tenant One",
     });
     expect(sentEmails[0]?.text).toContain("ada@example.com");
     expect(sentEmails[0]?.text).toContain("https://assad-dar.de/de");
+    expect(sentEmails[1]).toMatchObject({
+      to: "ada@example.com",
+      subject: "AI consultation request received - Tenant One",
+    });
+    expect(store.handoffs[0]?.metadata).toMatchObject({
+      pipelineStage: "qualified",
+      automationReason: "lead_details",
+    });
     await app.close();
   });
 
@@ -718,9 +729,58 @@ describe("API", () => {
     expect(store.handoffs[0]).toMatchObject({
       reason: "readiness_assessment",
       metadata: {
-        pipelineStage: "new",
+        pipelineStage: "qualified",
+        automationReason: "readiness_score",
       },
     });
+    await app.close();
+  });
+
+  it("can send a weekly owner report from admin automation", async () => {
+    const sentEmails: Array<{ to: string; subject: string; text: string }> = [];
+    const store = new MemoryPlatformStore();
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+      leadNotificationEmailTo: "owner@example.com",
+      leadNotificationEmailSender: async (email) => {
+        sentEmails.push(email);
+      },
+    });
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+
+    await app.inject({
+      method: "POST",
+      url: "/widget/leads",
+      payload: {
+        assistantId: tenant.publicId,
+        visitorId: "visitor-one",
+        fields: {
+          name: "Ada",
+          email: "ada@example.com",
+          company: "Example GmbH",
+          budget: "10k",
+        },
+      },
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/admin/tenants/${tenant.id}/weekly-report`,
+      headers: { "x-admin-token": "test-token" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json<{ sent: boolean }>().sent).toBe(true);
+    expect(sentEmails.at(-1)).toMatchObject({
+      to: "owner@example.com",
+      subject: "Weekly AI assistant report - Tenant One",
+    });
+    expect(sentEmails.at(-1)?.text).toContain("Total leads: 1");
     await app.close();
   });
 
