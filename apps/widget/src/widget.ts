@@ -144,7 +144,7 @@ void (() => {
         position: fixed;
         z-index: 2147483000;
         ${shellSide}
-        bottom: 20px;
+        bottom: 16px;
         font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         color: ${textColor};
       }
@@ -153,18 +153,18 @@ void (() => {
         border-radius: 999px;
         background: ${primaryColor};
         color: #fff;
-        min-width: 58px;
-        height: 50px;
-        padding: 0 18px;
-        font-size: 15px;
+        min-width: 52px;
+        height: 44px;
+        padding: 0 15px;
+        font-size: 14px;
         font-weight: 800;
         cursor: pointer;
         box-shadow: 0 14px 34px rgba(22, 25, 30, 0.22);
       }
       .panel {
         display: none;
-        width: min(420px, calc(100vw - 28px));
-        height: min(700px, calc(100vh - 88px));
+        width: min(380px, calc(100vw - 28px));
+        height: min(620px, calc(100vh - 92px));
         background: ${backgroundColor};
         border: 1px solid rgba(22, 25, 30, 0.14);
         border-radius: 10px;
@@ -206,7 +206,7 @@ void (() => {
       }
       .messages {
         flex: 1 1 auto;
-        min-height: 118px;
+        min-height: 96px;
         overflow: auto;
         display: flex;
         flex-direction: column;
@@ -289,7 +289,7 @@ void (() => {
       }
       .readiness-form {
         flex: 0 0 auto;
-        max-height: min(382px, calc(100vh - 318px));
+        max-height: min(330px, calc(100vh - 320px));
         overflow: auto;
       }
       .quick-replies button {
@@ -381,8 +381,8 @@ void (() => {
       .composer button:disabled { opacity: 0.5; cursor: not-allowed; }
       @media (max-width: 520px) {
         .assaddar-shell { right: 10px; left: 10px; bottom: 10px; }
-        .panel { width: 100%; height: min(680px, calc(100vh - 84px)); }
-        .readiness-form { max-height: min(360px, calc(100vh - 318px)); }
+        .panel { width: 100%; height: min(560px, calc(100vh - 96px)); }
+        .readiness-form { max-height: min(290px, calc(100vh - 318px)); }
         .launcher { float: right; }
       }
     </style>
@@ -477,7 +477,9 @@ void (() => {
     launcher.addEventListener("click", () => {
       panel.classList.add("open");
       launcher.style.display = "none";
-      inputEl.focus();
+      if (window.matchMedia("(min-width: 641px)").matches) {
+        inputEl.focus();
+      }
       if (!state.openTracked) {
         state.openTracked = true;
         persistState(context.config.assistantId, state);
