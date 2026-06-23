@@ -214,18 +214,7 @@ type TestAnswer = {
   handoffRecommended: boolean;
 };
 
-type TabKey =
-  | "setup"
-  | "overview"
-  | "knowledge"
-  | "leads"
-  | "channels"
-  | "automation"
-  | "inbox"
-  | "handoffs"
-  | "test"
-  | "widget"
-  | "settings";
+type TabKey = "home" | "leads" | "knowledge" | "channels" | "settings";
 
 type KnowledgeStatusFilter = "all" | "approved" | "draft";
 type InboxFilter = "all" | "needs_human" | "recent";
@@ -248,18 +237,22 @@ const defaultWidgetUrl =
 const defaultSiteUrl = "https://www.assad-dar.de/de";
 
 const tabs: Array<{ key: TabKey; label: string; icon: typeof BarChart3 }> = [
-  { key: "setup", label: "Setup", icon: ClipboardCheck },
-  { key: "overview", label: "Overview", icon: BarChart3 },
-  { key: "knowledge", label: "Knowledge", icon: Database },
+  { key: "home", label: "Home", icon: BarChart3 },
   { key: "leads", label: "Leads", icon: UserCheck },
+  { key: "knowledge", label: "Knowledge", icon: Database },
   { key: "channels", label: "Channels", icon: Globe2 },
-  { key: "automation", label: "Automation", icon: Sparkles },
-  { key: "inbox", label: "Inbox", icon: Inbox },
-  { key: "handoffs", label: "Handoffs", icon: AlertCircle },
-  { key: "test", label: "Test", icon: MessageCircle },
-  { key: "widget", label: "Widget", icon: Code2 },
   { key: "settings", label: "Settings", icon: Settings },
 ];
+
+const legacyTabMap: Record<string, TabKey> = {
+  setup: "home",
+  overview: "home",
+  automation: "settings",
+  inbox: "leads",
+  handoffs: "leads",
+  test: "settings",
+  widget: "settings",
+};
 
 const sampleQuestions = [
   "Can you help us automate customer support?",
@@ -815,8 +808,9 @@ function readAdminDeepLink(): AdminDeepLink {
   if (tenantId) {
     deepLink.tenantId = tenantId;
   }
-  if (isTabKey(rawTab)) {
-    deepLink.tab = rawTab;
+  const normalizedTab = normalizeTabKey(rawTab);
+  if (normalizedTab) {
+    deepLink.tab = normalizedTab;
   }
   if (handoffId) {
     deepLink.handoffId = handoffId;
@@ -829,6 +823,16 @@ function readAdminDeepLink(): AdminDeepLink {
 
 function isTabKey(value: string | null): value is TabKey {
   return tabs.some((tab) => tab.key === value);
+}
+
+function normalizeTabKey(value: string | null): TabKey | undefined {
+  if (!value) {
+    return undefined;
+  }
+  if (isTabKey(value)) {
+    return value;
+  }
+  return legacyTabMap[value];
 }
 
 function isHandoffFilter(value: string): value is HandoffFilter {
@@ -870,7 +874,7 @@ export default function DashboardPage() {
   const [editingKnowledgeId, setEditingKnowledgeId] = useState("");
   const [editQuestion, setEditQuestion] = useState("");
   const [editAnswer, setEditAnswer] = useState("");
-  const [activeTab, setActiveTab] = useState<TabKey>("setup");
+  const [activeTab, setActiveTab] = useState<TabKey>("home");
   const [knowledgeSearch, setKnowledgeSearch] = useState("");
   const [knowledgeStatusFilter, setKnowledgeStatusFilter] =
     useState<KnowledgeStatusFilter>("all");
@@ -1096,6 +1100,15 @@ export default function DashboardPage() {
   const wonLeadCount = leadHandoffs.filter(
     (handoff) => getPipelineStage(handoff) === "won",
   ).length;
+  const activeTabLabel =
+    tabs.find((tab) => tab.key === activeTab)?.label ?? "Home";
+  const activeTabDescription: Record<TabKey, string> = {
+    home: "Daily status, next actions, and launch readiness.",
+    leads: "Captured leads, customer conversations, and human handoffs.",
+    knowledge: "Approved answers, website imports, and unanswered questions.",
+    channels: "Website, telephone, WhatsApp, Messenger, and Instagram setup.",
+    settings: "Business profile, widget install, automation, and testing.",
+  };
   const nextActions = [
     openLeads.length
       ? {
@@ -1137,7 +1150,7 @@ export default function DashboardPage() {
           tone: "warn",
           title: "Verify website widget",
           detail: "Run the install check after every website or widget deploy.",
-          tab: "widget" as TabKey,
+          tab: "settings" as TabKey,
         }
       : null,
     !leadCaptureEnabled
@@ -1145,7 +1158,7 @@ export default function DashboardPage() {
           tone: "warn",
           title: "Enable lead capture",
           detail: "Lead capture is currently off for the widget.",
-          tab: "widget" as TabKey,
+          tab: "settings" as TabKey,
         }
       : null,
     !telephoneConnection?.externalAccountId
@@ -1161,7 +1174,7 @@ export default function DashboardPage() {
           tone: "info",
           title: "Enable visitor confirmation",
           detail: "Visitors can receive a clear email after submitting a lead.",
-          tab: "automation" as TabKey,
+          tab: "settings" as TabKey,
         }
       : null,
     conversations.length === 0
@@ -1169,7 +1182,7 @@ export default function DashboardPage() {
           tone: "info",
           title: "Run a live website test",
           detail: "Open the site widget, ask a real question, and confirm it lands here.",
-          tab: "test" as TabKey,
+          tab: "settings" as TabKey,
         }
       : null,
   ].filter(Boolean) as Array<{
@@ -1214,13 +1227,13 @@ export default function DashboardPage() {
       label: "Test answer",
       done: Boolean(testAnswer),
       action: "Run test",
-      tab: "test" as TabKey,
+      tab: "settings" as TabKey,
     },
     {
       label: "Widget",
       done: Boolean(installCheck?.installed),
       action: "Verify install",
-      tab: "widget" as TabKey,
+      tab: "settings" as TabKey,
     },
     {
       label: "Channels",
@@ -1235,7 +1248,7 @@ export default function DashboardPage() {
           automationSettings.autoQualifyReadinessEnabled,
       ),
       action: "Review rules",
-      tab: "automation" as TabKey,
+      tab: "settings" as TabKey,
     },
   ];
   const completedSteps = setupSteps.filter((step) => step.done).length;
@@ -1358,7 +1371,7 @@ export default function DashboardPage() {
       setActiveTab("leads");
       setSelectedLeadId(handoff.id);
     } else {
-      setActiveTab("handoffs");
+      setActiveTab("leads");
       setHandoffFilter(isHandoffFilter(handoff.status) ? handoff.status : "all");
     }
     setStatus("Opened linked request");
@@ -1380,7 +1393,7 @@ export default function DashboardPage() {
 
     setSelectedConversationId(conversation.id);
     if (!deepLink.handoffId) {
-      setActiveTab("inbox");
+      setActiveTab("leads");
       setStatus("Opened linked conversation");
     }
   }, [deepLink.conversationId, deepLink.handoffId, conversations]);
@@ -2178,122 +2191,6 @@ export default function DashboardPage() {
     );
   }
 
-  function renderSetupWizard() {
-    return (
-      <div className="workspaceStack">
-        <section className="panel launchWizard">
-          <div className="panelHeader">
-            <div className="panelTitle">
-              <ClipboardCheck size={18} />
-              <h2>Launch setup</h2>
-            </div>
-            <span className="countPill">
-              {completedSteps}/{setupSteps.length}
-            </span>
-          </div>
-          <div className="progressTrack large">
-            <span
-              style={{
-                width: `${(completedSteps / setupSteps.length) * 100}%`,
-              }}
-            />
-          </div>
-          <div className="wizardSteps">
-            {setupSteps.map((step, index) => (
-              <button
-                data-done={step.done ? "true" : "false"}
-                key={step.label}
-                type="button"
-                onClick={() => setActiveTab(step.tab)}
-              >
-                <small>{index + 1}</small>
-                <strong>{step.label}</strong>
-                <span>{step.done ? "Complete" : step.action}</span>
-              </button>
-            ))}
-          </div>
-        </section>
-
-        <div className="quickStartGrid">
-          <section className="panel">
-            <div className="panelHeader">
-              <div className="panelTitle">
-                <Sparkles size={18} />
-                <h2>Assaddar starter pack</h2>
-              </div>
-            </div>
-            <p className="mutedText">
-              Add the approved consultancy baseline for services, process,
-              privacy, pricing, and consultation capture.
-            </p>
-            <button
-              className="primaryButton full"
-              type="button"
-              disabled={busy || !selectedTenant}
-              onClick={importStarterKnowledge}
-            >
-              <Plus size={16} />
-              Import starter FAQs
-            </button>
-          </section>
-
-          <section className="panel">
-            <div className="panelHeader">
-              <div className="panelTitle">
-                <Globe2 size={18} />
-                <h2>Website check</h2>
-              </div>
-            </div>
-            <label className="field">
-              <span>Website URL</span>
-              <input
-                value={siteUrl}
-                onChange={(event) => setSiteUrl(event.target.value)}
-              />
-            </label>
-            <div className="rowActions">
-              <button
-                className="secondaryButton"
-                type="button"
-                disabled={busy || !selectedTenant || !siteUrl}
-                onClick={scanWebsiteForKnowledge}
-              >
-                <Upload size={16} />
-                Import knowledge
-              </button>
-              <button
-                className="secondaryButton"
-                type="button"
-                disabled={busy || !selectedTenant || !siteUrl}
-                onClick={verifyWidgetInstall}
-              >
-                <ShieldCheck size={16} />
-                Verify widget
-              </button>
-            </div>
-            {installCheck ? (
-              <div
-                className="installResult"
-                data-installed={installCheck.installed ? "true" : "false"}
-              >
-                {installCheck.installed ? (
-                  <CheckCircle2 size={16} />
-                ) : (
-                  <AlertCircle size={16} />
-                )}
-                <span>
-                  {installCheck.installed
-                    ? "Widget found on website"
-                    : "Widget not detected yet"}
-                </span>
-              </div>
-            ) : null}
-          </section>
-        </div>
-      </div>
-    );
-  }
-
   function renderTodayPanel() {
     const activeAutomationCount = [
       automationSettings.ownerLeadEmailEnabled,
@@ -2338,7 +2235,7 @@ export default function DashboardPage() {
             <strong>{unansweredQuestions.length}</strong>
             <small>FAQ drafts</small>
           </button>
-          <button type="button" onClick={() => setActiveTab("automation")}>
+          <button type="button" onClick={() => setActiveTab("settings")}>
             <span>Automation</span>
             <strong>{activeAutomationCount}/5</strong>
             <small>Rules active</small>
@@ -2436,7 +2333,7 @@ export default function DashboardPage() {
                     className="plainListButton"
                     key={handoff.id}
                     type="button"
-                    onClick={() => setActiveTab("handoffs")}
+                    onClick={() => setActiveTab("leads")}
                   >
                     <strong>{handoff.reason}</strong>
                     <span>{handoff.requesterMessage}</span>
@@ -2465,7 +2362,7 @@ export default function DashboardPage() {
                     type="button"
                     onClick={() => {
                       setSelectedConversationId(conversation.id);
-                      setActiveTab("inbox");
+                      setActiveTab("leads");
                     }}
                   >
                     <strong>{titleCase(conversation.channel)}</strong>
@@ -2892,7 +2789,7 @@ export default function DashboardPage() {
                           type="button"
                           onClick={() => {
                             setSelectedConversationId(item.conversationId ?? "");
-                            setActiveTab("inbox");
+                            setActiveTab("leads");
                           }}
                         >
                           <Inbox size={15} />
@@ -4068,7 +3965,7 @@ export default function DashboardPage() {
                     <button
                       className="secondaryButton full"
                       type="button"
-                      onClick={() => setActiveTab("widget")}
+                      onClick={() => setActiveTab("settings")}
                     >
                       <Code2 size={15} />
                       Open widget setup
@@ -4552,6 +4449,155 @@ export default function DashboardPage() {
     );
   }
 
+  function renderHome() {
+    return (
+      <div className="workspaceStack">
+        <section className="workspaceIntro homeIntro">
+          <div>
+            <span className="eyebrow">Command center</span>
+            <h2>One place to run the assistant</h2>
+            <p>
+              Track what needs attention, improve the assistant knowledge, and
+              keep the website assistant ready for assad-dar.de.
+            </p>
+          </div>
+          <div className="quickActionGrid">
+            <button type="button" onClick={() => setActiveTab("leads")}>
+              <UserCheck size={16} />
+              Leads
+            </button>
+            <button type="button" onClick={() => setActiveTab("knowledge")}>
+              <Database size={16} />
+              Knowledge
+            </button>
+            <button type="button" onClick={() => setActiveTab("channels")}>
+              <Globe2 size={16} />
+              Channels
+            </button>
+            <button type="button" onClick={() => setActiveTab("settings")}>
+              <Settings size={16} />
+              Settings
+            </button>
+          </div>
+        </section>
+        {renderOverview()}
+      </div>
+    );
+  }
+
+  function renderLeadsWorkspace() {
+    return (
+      <div className="workspaceStack">
+        <section className="workspaceIntro">
+          <div>
+            <span className="eyebrow">Customer work</span>
+            <h2>Leads, messages, and handoffs</h2>
+            <p>
+              Every customer conversation that needs human attention now lives
+              here, so the owner can answer, assign, and resolve work without
+              switching tabs.
+            </p>
+          </div>
+          <div className="workspaceIntroStats">
+            <article>
+              <span>Open leads</span>
+              <strong>{openLeads.length}</strong>
+            </article>
+            <article>
+              <span>Conversations</span>
+              <strong>{conversations.length}</strong>
+            </article>
+            <article>
+              <span>Handoffs</span>
+              <strong>{openHandoffs.length}</strong>
+            </article>
+          </div>
+        </section>
+        {renderLeads()}
+        <div className="leadSupportGrid">
+          {renderInbox()}
+          {renderHandoffs()}
+        </div>
+      </div>
+    );
+  }
+
+  function renderSettingsWorkspace() {
+    return (
+      <div className="workspaceStack">
+        <section className="workspaceIntro">
+          <div>
+            <span className="eyebrow">Configuration</span>
+            <h2>Assistant setup, widget, automation, and testing</h2>
+            <p>
+              The setup tools are grouped here so users configure the system in
+              one place instead of jumping between small technical tabs.
+            </p>
+          </div>
+          <div className="quickActionGrid">
+            <button
+              type="button"
+              onClick={() =>
+                document
+                  .getElementById("business-settings")
+                  ?.scrollIntoView({ behavior: "smooth", block: "start" })
+              }
+            >
+              <Sparkles size={16} />
+              Profile
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                document
+                  .getElementById("widget-settings")
+                  ?.scrollIntoView({ behavior: "smooth", block: "start" })
+              }
+            >
+              <Code2 size={16} />
+              Widget
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                document
+                  .getElementById("automation-settings")
+                  ?.scrollIntoView({ behavior: "smooth", block: "start" })
+              }
+            >
+              <Sparkles size={16} />
+              Automation
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                document
+                  .getElementById("test-settings")
+                  ?.scrollIntoView({ behavior: "smooth", block: "start" })
+              }
+            >
+              <MessageCircle size={16} />
+              Test
+            </button>
+          </div>
+        </section>
+
+        <div id="business-settings" className="settingsSection">
+          {renderSettings()}
+        </div>
+        <div id="widget-settings" className="settingsSection">
+          {renderWidget()}
+        </div>
+        <div id="automation-settings" className="settingsSection">
+          {renderAutomation()}
+        </div>
+        <div id="test-settings" className="settingsSection">
+          {renderTestStudio()}
+        </div>
+      </div>
+    );
+  }
+
   function renderActiveTab() {
     if (!selectedTenant) {
       return (
@@ -4563,37 +4609,19 @@ export default function DashboardPage() {
       );
     }
 
-    if (activeTab === "setup") {
-      return renderSetupWizard();
-    }
-    if (activeTab === "overview") {
-      return renderOverview();
+    if (activeTab === "home") {
+      return renderHome();
     }
     if (activeTab === "knowledge") {
       return renderKnowledge();
     }
     if (activeTab === "leads") {
-      return renderLeads();
+      return renderLeadsWorkspace();
     }
     if (activeTab === "channels") {
       return renderChannels();
     }
-    if (activeTab === "automation") {
-      return renderAutomation();
-    }
-    if (activeTab === "inbox") {
-      return renderInbox();
-    }
-    if (activeTab === "handoffs") {
-      return renderHandoffs();
-    }
-    if (activeTab === "test") {
-      return renderTestStudio();
-    }
-    if (activeTab === "widget") {
-      return renderWidget();
-    }
-    return renderSettings();
+    return renderSettingsWorkspace();
   }
 
   if (!adminToken || (!connectionAttempted && !tenants.length)) {
@@ -4813,12 +4841,9 @@ export default function DashboardPage() {
       <section className="workspace">
         <header className="topbar">
           <div className="titleGroup">
-            <span className="eyebrow">Workspace</span>
+            <span className="eyebrow">{activeTabLabel}</span>
             <h1>{selectedTenant?.name ?? "Launch setup"}</h1>
-            <p>
-              {selectedTenant?.publicId ??
-                "Connect, choose a tenant, add knowledge, and install the widget."}
-            </p>
+            <p>{activeTabDescription[activeTab]}</p>
           </div>
           <span className="status" data-tone={statusKind}>
             {statusKind === "danger" ? (
