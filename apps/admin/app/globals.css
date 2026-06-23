@@ -1890,6 +1890,7 @@ textarea {
 .channelGrid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  align-items: start;
   gap: 14px;
 }
 
@@ -2005,6 +2006,58 @@ textarea {
   padding-left: 10px;
   font-size: 13px;
   line-height: 1.45;
+}
+
+.channelGuideLink {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  grid-template-areas:
+    "icon label"
+    "icon detail";
+  column-gap: 8px;
+  align-items: center;
+  border: 1px solid rgba(166, 110, 47, 0.2);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.78);
+  color: var(--text);
+  padding: 10px;
+  text-decoration: none;
+  transition:
+    border-color 140ms ease,
+    color 140ms ease,
+    background 140ms ease;
+}
+
+.channelGuideLink:hover {
+  border-color: var(--accent);
+  background: #ffffff;
+  color: var(--accent);
+}
+
+.channelGuideLink svg {
+  grid-area: icon;
+  color: var(--accent);
+}
+
+.channelGuideLink span,
+.channelGuideLink small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.channelGuideLink span {
+  grid-area: label;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.channelGuideLink small {
+  grid-area: detail;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .automationRuleList,

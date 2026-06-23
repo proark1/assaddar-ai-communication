@@ -254,6 +254,27 @@ const legacyTabMap: Record<string, TabKey> = {
   widget: "settings",
 };
 
+const channelImplementationGuides: Partial<
+  Record<ChannelConnection["channel"], { label: string; url: string }>
+> = {
+  telephone: {
+    label: "Twilio Voice webhooks",
+    url: "https://www.twilio.com/docs/usage/webhooks/voice-webhooks",
+  },
+  whatsapp: {
+    label: "WhatsApp webhooks",
+    url: "https://developers.facebook.com/documentation/business-messaging/whatsapp/webhooks/overview/",
+  },
+  messenger: {
+    label: "Messenger webhooks",
+    url: "https://developers.facebook.com/documentation/business-messaging/messenger-platform/webhooks",
+  },
+  instagram: {
+    label: "Instagram webhooks",
+    url: "https://developers.facebook.com/docs/instagram-platform/webhooks/",
+  },
+};
+
 const sampleQuestions = [
   "Can you help us automate customer support?",
   "What kind of AI projects do you implement?",
@@ -3922,6 +3943,8 @@ export default function DashboardPage() {
                 connection.externalAccountId ??
                 "";
               const isWebsite = connection.channel === "website";
+              const implementationGuide =
+                channelImplementationGuides[connection.channel];
               return (
                 <article className="channelCard" key={connection.channel}>
                   <div className="channelCardHeader">
@@ -4005,6 +4028,32 @@ export default function DashboardPage() {
                   <div className="channelHint">
                     {channelSetupHint(connection)}
                   </div>
+
+                  {isWebsite ? (
+                    <a
+                      className="channelGuideLink"
+                      href="#widget-settings"
+                      onClick={(event) => {
+                        event.preventDefault();
+                        openSettingsSection("widget-settings");
+                      }}
+                    >
+                      <Code2 size={15} />
+                      <span>Implementation guide</span>
+                      <small>Widget setup</small>
+                    </a>
+                  ) : implementationGuide ? (
+                    <a
+                      className="channelGuideLink"
+                      href={implementationGuide.url}
+                      rel="noreferrer"
+                      target="_blank"
+                    >
+                      <ExternalLink size={15} />
+                      <span>Implementation guide</span>
+                      <small>{implementationGuide.label}</small>
+                    </a>
+                  ) : null}
 
                   {!isWebsite ? (
                     <div className="rowActions">
@@ -4449,6 +4498,15 @@ export default function DashboardPage() {
     );
   }
 
+  function openSettingsSection(sectionId: string) {
+    setActiveTab("settings");
+    window.setTimeout(() => {
+      document
+        .getElementById(sectionId)
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 0);
+  }
+
   function renderHome() {
     return (
       <div className="workspaceStack">
@@ -4537,44 +4595,28 @@ export default function DashboardPage() {
           <div className="quickActionGrid">
             <button
               type="button"
-              onClick={() =>
-                document
-                  .getElementById("business-settings")
-                  ?.scrollIntoView({ behavior: "smooth", block: "start" })
-              }
+              onClick={() => openSettingsSection("business-settings")}
             >
               <Sparkles size={16} />
               Profile
             </button>
             <button
               type="button"
-              onClick={() =>
-                document
-                  .getElementById("widget-settings")
-                  ?.scrollIntoView({ behavior: "smooth", block: "start" })
-              }
+              onClick={() => openSettingsSection("widget-settings")}
             >
               <Code2 size={16} />
               Widget
             </button>
             <button
               type="button"
-              onClick={() =>
-                document
-                  .getElementById("automation-settings")
-                  ?.scrollIntoView({ behavior: "smooth", block: "start" })
-              }
+              onClick={() => openSettingsSection("automation-settings")}
             >
               <Sparkles size={16} />
               Automation
             </button>
             <button
               type="button"
-              onClick={() =>
-                document
-                  .getElementById("test-settings")
-                  ?.scrollIntoView({ behavior: "smooth", block: "start" })
-              }
+              onClick={() => openSettingsSection("test-settings")}
             >
               <MessageCircle size={16} />
               Test
