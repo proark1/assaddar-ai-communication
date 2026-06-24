@@ -16,6 +16,7 @@ import {
   auditLogs,
   blockedTopics,
   channelConnections,
+  conversationContacts,
   contacts,
   conversations,
   escalationRules,
@@ -682,18 +683,12 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
         )
         .limit(1);
       if (existing) {
-        if (contact && !existing.contactId) {
-          const [updated] = await this.db
-            .update(conversations)
-            .set({ contactId: contact.id, updatedAt: sql`now()` })
-            .where(
-              and(
-                eq(conversations.tenantId, input.tenantId),
-                eq(conversations.id, existing.id),
-              ),
-            )
-            .returning();
-          return updated ?? existing;
+        if (contact) {
+          await this.linkConversationContact(
+            input.tenantId,
+            existing.id,
+            contact.id,
+          );
         }
         return existing;
       }
@@ -703,7 +698,6 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       .insert(conversations)
       .values({
         tenantId: input.tenantId,
-        contactId: contact?.id,
         publicId: input.publicConversationId ?? createPublicConversationId(),
         channel: input.channel,
         externalUserId: input.externalUserId,
@@ -713,6 +707,14 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
 
     if (!conversation) {
       throw new Error("Failed to create conversation.");
+    }
+
+    if (contact) {
+      await this.linkConversationContact(
+        input.tenantId,
+        conversation.id,
+        contact.id,
+      );
     }
 
     return conversation;
@@ -743,28 +745,28 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
 
     const channel = input.channel ?? (conversation.channel as Channel);
     const externalUserId = input.externalUserId ?? conversation.externalUserId;
+    const linkedContactId = await this.getConversationContactId(
+      input.tenantId,
+      conversation.id,
+    );
     const contact = await this.resolveContactForConversation({
       tenantId: input.tenantId,
       channel,
       externalUserId: externalUserId ?? undefined,
       contact: input.contact,
-      preferredContactId: conversation.contactId ?? undefined,
+      preferredContactId: linkedContactId ?? undefined,
     });
 
     if (!contact) {
       return null;
     }
 
-    if (conversation.contactId !== contact.id) {
-      await this.db
-        .update(conversations)
-        .set({ contactId: contact.id, updatedAt: sql`now()` })
-        .where(
-          and(
-            eq(conversations.tenantId, input.tenantId),
-            eq(conversations.id, conversation.id),
-          ),
-        );
+    if (linkedContactId !== contact.id) {
+      await this.linkConversationContact(
+        input.tenantId,
+        conversation.id,
+        contact.id,
+      );
     }
 
     await this.audit(
@@ -875,7 +877,20 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
           contact: contacts,
         })
         .from(conversations)
-        .leftJoin(contacts, eq(conversations.contactId, contacts.id))
+        .leftJoin(
+          conversationContacts,
+          and(
+            eq(conversationContacts.tenantId, conversations.tenantId),
+            eq(conversationContacts.conversationId, conversations.id),
+          ),
+        )
+        .leftJoin(
+          contacts,
+          and(
+            eq(contacts.tenantId, tenantId),
+            eq(contacts.id, conversationContacts.contactId),
+          ),
+        )
         .where(eq(conversations.tenantId, tenantId))
         .orderBy(desc(conversations.updatedAt))
         .limit(100),
@@ -1456,6 +1471,51 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       .returning();
 
     return created ?? null;
+  }
+
+  private async getConversationContactId(
+    tenantId: string,
+    conversationId: string,
+  ) {
+    const [link] = await this.db
+      .select({
+        contactId: conversationContacts.contactId,
+      })
+      .from(conversationContacts)
+      .where(
+        and(
+          eq(conversationContacts.tenantId, tenantId),
+          eq(conversationContacts.conversationId, conversationId),
+        ),
+      )
+      .limit(1);
+
+    return link?.contactId ?? null;
+  }
+
+  private async linkConversationContact(
+    tenantId: string,
+    conversationId: string,
+    contactId: string,
+  ) {
+    await this.db
+      .insert(conversationContacts)
+      .values({
+        tenantId,
+        conversationId,
+        contactId,
+        updatedAt: sql`now()`,
+      })
+      .onConflictDoUpdate({
+        target: [
+          conversationContacts.tenantId,
+          conversationContacts.conversationId,
+        ],
+        set: {
+          contactId,
+          updatedAt: sql`now()`,
+        },
+      });
   }
 
   private async findMatchingContact(

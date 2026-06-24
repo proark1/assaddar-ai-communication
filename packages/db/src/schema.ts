@@ -500,9 +500,6 @@ export const conversations = pgTable(
     tenantId: uuid("tenant_id")
       .notNull()
       .references(() => tenants.id, { onDelete: "cascade" }),
-    contactId: uuid("contact_id").references(() => contacts.id, {
-      onDelete: "set null",
-    }),
     publicId: text("public_id").notNull(),
     channel: text("channel").notNull(),
     externalUserId: text("external_user_id"),
@@ -518,7 +515,30 @@ export const conversations = pgTable(
   (table) => [
     uniqueIndex("conversations_public_id_idx").on(table.publicId),
     index("conversations_tenant_channel_idx").on(table.tenantId, table.channel),
-    index("conversations_tenant_contact_idx").on(
+  ],
+);
+
+export const conversationContacts = pgTable(
+  "conversation_contacts",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    conversationId: uuid("conversation_id")
+      .notNull()
+      .references(() => conversations.id, { onDelete: "cascade" }),
+    contactId: uuid("contact_id")
+      .notNull()
+      .references(() => contacts.id, { onDelete: "cascade" }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("conversation_contacts_tenant_conversation_idx").on(
+      table.tenantId,
+      table.conversationId,
+    ),
+    index("conversation_contacts_tenant_contact_idx").on(
       table.tenantId,
       table.contactId,
     ),

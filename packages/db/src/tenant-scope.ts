@@ -6,12 +6,16 @@ export const TENANT_SCOPED_TABLES = [
   "blocked_topics",
   "business_hours",
   "escalation_rules",
+  "contacts",
+  "conversation_contacts",
   "conversations",
   "messages",
   "calls",
   "call_transcripts",
   "handoff_requests",
-  "answer_feedback"
+  "answer_feedback",
+  "message_deliveries",
+  "whatsapp_templates",
 ] as const;
 
 export type TenantScopedTable = (typeof TENANT_SCOPED_TABLES)[number];
