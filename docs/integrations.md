@@ -72,7 +72,8 @@ Current foundation:
 - Incoming call webhook receives Twilio form data
 - First request prompts with TwiML `<Gather input="speech">`
 - Speech result is normalized, sent through the answer engine, stored, and returned with TwiML `<Say>`
-- Handoff, transfer, media streams, and summaries are TODOs behind the same runtime boundary
+- Pressing `0` transfers to `TWILIO_TRANSFER_PHONE_NUMBER` when configured
+- Human handoff summaries, media streams, callback workflows, and deeper call analytics are TODOs behind the same runtime boundary
 
 Official docs checked:
 
@@ -88,7 +89,7 @@ Official docs checked:
 - Enforce WhatsApp and Messenger/Instagram response windows before sending.
 - Add retry queues and dead-letter handling for outbound delivery.
 - Add Twilio signature validation.
-- Add voice call transfer and callback workflows.
+- Add richer voice callback workflows and call summaries.
 - Add provider-specific integration health dashboards.
 - Add hard enforcement for WhatsApp template-only replies outside the 24-hour response window.
 - Sync WhatsApp template approval status from Meta instead of only storing admin-entered status.
