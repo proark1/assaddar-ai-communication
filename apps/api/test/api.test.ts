@@ -35,9 +35,38 @@ class MemoryPlatformStore
     publicId: string;
     tenantId: string;
     channel: Channel;
+    contactId?: string | null;
+    externalUserId?: string | null;
+    locale?: string;
     createdAt: Date;
+    updatedAt: Date;
   }> = [];
   messages: Array<Record<string, unknown>> = [];
+  contacts: Array<{
+    id: string;
+    tenantId: string;
+    displayName?: string | null;
+    email?: string | null;
+    phone?: string | null;
+    company?: string | null;
+    identifiers: Record<string, string[]>;
+    metadata: Record<string, unknown>;
+    createdAt: Date;
+    updatedAt: Date;
+  }> = [];
+  whatsappTemplates: Array<{
+    id: string;
+    tenantId: string;
+    name: string;
+    language: string;
+    category: string;
+    status: string;
+    body: string;
+    variables: string[];
+    createdAt: Date;
+    updatedAt: Date;
+  }> = [];
+  deliveries: Array<Record<string, unknown>> = [];
   channelConnections: Array<{
     id: string;
     tenantId: string;
@@ -283,7 +312,21 @@ class MemoryPlatformStore
     tenantId: string;
     publicConversationId?: string;
     channel: Channel;
+    externalUserId?: string | undefined;
+    locale?: string | undefined;
+    contact?: {
+      displayName?: string | null | undefined;
+      email?: string | null | undefined;
+      phone?: string | null | undefined;
+      company?: string | null | undefined;
+      metadata?: Record<string, unknown> | undefined;
+    };
   }) {
+    const contact = this.upsertContact(input.tenantId, {
+      channel: input.channel,
+      externalUserId: input.externalUserId,
+      ...(input.contact ?? {}),
+    });
     const existing = input.publicConversationId
       ? this.conversations.find(
           (conversation) =>
@@ -302,21 +345,99 @@ class MemoryPlatformStore
         `conv_${crypto.randomUUID().replaceAll("-", "").slice(0, 24)}`,
       tenantId: input.tenantId,
       channel: input.channel,
+      contactId: contact?.id ?? null,
+      externalUserId: input.externalUserId ?? null,
+      locale: input.locale ?? "en",
       createdAt: new Date(),
+      updatedAt: new Date(),
     };
     this.conversations.push(conversation);
     return conversation;
   }
 
+  async enrichConversationContact(input: {
+    tenantId: string;
+    conversationId: string;
+    channel?: Channel;
+    externalUserId?: string | null | undefined;
+    contact: {
+      displayName?: string | null | undefined;
+      email?: string | null | undefined;
+      phone?: string | null | undefined;
+      company?: string | null | undefined;
+      metadata?: Record<string, unknown> | undefined;
+    };
+  }) {
+    const conversation = this.conversations.find(
+      (item) =>
+        item.tenantId === input.tenantId && item.id === input.conversationId,
+    );
+    if (!conversation) {
+      throw new Error("Conversation not found.");
+    }
+    const contact = this.upsertContact(input.tenantId, {
+      channel: input.channel ?? conversation.channel,
+      externalUserId: input.externalUserId ?? conversation.externalUserId,
+      ...input.contact,
+    });
+    if (contact) {
+      conversation.contactId = contact.id;
+      conversation.updatedAt = new Date();
+    }
+    return contact;
+  }
+
   async addMessage(input: Record<string, unknown>) {
-    this.messages.push(input);
-    return input;
+    const message = {
+      id: crypto.randomUUID(),
+      createdAt: new Date(),
+      ...input,
+    };
+    this.messages.push(message);
+    const conversation = this.conversations.find(
+      (item) => item.id === input.conversationId,
+    );
+    if (conversation) {
+      conversation.updatedAt = new Date();
+    }
+    return message;
   }
 
   async listConversations(tenantId: string) {
     return this.conversations.filter(
       (conversation) => conversation.tenantId === tenantId,
     );
+  }
+
+  async listUnifiedInbox(tenantId: string) {
+    return this.conversations
+      .filter((conversation) => conversation.tenantId === tenantId)
+      .map((conversation) => {
+        const contact =
+          this.contacts.find((item) => item.id === conversation.contactId) ??
+          null;
+        const conversationMessages = this.messages.filter(
+          (message) => message.conversationId === conversation.id,
+        );
+        const lastMessage =
+          conversationMessages[conversationMessages.length - 1] ?? null;
+        return {
+          ...conversation,
+          contact,
+          lastMessage,
+          messageCount: conversationMessages.length,
+          openHandoffs: this.handoffs.filter(
+            (handoff) =>
+              handoff.conversationId === conversation.id &&
+              ["open", "in_progress"].includes(handoff.status),
+          ),
+          nextAction: "Monitor",
+        };
+      });
+  }
+
+  async listContacts(tenantId: string) {
+    return this.contacts.filter((contact) => contact.tenantId === tenantId);
   }
 
   async listConversationMessages(tenantId: string, conversationId: string) {
@@ -338,8 +459,7 @@ class MemoryPlatformStore
 
   async createHandoff(input: HandoffInput) {
     const metadata =
-      input.reason === "lead_capture" ||
-      input.reason === "readiness_assessment"
+      input.reason === "lead_capture" || input.reason === "readiness_assessment"
         ? { pipelineStage: "new", ...(input.metadata ?? {}) }
         : (input.metadata ?? {});
 
@@ -420,8 +540,101 @@ class MemoryPlatformStore
       totalHandoffs: this.handoffs.filter(
         (handoff) => handoff.tenantId === tenantId,
       ).length,
+      contacts: this.contacts.filter((contact) => contact.tenantId === tenantId)
+        .length,
       usageByStatus: this.usageEvents.filter(
         (event) => event.tenantId === tenantId,
+      ),
+    };
+  }
+
+  async recordMessageDelivery(input: Record<string, unknown>) {
+    const delivery = {
+      id: crypto.randomUUID(),
+      createdAt: new Date(),
+      ...input,
+    };
+    this.deliveries.push(delivery);
+    return delivery;
+  }
+
+  async listWhatsappTemplates(tenantId: string) {
+    return this.whatsappTemplates.filter(
+      (template) => template.tenantId === tenantId,
+    );
+  }
+
+  async upsertWhatsappTemplate(
+    tenantId: string,
+    input: {
+      name: string;
+      language?: string | undefined;
+      category?: string | undefined;
+      status?: string | undefined;
+      body: string;
+      variables?: string[] | undefined;
+    },
+  ) {
+    const language = input.language ?? "de";
+    const name = input.name.toLowerCase().replace(/[^a-z0-9_]+/g, "_");
+    const existing = this.whatsappTemplates.find(
+      (template) =>
+        template.tenantId === tenantId &&
+        template.name === name &&
+        template.language === language,
+    );
+    if (existing) {
+      Object.assign(existing, input, { name, language, updatedAt: new Date() });
+      return existing;
+    }
+    const template = {
+      id: crypto.randomUUID(),
+      tenantId,
+      name,
+      language,
+      category: input.category ?? "utility",
+      status: input.status ?? "draft",
+      body: input.body,
+      variables: input.variables ?? [],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    this.whatsappTemplates.push(template);
+    return template;
+  }
+
+  async getWhatsappCompliance(tenantId: string) {
+    const templates = await this.listWhatsappTemplates(tenantId);
+    const lastInbound = [...this.messages]
+      .reverse()
+      .find(
+        (message) =>
+          message.tenantId === tenantId &&
+          message.channel === "whatsapp" &&
+          message.direction === "inbound",
+      );
+    const lastInboundAt =
+      lastInbound?.createdAt instanceof Date ? lastInbound.createdAt : null;
+    const windowClosesAt = lastInboundAt
+      ? new Date(lastInboundAt.getTime() + 24 * 60 * 60 * 1000)
+      : null;
+    return {
+      lastInboundAt,
+      windowClosesAt,
+      canUseFreeformReply: Boolean(
+        windowClosesAt && windowClosesAt.getTime() > Date.now(),
+      ),
+      templates: {
+        total: templates.length,
+        approved: templates.filter((template) => template.status === "approved")
+          .length,
+        draft: templates.filter((template) => template.status === "draft")
+          .length,
+        needsAttention: 0,
+      },
+      recentDeliveries: this.deliveries.filter(
+        (delivery) =>
+          delivery.tenantId === tenantId && delivery.channel === "whatsapp",
       ),
     };
   }
@@ -436,6 +649,74 @@ class MemoryPlatformStore
   async deleteTenantData(tenantId: string) {
     this.tenants = this.tenants.filter((tenant) => tenant.id !== tenantId);
     this.chunks = this.chunks.filter((chunk) => chunk.tenantId !== tenantId);
+  }
+
+  private upsertContact(
+    tenantId: string,
+    input: {
+      channel: Channel;
+      externalUserId?: string | null | undefined;
+      displayName?: string | null | undefined;
+      email?: string | null | undefined;
+      phone?: string | null | undefined;
+      company?: string | null | undefined;
+      metadata?: Record<string, unknown> | undefined;
+    },
+  ) {
+    if (
+      !input.externalUserId &&
+      !input.displayName &&
+      !input.email &&
+      !input.phone &&
+      !input.company
+    ) {
+      return null;
+    }
+    const email = input.email?.toLowerCase() ?? null;
+    const phone = input.phone ?? null;
+    const existing = this.contacts.find(
+      (contact) =>
+        contact.tenantId === tenantId &&
+        ((email && contact.email === email) ||
+          (phone && contact.phone === phone) ||
+          (input.externalUserId &&
+            Object.values(contact.identifiers).some((values) =>
+              values.includes(input.externalUserId ?? ""),
+            ))),
+    );
+    const key = `${input.channel}Ids`;
+    if (existing) {
+      existing.displayName = input.displayName ?? existing.displayName ?? null;
+      existing.email = email ?? existing.email ?? null;
+      existing.phone = phone ?? existing.phone ?? null;
+      existing.company = input.company ?? existing.company ?? null;
+      existing.identifiers[key] = Array.from(
+        new Set([
+          ...(existing.identifiers[key] ?? []),
+          ...(input.externalUserId ? [input.externalUserId] : []),
+        ]),
+      );
+      existing.metadata = { ...existing.metadata, ...(input.metadata ?? {}) };
+      existing.updatedAt = new Date();
+      return existing;
+    }
+    const contact = {
+      id: crypto.randomUUID(),
+      tenantId,
+      displayName:
+        input.displayName ?? input.company ?? email ?? phone ?? "New contact",
+      email,
+      phone,
+      company: input.company ?? null,
+      identifiers: input.externalUserId
+        ? { [key]: [input.externalUserId] }
+        : {},
+      metadata: input.metadata ?? {},
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    this.contacts.push(contact);
+    return contact;
   }
 }
 
@@ -646,7 +927,8 @@ describe("API", () => {
       payload: {
         url: "https://assad-dar.de",
         assistantId: "asst_1234567890",
-        widgetUrl: "https://assaddar-widget-production.up.railway.app/widget.js",
+        widgetUrl:
+          "https://assaddar-widget-production.up.railway.app/widget.js",
       },
     });
 
@@ -1041,6 +1323,130 @@ describe("API", () => {
     });
 
     expect(response.statusCode).toBe(401);
+    await app.close();
+  });
+
+  it("creates contact profiles and unified inbox entries from captured leads", async () => {
+    const store = new MemoryPlatformStore();
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+    });
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+
+    const leadResponse = await app.inject({
+      method: "POST",
+      url: "/widget/leads",
+      payload: {
+        assistantId: tenant.publicId,
+        conversationId: "conv_lead_test",
+        visitorId: "visitor-1",
+        fields: {
+          name: "Mina Mustermann",
+          email: "mina@example.com",
+          phone: "+49 170 1234567",
+          company: "Mina GmbH",
+          projectType: "AI support automation",
+        },
+      },
+    });
+    expect(leadResponse.statusCode).toBe(201);
+
+    const contactsResponse = await app.inject({
+      method: "GET",
+      url: `/admin/tenants/${tenant.id}/contacts`,
+      headers: { "x-admin-token": "test-token" },
+    });
+    expect(contactsResponse.statusCode).toBe(200);
+    expect(
+      contactsResponse.json<Array<{ email: string; company: string }>>()[0],
+    ).toMatchObject({
+      email: "mina@example.com",
+      company: "Mina GmbH",
+    });
+
+    const inboxResponse = await app.inject({
+      method: "GET",
+      url: `/admin/tenants/${tenant.id}/inbox`,
+      headers: { "x-admin-token": "test-token" },
+    });
+    expect(inboxResponse.statusCode).toBe(200);
+    expect(
+      inboxResponse.json<
+        Array<{ contact: { displayName: string }; openHandoffs: unknown[] }>
+      >()[0],
+    ).toMatchObject({
+      contact: {
+        displayName: "Mina Mustermann",
+      },
+      openHandoffs: expect.any(Array),
+    });
+
+    const suggestionsResponse = await app.inject({
+      method: "GET",
+      url: `/admin/tenants/${tenant.id}/workflows/suggestions`,
+      headers: { "x-admin-token": "test-token" },
+    });
+    expect(suggestionsResponse.statusCode).toBe(200);
+    expect(
+      suggestionsResponse
+        .json<{ suggestions: Array<{ id: string }> }>()
+        .suggestions.some(
+          (suggestion) => suggestion.id === "handoff_assignment",
+        ),
+    ).toBe(true);
+
+    await app.close();
+  });
+
+  it("manages WhatsApp templates and compliance state", async () => {
+    const store = new MemoryPlatformStore();
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+    });
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+
+    const templateResponse = await app.inject({
+      method: "POST",
+      url: `/admin/tenants/${tenant.id}/whatsapp/templates`,
+      headers: { "x-admin-token": "test-token" },
+      payload: {
+        name: "continue conversation",
+        language: "de",
+        category: "utility",
+        status: "approved",
+        body: "Hallo {{name}}, bitte antworten Sie, damit wir Ihre Anfrage weiter bearbeiten koennen.",
+      },
+    });
+    expect(templateResponse.statusCode).toBe(201);
+    expect(
+      templateResponse.json<{ name: string; status: string }>(),
+    ).toMatchObject({
+      name: "continue_conversation",
+      status: "approved",
+    });
+
+    const complianceResponse = await app.inject({
+      method: "GET",
+      url: `/admin/tenants/${tenant.id}/whatsapp/compliance`,
+      headers: { "x-admin-token": "test-token" },
+    });
+    expect(complianceResponse.statusCode).toBe(200);
+    expect(
+      complianceResponse.json<{ templates: { approved: number } }>().templates,
+    ).toMatchObject({
+      approved: 1,
+    });
+
     await app.close();
   });
 

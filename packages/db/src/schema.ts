@@ -10,12 +10,16 @@ import {
   text,
   timestamp,
   uniqueIndex,
-  uuid
+  uuid,
 } from "drizzle-orm/pg-core";
 
 const timestamps = {
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
 };
 
 const vector = customType<{ data: number[]; driverData: string }>({
@@ -36,7 +40,7 @@ const vector = customType<{ data: number[]; driverData: string }>({
       .split(",")
       .filter(Boolean)
       .map(Number);
-  }
+  },
 });
 
 export type WidgetTheme = {
@@ -78,11 +82,19 @@ export const tenants = pgTable("tenants", {
   status: text("status").notNull().default("active"),
   defaultLocale: text("default_locale").notNull().default("en"),
   tone: text("tone").notNull().default("friendly"),
-  confidenceThreshold: numeric("confidence_threshold", { precision: 4, scale: 3 }).notNull().default("0.180"),
+  confidenceThreshold: numeric("confidence_threshold", {
+    precision: 4,
+    scale: 3,
+  })
+    .notNull()
+    .default("0.180"),
   maxMessageLength: integer("max_message_length").notNull().default(1200),
   retentionDays: integer("retention_days").notNull().default(365),
-  theme: jsonb("theme").$type<WidgetTheme>().notNull().default(sql`'{}'::jsonb`),
-  ...timestamps
+  theme: jsonb("theme")
+    .$type<WidgetTheme>()
+    .notNull()
+    .default(sql`'{}'::jsonb`),
+  ...timestamps,
 });
 
 export const users = pgTable(
@@ -92,32 +104,38 @@ export const users = pgTable(
     email: text("email").notNull(),
     name: text("name").notNull(),
     status: text("status").notNull().default("active"),
-    ...timestamps
+    ...timestamps,
   },
-  (table) => [uniqueIndex("users_email_idx").on(table.email)]
+  (table) => [uniqueIndex("users_email_idx").on(table.email)],
 );
 
 export const roles = pgTable("roles", {
   id: uuid("id").defaultRandom().primaryKey(),
   name: text("name").notNull().unique(),
   description: text("description"),
-  ...timestamps
+  ...timestamps,
 });
 
 export const memberships = pgTable(
   "memberships",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
-    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-    roleId: uuid("role_id").notNull().references(() => roles.id),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    roleId: uuid("role_id")
+      .notNull()
+      .references(() => roles.id),
     status: text("status").notNull().default("active"),
-    ...timestamps
+    ...timestamps,
   },
   (table) => [
     uniqueIndex("memberships_tenant_user_idx").on(table.tenantId, table.userId),
-    index("memberships_tenant_idx").on(table.tenantId)
-  ]
+    index("memberships_tenant_idx").on(table.tenantId),
+  ],
 );
 
 export const plans = pgTable("plans", {
@@ -125,268 +143,430 @@ export const plans = pgTable("plans", {
   name: text("name").notNull().unique(),
   monthlyMessageLimit: integer("monthly_message_limit").notNull(),
   monthlyPriceCents: integer("monthly_price_cents").notNull(),
-  features: jsonb("features").$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
-  ...timestamps
+  features: jsonb("features")
+    .$type<Record<string, unknown>>()
+    .notNull()
+    .default(sql`'{}'::jsonb`),
+  ...timestamps,
 });
 
 export const subscriptions = pgTable(
   "subscriptions",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
-    planId: uuid("plan_id").notNull().references(() => plans.id),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    planId: uuid("plan_id")
+      .notNull()
+      .references(() => plans.id),
     status: text("status").notNull().default("trialing"),
-    currentPeriodStart: timestamp("current_period_start", { withTimezone: true }),
+    currentPeriodStart: timestamp("current_period_start", {
+      withTimezone: true,
+    }),
     currentPeriodEnd: timestamp("current_period_end", { withTimezone: true }),
-    ...timestamps
+    ...timestamps,
   },
-  (table) => [index("subscriptions_tenant_idx").on(table.tenantId)]
+  (table) => [index("subscriptions_tenant_idx").on(table.tenantId)],
 );
 
 export const usageEvents = pgTable(
   "usage_events",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
     channel: text("channel").notNull(),
     eventType: text("event_type").notNull(),
     credits: integer("credits").notNull().default(0),
     estimatedCostCents: integer("estimated_cost_cents").notNull().default(0),
-    metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
+    metadata: jsonb("metadata")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
   },
-  (table) => [index("usage_events_tenant_created_idx").on(table.tenantId, table.createdAt)]
+  (table) => [
+    index("usage_events_tenant_created_idx").on(
+      table.tenantId,
+      table.createdAt,
+    ),
+  ],
 );
 
 export const apiKeys = pgTable(
   "api_keys",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }),
+    tenantId: uuid("tenant_id").references(() => tenants.id, {
+      onDelete: "cascade",
+    }),
     name: text("name").notNull(),
     keyHash: text("key_hash").notNull(),
-    scopes: text("scopes").array().notNull().default(sql`ARRAY[]::text[]`),
+    scopes: text("scopes")
+      .array()
+      .notNull()
+      .default(sql`ARRAY[]::text[]`),
     lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
     expiresAt: timestamp("expires_at", { withTimezone: true }),
-    ...timestamps
+    ...timestamps,
   },
-  (table) => [index("api_keys_tenant_idx").on(table.tenantId)]
+  (table) => [index("api_keys_tenant_idx").on(table.tenantId)],
 );
 
 export const channelConnections = pgTable(
   "channel_connections",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
     channel: text("channel").notNull(),
     provider: text("provider").notNull(),
     externalAccountId: text("external_account_id"),
     status: text("status").notNull().default("pending"),
     encryptedAccessToken: text("encrypted_access_token"),
     encryptedRefreshToken: text("encrypted_refresh_token"),
-    settings: jsonb("settings").$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
-    ...timestamps
+    settings: jsonb("settings")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    ...timestamps,
   },
   (table) => [
     index("channel_connections_tenant_idx").on(table.tenantId),
-    uniqueIndex("channel_connections_unique_idx").on(table.tenantId, table.channel, table.provider)
-  ]
+    uniqueIndex("channel_connections_unique_idx").on(
+      table.tenantId,
+      table.channel,
+      table.provider,
+    ),
+  ],
 );
 
 export const channelWebhookEvents = pgTable(
   "channel_webhook_events",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "set null" }),
+    tenantId: uuid("tenant_id").references(() => tenants.id, {
+      onDelete: "set null",
+    }),
     channel: text("channel").notNull(),
     providerEventId: text("provider_event_id"),
     eventType: text("event_type").notNull(),
     payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
     status: text("status").notNull().default("received"),
     error: text("error"),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    processedAt: timestamp("processed_at", { withTimezone: true })
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    processedAt: timestamp("processed_at", { withTimezone: true }),
   },
-  (table) => [index("channel_webhook_events_tenant_idx").on(table.tenantId)]
+  (table) => [index("channel_webhook_events_tenant_idx").on(table.tenantId)],
+);
+
+export const contacts = pgTable(
+  "contacts",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    displayName: text("display_name"),
+    email: text("email"),
+    phone: text("phone"),
+    company: text("company"),
+    status: text("status").notNull().default("active"),
+    confidence: integer("confidence").notNull().default(50),
+    identifiers: jsonb("identifiers")
+      .$type<Record<string, string[]>>()
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    metadata: jsonb("metadata")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    ...timestamps,
+  },
+  (table) => [
+    index("contacts_tenant_idx").on(table.tenantId),
+    index("contacts_tenant_email_idx").on(table.tenantId, table.email),
+    index("contacts_tenant_phone_idx").on(table.tenantId, table.phone),
+  ],
 );
 
 export const auditLogs = pgTable(
   "audit_logs",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "set null" }),
+    tenantId: uuid("tenant_id").references(() => tenants.id, {
+      onDelete: "set null",
+    }),
     actorType: text("actor_type").notNull(),
     actorId: text("actor_id"),
     action: text("action").notNull(),
     targetType: text("target_type"),
     targetId: text("target_id"),
-    metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
+    metadata: jsonb("metadata")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
   },
-  (table) => [index("audit_logs_tenant_created_idx").on(table.tenantId, table.createdAt)]
+  (table) => [
+    index("audit_logs_tenant_created_idx").on(table.tenantId, table.createdAt),
+  ],
 );
 
 export const knowledgeSources = pgTable(
   "knowledge_sources",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
     type: text("type").notNull(),
     name: text("name").notNull(),
     status: text("status").notNull().default("active"),
-    metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
-    ...timestamps
+    metadata: jsonb("metadata")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    ...timestamps,
   },
-  (table) => [index("knowledge_sources_tenant_idx").on(table.tenantId)]
+  (table) => [index("knowledge_sources_tenant_idx").on(table.tenantId)],
 );
 
 export const knowledgeDocuments = pgTable(
   "knowledge_documents",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
-    sourceId: uuid("source_id").notNull().references(() => knowledgeSources.id, { onDelete: "cascade" }),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    sourceId: uuid("source_id")
+      .notNull()
+      .references(() => knowledgeSources.id, { onDelete: "cascade" }),
     title: text("title").notNull(),
     content: text("content").notNull(),
     status: text("status").notNull().default("approved"),
     checksum: text("checksum"),
-    metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
-    ...timestamps
+    metadata: jsonb("metadata")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    ...timestamps,
   },
   (table) => [
     index("knowledge_documents_tenant_idx").on(table.tenantId),
-    index("knowledge_documents_source_idx").on(table.sourceId)
-  ]
+    index("knowledge_documents_source_idx").on(table.sourceId),
+  ],
 );
 
 export const knowledgeChunks = pgTable(
   "knowledge_chunks",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
-    documentId: uuid("document_id").notNull().references(() => knowledgeDocuments.id, { onDelete: "cascade" }),
-    sourceId: uuid("source_id").notNull().references(() => knowledgeSources.id, { onDelete: "cascade" }),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    documentId: uuid("document_id")
+      .notNull()
+      .references(() => knowledgeDocuments.id, { onDelete: "cascade" }),
+    sourceId: uuid("source_id")
+      .notNull()
+      .references(() => knowledgeSources.id, { onDelete: "cascade" }),
     title: text("title"),
     content: text("content").notNull(),
     embedding: vector("embedding"),
-    tags: text("tags").array().notNull().default(sql`ARRAY[]::text[]`),
-    metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
+    tags: text("tags")
+      .array()
+      .notNull()
+      .default(sql`ARRAY[]::text[]`),
+    metadata: jsonb("metadata")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default(sql`'{}'::jsonb`),
     status: text("status").notNull().default("approved"),
-    ...timestamps
+    ...timestamps,
   },
   (table) => [
     index("knowledge_chunks_tenant_idx").on(table.tenantId),
-    index("knowledge_chunks_document_idx").on(table.documentId)
-  ]
+    index("knowledge_chunks_document_idx").on(table.documentId),
+  ],
 );
 
 export const allowedIntents = pgTable(
   "allowed_intents",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     description: text("description"),
-    keywords: text("keywords").array().notNull().default(sql`ARRAY[]::text[]`),
-    examples: text("examples").array().notNull().default(sql`ARRAY[]::text[]`),
+    keywords: text("keywords")
+      .array()
+      .notNull()
+      .default(sql`ARRAY[]::text[]`),
+    examples: text("examples")
+      .array()
+      .notNull()
+      .default(sql`ARRAY[]::text[]`),
     enabled: boolean("enabled").notNull().default(true),
-    ...timestamps
+    ...timestamps,
   },
-  (table) => [uniqueIndex("allowed_intents_tenant_name_idx").on(table.tenantId, table.name)]
+  (table) => [
+    uniqueIndex("allowed_intents_tenant_name_idx").on(
+      table.tenantId,
+      table.name,
+    ),
+  ],
 );
 
 export const blockedTopics = pgTable(
   "blocked_topics",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
-    terms: text("terms").array().notNull().default(sql`ARRAY[]::text[]`),
+    terms: text("terms")
+      .array()
+      .notNull()
+      .default(sql`ARRAY[]::text[]`),
     response: text("response"),
     enabled: boolean("enabled").notNull().default(true),
-    ...timestamps
+    ...timestamps,
   },
-  (table) => [uniqueIndex("blocked_topics_tenant_name_idx").on(table.tenantId, table.name)]
+  (table) => [
+    uniqueIndex("blocked_topics_tenant_name_idx").on(
+      table.tenantId,
+      table.name,
+    ),
+  ],
 );
 
 export const businessHours = pgTable(
   "business_hours",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
     timezone: text("timezone").notNull().default("Europe/Berlin"),
     dayOfWeek: integer("day_of_week").notNull(),
     opensAt: text("opens_at"),
     closesAt: text("closes_at"),
     isClosed: boolean("is_closed").notNull().default(false),
-    ...timestamps
+    ...timestamps,
   },
-  (table) => [index("business_hours_tenant_idx").on(table.tenantId)]
+  (table) => [index("business_hours_tenant_idx").on(table.tenantId)],
 );
 
 export const escalationRules = pgTable(
   "escalation_rules",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     channel: text("channel").notNull().default("all"),
     contactLabel: text("contact_label"),
     contactValue: text("contact_value"),
     enabled: boolean("enabled").notNull().default(true),
-    createHandoffRequest: boolean("create_handoff_request").notNull().default(true),
-    rules: jsonb("rules").$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
-    ...timestamps
+    createHandoffRequest: boolean("create_handoff_request")
+      .notNull()
+      .default(true),
+    rules: jsonb("rules")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    ...timestamps,
   },
-  (table) => [index("escalation_rules_tenant_idx").on(table.tenantId)]
+  (table) => [index("escalation_rules_tenant_idx").on(table.tenantId)],
 );
 
 export const conversations = pgTable(
   "conversations",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    contactId: uuid("contact_id").references(() => contacts.id, {
+      onDelete: "set null",
+    }),
     publicId: text("public_id").notNull(),
     channel: text("channel").notNull(),
     externalUserId: text("external_user_id"),
     status: text("status").notNull().default("open"),
     locale: text("locale").notNull().default("en"),
     summary: text("summary"),
-    metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
-    ...timestamps
+    metadata: jsonb("metadata")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    ...timestamps,
   },
   (table) => [
     uniqueIndex("conversations_public_id_idx").on(table.publicId),
-    index("conversations_tenant_channel_idx").on(table.tenantId, table.channel)
-  ]
+    index("conversations_tenant_channel_idx").on(table.tenantId, table.channel),
+    index("conversations_tenant_contact_idx").on(
+      table.tenantId,
+      table.contactId,
+    ),
+  ],
 );
 
 export const messages = pgTable(
   "messages",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
-    conversationId: uuid("conversation_id").notNull().references(() => conversations.id, { onDelete: "cascade" }),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    conversationId: uuid("conversation_id")
+      .notNull()
+      .references(() => conversations.id, { onDelete: "cascade" }),
     channel: text("channel").notNull(),
     direction: text("direction").notNull(),
     role: text("role").notNull(),
     content: text("content").notNull(),
     status: text("status").notNull().default("stored"),
-    trace: jsonb("trace").$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
+    trace: jsonb("trace")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
   },
   (table) => [
-    index("messages_tenant_conversation_idx").on(table.tenantId, table.conversationId),
-    index("messages_created_idx").on(table.createdAt)
-  ]
+    index("messages_tenant_conversation_idx").on(
+      table.tenantId,
+      table.conversationId,
+    ),
+    index("messages_created_idx").on(table.createdAt),
+  ],
 );
 
 export const calls = pgTable(
   "calls",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
-    conversationId: uuid("conversation_id").references(() => conversations.id, { onDelete: "set null" }),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    conversationId: uuid("conversation_id").references(() => conversations.id, {
+      onDelete: "set null",
+    }),
     provider: text("provider").notNull().default("twilio"),
     providerCallId: text("provider_call_id"),
     fromNumber: text("from_number"),
@@ -394,55 +574,166 @@ export const calls = pgTable(
     status: text("status").notNull().default("received"),
     outcome: text("outcome"),
     summary: text("summary"),
-    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    startedAt: timestamp("started_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
     endedAt: timestamp("ended_at", { withTimezone: true }),
-    metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`)
+    metadata: jsonb("metadata")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default(sql`'{}'::jsonb`),
   },
-  (table) => [index("calls_tenant_started_idx").on(table.tenantId, table.startedAt)]
+  (table) => [
+    index("calls_tenant_started_idx").on(table.tenantId, table.startedAt),
+  ],
 );
 
 export const callTranscripts = pgTable(
   "call_transcripts",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
-    callId: uuid("call_id").notNull().references(() => calls.id, { onDelete: "cascade" }),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    callId: uuid("call_id")
+      .notNull()
+      .references(() => calls.id, { onDelete: "cascade" }),
     speaker: text("speaker").notNull(),
     content: text("content").notNull(),
     startedAtMs: integer("started_at_ms"),
     endedAtMs: integer("ended_at_ms"),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
   },
-  (table) => [index("call_transcripts_tenant_call_idx").on(table.tenantId, table.callId)]
+  (table) => [
+    index("call_transcripts_tenant_call_idx").on(table.tenantId, table.callId),
+  ],
 );
 
 export const handoffRequests = pgTable(
   "handoff_requests",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
-    conversationId: uuid("conversation_id").references(() => conversations.id, { onDelete: "set null" }),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    conversationId: uuid("conversation_id").references(() => conversations.id, {
+      onDelete: "set null",
+    }),
     channel: text("channel").notNull(),
     reason: text("reason").notNull(),
     requesterMessage: text("requester_message").notNull(),
     status: text("status").notNull().default("open"),
     assignedTo: text("assigned_to"),
-    metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
-    ...timestamps
+    metadata: jsonb("metadata")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    ...timestamps,
   },
-  (table) => [index("handoff_requests_tenant_status_idx").on(table.tenantId, table.status)]
+  (table) => [
+    index("handoff_requests_tenant_status_idx").on(
+      table.tenantId,
+      table.status,
+    ),
+  ],
 );
 
 export const answerFeedback = pgTable(
   "answer_feedback",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
-    conversationId: uuid("conversation_id").references(() => conversations.id, { onDelete: "cascade" }),
-    messageId: uuid("message_id").references(() => messages.id, { onDelete: "cascade" }),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    conversationId: uuid("conversation_id").references(() => conversations.id, {
+      onDelete: "cascade",
+    }),
+    messageId: uuid("message_id").references(() => messages.id, {
+      onDelete: "cascade",
+    }),
     rating: integer("rating").notNull(),
     comment: text("comment"),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
   },
-  (table) => [index("answer_feedback_tenant_idx").on(table.tenantId)]
+  (table) => [index("answer_feedback_tenant_idx").on(table.tenantId)],
+);
+
+export const messageDeliveries = pgTable(
+  "message_deliveries",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    messageId: uuid("message_id").references(() => messages.id, {
+      onDelete: "set null",
+    }),
+    conversationId: uuid("conversation_id").references(() => conversations.id, {
+      onDelete: "set null",
+    }),
+    channel: text("channel").notNull(),
+    provider: text("provider").notNull(),
+    providerMessageId: text("provider_message_id"),
+    status: text("status").notNull().default("queued"),
+    detail: text("detail"),
+    metadata: jsonb("metadata")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("message_deliveries_tenant_created_idx").on(
+      table.tenantId,
+      table.createdAt,
+    ),
+    index("message_deliveries_provider_message_idx").on(
+      table.providerMessageId,
+    ),
+  ],
+);
+
+export const whatsappTemplates = pgTable(
+  "whatsapp_templates",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    language: text("language").notNull().default("de"),
+    category: text("category").notNull().default("utility"),
+    status: text("status").notNull().default("draft"),
+    body: text("body").notNull(),
+    variables: text("variables")
+      .array()
+      .notNull()
+      .default(sql`ARRAY[]::text[]`),
+    providerTemplateId: text("provider_template_id"),
+    metadata: jsonb("metadata")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("whatsapp_templates_tenant_name_language_idx").on(
+      table.tenantId,
+      table.name,
+      table.language,
+    ),
+    index("whatsapp_templates_tenant_status_idx").on(
+      table.tenantId,
+      table.status,
+    ),
+  ],
 );

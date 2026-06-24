@@ -93,6 +93,26 @@ content-type: application/json
 
 Returns the reply, status, citations, and conversation ID. The API stores inbound/outbound messages, usage events, and handoff requests when needed.
 
+## Admin Operations
+
+```http
+GET /admin/tenants/{tenantId}/inbox
+GET /admin/tenants/{tenantId}/contacts
+GET /admin/tenants/{tenantId}/workflows/suggestions
+```
+
+The inbox endpoint returns conversations enriched with contact profile, latest message, open handoffs, message count, and next action. Contacts are tenant-scoped profiles merged from channel IDs, email, phone, company, and lead form fields. Workflow suggestions are deterministic operational recommendations for handoffs, WhatsApp readiness, and contact completion.
+
+## WhatsApp Operations
+
+```http
+GET /admin/tenants/{tenantId}/whatsapp/templates
+POST /admin/tenants/{tenantId}/whatsapp/templates
+GET /admin/tenants/{tenantId}/whatsapp/compliance
+```
+
+Templates include `name`, `language`, `category`, `status`, `body`, optional `variables`, and optional `providerTemplateId`. Compliance returns the last inbound WhatsApp timestamp, 24-hour response-window state, template counts, and recent delivery outcomes.
+
 ## GDPR Helpers
 
 ```http
@@ -100,7 +120,7 @@ GET /admin/tenants/{tenantId}/export
 DELETE /admin/tenants/{tenantId}
 ```
 
-The export endpoint returns tenant profile, knowledge, conversations, and handoff records. The delete endpoint cascades tenant-owned data through database foreign keys.
+The export endpoint returns tenant profile, knowledge, contacts, conversations, and handoff records. The delete endpoint cascades tenant-owned data through database foreign keys.
 
 ## Webhook Shells
 

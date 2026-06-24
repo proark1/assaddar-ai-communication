@@ -2716,6 +2716,148 @@ textarea {
   white-space: nowrap;
 }
 
+.contactGrid,
+.whatsappOpsGrid,
+.templateGrid {
+  display: grid;
+  gap: 12px;
+}
+
+.contactGrid {
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.contactCard,
+.opsCard,
+.templateCard,
+.deliveryRow {
+  display: grid;
+  gap: 9px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  padding: 13px;
+}
+
+.contactCard > div:first-child,
+.templateCard > div:first-child,
+.deliveryRow > div:first-child {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.contactCard strong,
+.templateCard strong,
+.deliveryRow strong,
+.opsCard strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  line-height: 1.25;
+}
+
+.contactCard span,
+.templateCard span,
+.deliveryRow span,
+.opsCard span,
+.opsCard small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.contactCard > small,
+.templateCard > small {
+  justify-self: start;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--text-soft);
+  padding: 4px 8px;
+  font-weight: 900;
+}
+
+.contactContextStrip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.contactContextStrip article {
+  display: grid;
+  gap: 3px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  padding: 10px;
+}
+
+.contactContextStrip span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.contactContextStrip strong {
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.whatsappOpsGrid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 14px;
+}
+
+.opsCard[data-alert="true"] {
+  border-color: var(--danger-line);
+  background: var(--danger-bg);
+}
+
+.opsCard strong {
+  font-size: 18px;
+}
+
+.templateGrid {
+  grid-template-columns: minmax(280px, 0.9fr) minmax(280px, 1fr) minmax(
+      240px,
+      0.8fr
+    );
+  align-items: start;
+}
+
+.templateEditor,
+.templateList {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.templateCard p,
+.deliveryRow p {
+  margin: 0;
+  color: var(--text-soft);
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+}
+
+.deliveryRow {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.conversationButton em {
+  justify-self: start;
+  border-radius: 999px;
+  background: var(--amber-bg);
+  color: var(--amber);
+  padding: 3px 7px;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+}
+
 @media (max-width: 1180px) {
   .shell {
     grid-template-columns: 1fr;
@@ -2746,6 +2888,12 @@ textarea {
   .quickStartGrid,
   .operationalGrid,
   .leadActionGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .templateGrid,
+  .whatsappOpsGrid,
+  .contactContextStrip {
     grid-template-columns: 1fr;
   }
 

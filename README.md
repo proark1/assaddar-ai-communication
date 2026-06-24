@@ -13,6 +13,11 @@ The product runtime is intentionally separate from any marketing website. A publ
 - Answer only from tenant-scoped approved knowledge.
 - Refuse or offer handoff for unknown, blocked, off-topic, or low-confidence requests.
 - Store conversations, messages, usage events, and audit logs.
+- Resolve website visitors, WhatsApp users, Messenger/Instagram IDs, and callers into tenant-scoped contact profiles.
+- Use a unified inbox view with contact context, latest message, handoff state, and next action.
+- Manage WhatsApp templates and view the 24-hour response-window compliance state.
+- Record provider delivery outcomes for social messaging sends.
+- Surface workflow recommendations for handoffs, WhatsApp readiness, and contact completion.
 - Run on Supabase Postgres with `pgvector`, with local Docker Postgres as an optional fallback.
 - Use adapter interfaces for Website, WhatsApp, Instagram/Messenger, TikTok, and Telephone.
 - Run core guardrail and tenant-isolation tests without external credentials.

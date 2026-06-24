@@ -9,22 +9,25 @@ import type {
   TenantPolicy,
 } from "@assaddar/core";
 import { createDefaultTenantPolicy, rankChunks } from "@assaddar/core";
-import { and, desc, eq, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, or, sql, type SQL } from "drizzle-orm";
 import type { Database } from "./client";
 import {
   allowedIntents,
   auditLogs,
   blockedTopics,
   channelConnections,
+  contacts,
   conversations,
   escalationRules,
   handoffRequests,
   knowledgeChunks,
   knowledgeDocuments,
   knowledgeSources,
+  messageDeliveries,
   messages,
   tenants,
   usageEvents,
+  whatsappTemplates,
   type WidgetTheme,
 } from "./schema";
 import { assertTenantId } from "./tenant-scope";
@@ -61,12 +64,42 @@ export type ConversationRecord = typeof conversations.$inferSelect;
 
 export type MessageRecord = typeof messages.$inferSelect;
 
+export type ContactRecord = typeof contacts.$inferSelect;
+
 export type ChannelConnectionInput = {
   channel: Channel;
   provider: string;
   externalAccountId?: string | null | undefined;
   status?: "pending" | "connected" | "disabled" | undefined;
   settings?: Record<string, unknown> | undefined;
+};
+
+export type ContactProfileInput = {
+  displayName?: string | null | undefined;
+  email?: string | null | undefined;
+  phone?: string | null | undefined;
+  company?: string | null | undefined;
+  identifiers?:
+    | Record<string, string[] | string | null | undefined>
+    | undefined;
+  metadata?: Record<string, unknown> | undefined;
+};
+
+export type WhatsappTemplateInput = {
+  name: string;
+  language?: string | undefined;
+  category?: "marketing" | "utility" | "authentication" | undefined;
+  status?:
+    | "draft"
+    | "submitted"
+    | "approved"
+    | "rejected"
+    | "paused"
+    | undefined;
+  body: string;
+  variables?: string[] | undefined;
+  providerTemplateId?: string | null | undefined;
+  metadata?: Record<string, unknown> | undefined;
 };
 
 export class TenantRepository implements AnswerDataStore, HandoffStore {
@@ -627,8 +660,16 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     channel: Channel;
     externalUserId?: string;
     locale?: string;
+    contact?: ContactProfileInput;
   }): Promise<ConversationRecord> {
     assertTenantId(input.tenantId);
+    const contact = await this.resolveContactForConversation({
+      tenantId: input.tenantId,
+      channel: input.channel,
+      externalUserId: input.externalUserId,
+      contact: input.contact,
+    });
+
     if (input.publicConversationId) {
       const [existing] = await this.db
         .select()
@@ -641,6 +682,19 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
         )
         .limit(1);
       if (existing) {
+        if (contact && !existing.contactId) {
+          const [updated] = await this.db
+            .update(conversations)
+            .set({ contactId: contact.id, updatedAt: sql`now()` })
+            .where(
+              and(
+                eq(conversations.tenantId, input.tenantId),
+                eq(conversations.id, existing.id),
+              ),
+            )
+            .returning();
+          return updated ?? existing;
+        }
         return existing;
       }
     }
@@ -649,6 +703,7 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       .insert(conversations)
       .values({
         tenantId: input.tenantId,
+        contactId: contact?.id,
         publicId: input.publicConversationId ?? createPublicConversationId(),
         channel: input.channel,
         externalUserId: input.externalUserId,
@@ -661,6 +716,70 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     }
 
     return conversation;
+  }
+
+  async enrichConversationContact(input: {
+    tenantId: string;
+    conversationId: string;
+    channel?: Channel;
+    externalUserId?: string | null;
+    contact: ContactProfileInput;
+  }) {
+    assertTenantId(input.tenantId);
+    const [conversation] = await this.db
+      .select()
+      .from(conversations)
+      .where(
+        and(
+          eq(conversations.tenantId, input.tenantId),
+          eq(conversations.id, input.conversationId),
+        ),
+      )
+      .limit(1);
+
+    if (!conversation) {
+      throw new Error("Conversation not found.");
+    }
+
+    const channel = input.channel ?? (conversation.channel as Channel);
+    const externalUserId = input.externalUserId ?? conversation.externalUserId;
+    const contact = await this.resolveContactForConversation({
+      tenantId: input.tenantId,
+      channel,
+      externalUserId: externalUserId ?? undefined,
+      contact: input.contact,
+      preferredContactId: conversation.contactId ?? undefined,
+    });
+
+    if (!contact) {
+      return null;
+    }
+
+    if (conversation.contactId !== contact.id) {
+      await this.db
+        .update(conversations)
+        .set({ contactId: contact.id, updatedAt: sql`now()` })
+        .where(
+          and(
+            eq(conversations.tenantId, input.tenantId),
+            eq(conversations.id, conversation.id),
+          ),
+        );
+    }
+
+    await this.audit(
+      input.tenantId,
+      "contact.enriched",
+      "contact",
+      contact.id,
+      {
+        conversationId: conversation.id,
+        channel,
+        fields: Object.keys(input.contact),
+      },
+    );
+
+    return contact;
   }
 
   async addMessage(input: {
@@ -693,6 +812,36 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     return message;
   }
 
+  async recordMessageDelivery(input: {
+    tenantId: string;
+    messageId?: string | null;
+    conversationId?: string | null;
+    channel: Channel;
+    provider: string;
+    providerMessageId?: string | null;
+    status: string;
+    detail?: string | null;
+    metadata?: Record<string, unknown>;
+  }) {
+    assertTenantId(input.tenantId);
+    const [delivery] = await this.db
+      .insert(messageDeliveries)
+      .values({
+        tenantId: input.tenantId,
+        messageId: input.messageId ?? null,
+        conversationId: input.conversationId ?? null,
+        channel: input.channel,
+        provider: input.provider,
+        providerMessageId: input.providerMessageId ?? null,
+        status: input.status,
+        detail: input.detail ?? null,
+        metadata: input.metadata ?? {},
+      })
+      .returning();
+
+    return delivery;
+  }
+
   async listConversationMessages(tenantId: string, conversationId: string) {
     assertTenantId(tenantId);
     return this.db
@@ -714,6 +863,110 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       .from(conversations)
       .where(eq(conversations.tenantId, tenantId))
       .orderBy(desc(conversations.createdAt))
+      .limit(100);
+  }
+
+  async listUnifiedInbox(tenantId: string) {
+    assertTenantId(tenantId);
+    const [conversationRows, recentMessages, openHandoffs] = await Promise.all([
+      this.db
+        .select({
+          conversation: conversations,
+          contact: contacts,
+        })
+        .from(conversations)
+        .leftJoin(contacts, eq(conversations.contactId, contacts.id))
+        .where(eq(conversations.tenantId, tenantId))
+        .orderBy(desc(conversations.updatedAt))
+        .limit(100),
+      this.db
+        .select()
+        .from(messages)
+        .where(eq(messages.tenantId, tenantId))
+        .orderBy(desc(messages.createdAt))
+        .limit(400),
+      this.db
+        .select()
+        .from(handoffRequests)
+        .where(
+          and(
+            eq(handoffRequests.tenantId, tenantId),
+            or(
+              eq(handoffRequests.status, "open"),
+              eq(handoffRequests.status, "in_progress"),
+            ),
+          ),
+        ),
+    ]);
+
+    const lastMessageByConversation = new Map<string, MessageRecord>();
+    const messageCountByConversation = new Map<string, number>();
+    for (const message of recentMessages) {
+      messageCountByConversation.set(
+        message.conversationId,
+        (messageCountByConversation.get(message.conversationId) ?? 0) + 1,
+      );
+      if (!lastMessageByConversation.has(message.conversationId)) {
+        lastMessageByConversation.set(message.conversationId, message);
+      }
+    }
+
+    const handoffsByConversation = new Map<string, typeof openHandoffs>();
+    for (const handoff of openHandoffs) {
+      if (!handoff.conversationId) {
+        continue;
+      }
+      const items = handoffsByConversation.get(handoff.conversationId) ?? [];
+      items.push(handoff);
+      handoffsByConversation.set(handoff.conversationId, items);
+    }
+
+    return conversationRows.map(({ conversation, contact }) => {
+      const lastMessage = lastMessageByConversation.get(conversation.id);
+      const handoffs = handoffsByConversation.get(conversation.id) ?? [];
+      return {
+        id: conversation.id,
+        publicId: conversation.publicId,
+        channel: conversation.channel,
+        status: conversation.status,
+        locale: conversation.locale,
+        externalUserId: conversation.externalUserId,
+        summary: conversation.summary,
+        createdAt: conversation.createdAt,
+        updatedAt: conversation.updatedAt,
+        contact,
+        lastMessage: lastMessage
+          ? {
+              id: lastMessage.id,
+              direction: lastMessage.direction,
+              role: lastMessage.role,
+              content: lastMessage.content,
+              createdAt: lastMessage.createdAt,
+            }
+          : null,
+        messageCount: messageCountByConversation.get(conversation.id) ?? 0,
+        openHandoffs: handoffs.map((handoff) => ({
+          id: handoff.id,
+          reason: handoff.reason,
+          status: handoff.status,
+          assignedTo: handoff.assignedTo,
+          createdAt: handoff.createdAt,
+        })),
+        nextAction: deriveConversationNextAction(
+          conversation.channel,
+          handoffs,
+        ),
+      };
+    });
+  }
+
+  async listContacts(tenantId: string) {
+    assertTenantId(tenantId);
+    return this.db
+      .select()
+      .from(contacts)
+      .where(eq(contacts.tenantId, tenantId))
+      .orderBy(desc(contacts.updatedAt))
       .limit(100);
   }
 
@@ -828,8 +1081,7 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
   async createHandoff(input: HandoffInput) {
     assertTenantId(input.tenantId);
     const metadata =
-      input.reason === "lead_capture" ||
-      input.reason === "readiness_assessment"
+      input.reason === "lead_capture" || input.reason === "readiness_assessment"
         ? { pipelineStage: "new", ...(input.metadata ?? {}) }
         : (input.metadata ?? {});
 
@@ -875,6 +1127,7 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       [knowledgeStats],
       [openHandoffStats],
       [totalHandoffStats],
+      [contactStats],
       usageByStatus,
     ] = await Promise.all([
       this.db
@@ -921,6 +1174,12 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
         .where(eq(handoffRequests.tenantId, tenantId)),
       this.db
         .select({
+          total: sql<number>`count(*)::int`,
+        })
+        .from(contacts)
+        .where(eq(contacts.tenantId, tenantId)),
+      this.db
+        .select({
           eventType: usageEvents.eventType,
           total: sql<number>`count(*)::int`,
           credits: sql<number>`coalesce(sum(${usageEvents.credits}), 0)::int`,
@@ -936,15 +1195,141 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       approvedKnowledge: knowledgeStats?.total ?? 0,
       openHandoffs: openHandoffStats?.total ?? 0,
       totalHandoffs: totalHandoffStats?.total ?? 0,
+      contacts: contactStats?.total ?? 0,
       lastConversationAt: conversationStats?.lastAt ?? null,
       lastMessageAt: messageStats?.lastAt ?? null,
       usageByStatus,
     };
   }
 
+  async listWhatsappTemplates(tenantId: string) {
+    assertTenantId(tenantId);
+    return this.db
+      .select()
+      .from(whatsappTemplates)
+      .where(eq(whatsappTemplates.tenantId, tenantId))
+      .orderBy(desc(whatsappTemplates.updatedAt));
+  }
+
+  async upsertWhatsappTemplate(tenantId: string, input: WhatsappTemplateInput) {
+    assertTenantId(tenantId);
+    const values = {
+      tenantId,
+      name: normalizeTemplateName(input.name),
+      language: input.language ?? "de",
+      category: input.category ?? "utility",
+      status: input.status ?? "draft",
+      body: input.body,
+      variables: input.variables ?? extractTemplateVariables(input.body),
+      providerTemplateId: input.providerTemplateId ?? null,
+      metadata: input.metadata ?? {},
+      updatedAt: sql`now()`,
+    };
+
+    const [template] = await this.db
+      .insert(whatsappTemplates)
+      .values(values)
+      .onConflictDoUpdate({
+        target: [
+          whatsappTemplates.tenantId,
+          whatsappTemplates.name,
+          whatsappTemplates.language,
+        ],
+        set: {
+          category: values.category,
+          status: values.status,
+          body: values.body,
+          variables: values.variables,
+          providerTemplateId: values.providerTemplateId,
+          metadata: values.metadata,
+          updatedAt: sql`now()`,
+        },
+      })
+      .returning();
+
+    if (!template) {
+      throw new Error("Failed to save WhatsApp template.");
+    }
+
+    await this.audit(
+      tenantId,
+      "whatsapp_template.saved",
+      "whatsapp_template",
+      template.id,
+      {
+        name: template.name,
+        language: template.language,
+        status: template.status,
+      },
+    );
+
+    return template;
+  }
+
+  async getWhatsappCompliance(tenantId: string) {
+    assertTenantId(tenantId);
+    const [recentInbound, templates, deliveries] = await Promise.all([
+      this.db
+        .select()
+        .from(messages)
+        .where(
+          and(
+            eq(messages.tenantId, tenantId),
+            eq(messages.channel, "whatsapp"),
+            eq(messages.direction, "inbound"),
+          ),
+        )
+        .orderBy(desc(messages.createdAt))
+        .limit(20),
+      this.listWhatsappTemplates(tenantId),
+      this.db
+        .select()
+        .from(messageDeliveries)
+        .where(
+          and(
+            eq(messageDeliveries.tenantId, tenantId),
+            eq(messageDeliveries.channel, "whatsapp"),
+          ),
+        )
+        .orderBy(desc(messageDeliveries.createdAt))
+        .limit(20),
+    ]);
+    const lastInbound = recentInbound[0];
+    const lastInboundAt = lastInbound?.createdAt ?? null;
+    const windowClosesAt = lastInboundAt
+      ? new Date(lastInboundAt.getTime() + 24 * 60 * 60 * 1000)
+      : null;
+    const now = Date.now();
+
+    return {
+      lastInboundAt,
+      windowClosesAt,
+      canUseFreeformReply: Boolean(
+        windowClosesAt && windowClosesAt.getTime() > now,
+      ),
+      templates: {
+        total: templates.length,
+        approved: templates.filter((template) => template.status === "approved")
+          .length,
+        draft: templates.filter((template) => template.status === "draft")
+          .length,
+        needsAttention: templates.filter((template) =>
+          ["rejected", "paused"].includes(template.status),
+        ).length,
+      },
+      recentDeliveries: deliveries.map((delivery) => ({
+        id: delivery.id,
+        providerMessageId: delivery.providerMessageId,
+        status: delivery.status,
+        detail: delivery.detail,
+        createdAt: delivery.createdAt,
+      })),
+    };
+  }
+
   async exportTenantData(tenantId: string) {
     assertTenantId(tenantId);
-    const [tenant, knowledge, tenantConversations, handoffs] =
+    const [tenant, knowledge, tenantConversations, handoffs, tenantContacts] =
       await Promise.all([
         this.getTenant(tenantId),
         this.listKnowledge(tenantId),
@@ -956,6 +1341,7 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
           .select()
           .from(handoffRequests)
           .where(eq(handoffRequests.tenantId, tenantId)),
+        this.listContacts(tenantId),
       ]);
 
     return {
@@ -963,12 +1349,175 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       knowledge,
       conversations: tenantConversations,
       handoffRequests: handoffs,
+      contacts: tenantContacts,
     };
   }
 
   async deleteTenantData(tenantId: string) {
     assertTenantId(tenantId);
     await this.db.delete(tenants).where(eq(tenants.id, tenantId));
+  }
+
+  private async resolveContactForConversation(input: {
+    tenantId: string;
+    channel: Channel;
+    externalUserId?: string | undefined;
+    contact?: ContactProfileInput | undefined;
+    preferredContactId?: string | undefined;
+  }): Promise<ContactRecord | null> {
+    const normalizedContact = normalizeContactInput(input.contact);
+    const identifierKey = channelIdentifierKey(input.channel);
+    const identifiers = mergeIdentifierValues(
+      normalizedContact.identifiers,
+      identifierKey,
+      input.externalUserId,
+    );
+    const phone =
+      normalizedContact.phone ??
+      (isPhoneIdentityChannel(input.channel)
+        ? normalizePhone(input.externalUserId)
+        : undefined);
+
+    if (
+      !input.preferredContactId &&
+      !input.externalUserId &&
+      !normalizedContact.email &&
+      !phone &&
+      !normalizedContact.displayName &&
+      !normalizedContact.company
+    ) {
+      return null;
+    }
+
+    const existing = await this.findMatchingContact(input.tenantId, {
+      preferredContactId: input.preferredContactId,
+      email: normalizedContact.email,
+      phone,
+      identifiers,
+    });
+
+    if (existing) {
+      const [updated] = await this.db
+        .update(contacts)
+        .set({
+          displayName:
+            normalizedContact.displayName ?? existing.displayName ?? phone,
+          email: normalizedContact.email ?? existing.email,
+          phone: phone ?? existing.phone,
+          company: normalizedContact.company ?? existing.company,
+          confidence: Math.max(
+            existing.confidence,
+            normalizedContact.confidence,
+          ),
+          identifiers: mergeIdentifierMaps(existing.identifiers, identifiers),
+          metadata: {
+            ...(existing.metadata ?? {}),
+            ...(normalizedContact.metadata ?? {}),
+            lastSeenChannel: input.channel,
+            lastSeenAt: new Date().toISOString(),
+          },
+          updatedAt: sql`now()`,
+        })
+        .where(
+          and(
+            eq(contacts.tenantId, input.tenantId),
+            eq(contacts.id, existing.id),
+          ),
+        )
+        .returning();
+
+      return updated ?? existing;
+    }
+
+    const [created] = await this.db
+      .insert(contacts)
+      .values({
+        tenantId: input.tenantId,
+        displayName:
+          normalizedContact.displayName ??
+          normalizedContact.company ??
+          normalizedContact.email ??
+          phone ??
+          (input.externalUserId
+            ? `${titleCase(input.channel)} contact`
+            : "New contact"),
+        email: normalizedContact.email ?? null,
+        phone: phone ?? null,
+        company: normalizedContact.company ?? null,
+        confidence: normalizedContact.confidence,
+        identifiers,
+        metadata: {
+          ...(normalizedContact.metadata ?? {}),
+          firstSeenChannel: input.channel,
+          lastSeenChannel: input.channel,
+          lastSeenAt: new Date().toISOString(),
+        },
+      })
+      .returning();
+
+    return created ?? null;
+  }
+
+  private async findMatchingContact(
+    tenantId: string,
+    input: {
+      preferredContactId?: string | undefined;
+      email?: string | undefined;
+      phone?: string | undefined;
+      identifiers: Record<string, string[]>;
+    },
+  ) {
+    if (input.preferredContactId) {
+      const [preferred] = await this.db
+        .select()
+        .from(contacts)
+        .where(
+          and(
+            eq(contacts.tenantId, tenantId),
+            eq(contacts.id, input.preferredContactId),
+          ),
+        )
+        .limit(1);
+      if (preferred) {
+        return preferred;
+      }
+    }
+
+    if (input.email || input.phone) {
+      const [matched] = await this.db
+        .select()
+        .from(contacts)
+        .where(
+          and(
+            eq(contacts.tenantId, tenantId),
+            input.email && input.phone
+              ? or(
+                  eq(contacts.email, input.email),
+                  eq(contacts.phone, input.phone),
+                )
+              : input.email
+                ? eq(contacts.email, input.email)
+                : eq(contacts.phone, input.phone ?? ""),
+          ),
+        )
+        .limit(1);
+      if (matched) {
+        return matched;
+      }
+    }
+
+    const candidates = await this.db
+      .select()
+      .from(contacts)
+      .where(eq(contacts.tenantId, tenantId))
+      .orderBy(desc(contacts.updatedAt))
+      .limit(300);
+
+    return (
+      candidates.find((candidate) =>
+        hasSharedIdentifier(candidate.identifiers, input.identifiers),
+      ) ?? null
+    );
   }
 
   private async createDefaultEscalationRule(tenantId: string) {
@@ -998,6 +1547,153 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       metadata,
     });
   }
+}
+
+function normalizeContactInput(input?: ContactProfileInput) {
+  const email = normalizeEmail(input?.email);
+  const phone = normalizePhone(input?.phone);
+  const displayName = normalizeOptionalText(input?.displayName);
+  const company = normalizeOptionalText(input?.company);
+  const metadata = input?.metadata ?? {};
+  const identifiers = normalizeIdentifierInput(input?.identifiers);
+  const confidence =
+    (email ? 20 : 0) +
+    (phone ? 20 : 0) +
+    (displayName ? 10 : 0) +
+    (company ? 10 : 0) +
+    (Object.keys(identifiers).length ? 20 : 0) +
+    40;
+
+  return {
+    displayName,
+    email,
+    phone,
+    company,
+    identifiers,
+    metadata,
+    confidence: Math.min(100, confidence),
+  };
+}
+
+function normalizeOptionalText(value?: string | null) {
+  const normalized = value?.trim();
+  return normalized || undefined;
+}
+
+function normalizeEmail(value?: string | null) {
+  const normalized = value?.trim().toLowerCase();
+  return normalized && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)
+    ? normalized
+    : undefined;
+}
+
+function normalizePhone(value?: string | null) {
+  const normalized = value?.replace(/[^\d+]/g, "").trim();
+  return normalized && normalized.length >= 6 ? normalized : undefined;
+}
+
+function normalizeIdentifierInput(
+  value?: Record<string, string[] | string | null | undefined>,
+) {
+  const identifiers: Record<string, string[]> = {};
+  for (const [key, raw] of Object.entries(value ?? {})) {
+    const values = Array.isArray(raw) ? raw : raw ? [raw] : [];
+    const normalizedValues = values.map((item) => item.trim()).filter(Boolean);
+    if (normalizedValues.length) {
+      identifiers[key] = Array.from(new Set(normalizedValues));
+    }
+  }
+  return identifiers;
+}
+
+function mergeIdentifierValues(
+  identifiers: Record<string, string[]>,
+  key: string,
+  value?: string,
+) {
+  if (!value?.trim()) {
+    return identifiers;
+  }
+  return mergeIdentifierMaps(identifiers, { [key]: [value.trim()] });
+}
+
+function mergeIdentifierMaps(
+  left: Record<string, string[]> | null | undefined,
+  right: Record<string, string[]> | null | undefined,
+) {
+  const merged: Record<string, string[]> = {};
+  for (const source of [left ?? {}, right ?? {}]) {
+    for (const [key, values] of Object.entries(source)) {
+      merged[key] = Array.from(
+        new Set([...(merged[key] ?? []), ...values.filter(Boolean)]),
+      );
+    }
+  }
+  return merged;
+}
+
+function hasSharedIdentifier(
+  left: Record<string, string[]> | null | undefined,
+  right: Record<string, string[]>,
+) {
+  for (const [key, values] of Object.entries(right)) {
+    const candidateValues = new Set(left?.[key] ?? []);
+    if (values.some((value) => candidateValues.has(value))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function channelIdentifierKey(channel: Channel) {
+  const keys: Record<string, string> = {
+    website: "websiteVisitorIds",
+    whatsapp: "whatsappUserIds",
+    messenger: "messengerUserIds",
+    instagram: "instagramUserIds",
+    telephone: "telephoneNumbers",
+    tiktok: "tiktokUserIds",
+    admin_test: "adminTestIds",
+  };
+  return keys[channel] ?? `${channel}Ids`;
+}
+
+function isPhoneIdentityChannel(channel: Channel) {
+  return channel === "whatsapp" || channel === "telephone";
+}
+
+function deriveConversationNextAction(channel: string, handoffs: unknown[]) {
+  if (handoffs.length) {
+    return "Human follow-up";
+  }
+  if (["whatsapp", "messenger", "instagram"].includes(channel)) {
+    return "Check response window";
+  }
+  if (channel === "telephone") {
+    return "Review call transcript";
+  }
+  return "Monitor";
+}
+
+function normalizeTemplateName(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 80);
+}
+
+function extractTemplateVariables(body: string) {
+  return Array.from(body.matchAll(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g))
+    .map((match) => match[1] ?? "")
+    .filter(Boolean);
+}
+
+function titleCase(value: string) {
+  return value
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 export function createPublicAssistantId() {

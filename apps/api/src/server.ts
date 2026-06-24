@@ -208,6 +208,34 @@ const ChannelConnectionSchema = z.object({
   settings: z.record(z.unknown()).optional(),
 });
 
+const ContactProfileSchema = z.object({
+  displayName: z.string().min(1).max(160).nullable().optional(),
+  email: z.string().email().max(240).nullable().optional(),
+  phone: z.string().min(3).max(80).nullable().optional(),
+  company: z.string().min(1).max(160).nullable().optional(),
+  identifiers: z.record(z.union([z.string(), z.array(z.string())])).optional(),
+  metadata: z.record(z.unknown()).optional(),
+});
+
+const WhatsappTemplateSchema = z.object({
+  name: z
+    .string()
+    .min(2)
+    .max(80)
+    .regex(/^[a-zA-Z0-9_ -]+$/),
+  language: z.string().min(2).max(16).default("de"),
+  category: z
+    .enum(["marketing", "utility", "authentication"])
+    .default("utility"),
+  status: z
+    .enum(["draft", "submitted", "approved", "rejected", "paused"])
+    .default("draft"),
+  body: z.string().min(5).max(1024),
+  variables: z.array(z.string().min(1).max(80)).max(20).optional(),
+  providerTemplateId: z.string().max(240).nullable().optional(),
+  metadata: z.record(z.unknown()).optional(),
+});
+
 const WebsiteImportSchema = z.object({
   url: z.string().url().max(500),
   maxFaqs: z.number().int().min(1).max(12).default(6),
@@ -225,6 +253,8 @@ type UpdateTenantInput = z.infer<typeof UpdateTenantSchema>;
 type AddFaqInput = z.infer<typeof AddFaqSchema>;
 type UpdateHandoffInput = z.infer<typeof UpdateHandoffSchema>;
 type ChannelConnectionInput = z.infer<typeof ChannelConnectionSchema>;
+type ContactProfileInput = z.infer<typeof ContactProfileSchema>;
+type WhatsappTemplateInput = z.infer<typeof WhatsappTemplateSchema>;
 type WidgetThemeInput = z.infer<typeof WidgetThemeSchema>;
 type AutomationSettings = {
   ownerLeadEmailEnabled: boolean;
@@ -261,6 +291,8 @@ export type PlatformStore = AnswerDataStore &
     deleteKnowledge(tenantId: string, knowledgeId: string): Promise<void>;
     listKnowledge(tenantId: string): Promise<unknown[]>;
     listConversations(tenantId: string): Promise<unknown[]>;
+    listUnifiedInbox(tenantId: string): Promise<unknown[]>;
+    listContacts(tenantId: string): Promise<unknown[]>;
     listChannelConnections(tenantId: string): Promise<unknown[]>;
     upsertChannelConnection(
       tenantId: string,
@@ -275,6 +307,13 @@ export type PlatformStore = AnswerDataStore &
       tenantId: string,
       conversationId: string,
     ): Promise<unknown[]>;
+    enrichConversationContact(input: {
+      tenantId: string;
+      conversationId: string;
+      channel?: Channel;
+      externalUserId?: string | null;
+      contact: ContactProfileInput;
+    }): Promise<unknown>;
     listHandoffs(tenantId: string): Promise<unknown[]>;
     updateHandoff(
       tenantId: string,
@@ -288,6 +327,7 @@ export type PlatformStore = AnswerDataStore &
       channel: Channel;
       externalUserId?: string;
       locale?: string;
+      contact?: ContactProfileInput;
     }): Promise<{ id: string; publicId: string }>;
     addMessage(input: {
       tenantId: string;
@@ -306,6 +346,23 @@ export type PlatformStore = AnswerDataStore &
       estimatedCostCents?: number;
       metadata?: Record<string, unknown>;
     }): Promise<void>;
+    recordMessageDelivery(input: {
+      tenantId: string;
+      messageId?: string | null;
+      conversationId?: string | null;
+      channel: Channel;
+      provider: string;
+      providerMessageId?: string | null;
+      status: string;
+      detail?: string | null;
+      metadata?: Record<string, unknown>;
+    }): Promise<unknown>;
+    listWhatsappTemplates(tenantId: string): Promise<unknown[]>;
+    upsertWhatsappTemplate(
+      tenantId: string,
+      input: WhatsappTemplateInput,
+    ): Promise<unknown>;
+    getWhatsappCompliance(tenantId: string): Promise<unknown>;
     exportTenantData(tenantId: string): Promise<unknown>;
     deleteTenantData(tenantId: string): Promise<void>;
   };
@@ -597,6 +654,24 @@ export async function buildServer(
   );
 
   app.get(
+    "/admin/tenants/:tenantId/inbox",
+    { preHandler: requireAdmin(options.adminToken) },
+    async (request) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      return options.store.listUnifiedInbox(tenantId);
+    },
+  );
+
+  app.get(
+    "/admin/tenants/:tenantId/contacts",
+    { preHandler: requireAdmin(options.adminToken) },
+    async (request) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      return options.store.listContacts(tenantId);
+    },
+  );
+
+  app.get(
     "/admin/tenants/:tenantId/conversations/:conversationId/messages",
     { preHandler: requireAdmin(options.adminToken) },
     async (request) => {
@@ -623,6 +698,61 @@ export async function buildServer(
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const handoffs = await options.store.listHandoffs(tenantId);
       return buildUnansweredQueue(handoffs);
+    },
+  );
+
+  app.get(
+    "/admin/tenants/:tenantId/workflows/suggestions",
+    { preHandler: requireAdmin(options.adminToken) },
+    async (request) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      const [analytics, handoffs, contacts, templates, compliance] =
+        await Promise.all([
+          options.store.getTenantAnalytics(tenantId),
+          options.store.listHandoffs(tenantId),
+          options.store.listContacts(tenantId),
+          options.store.listWhatsappTemplates(tenantId),
+          options.store.getWhatsappCompliance(tenantId),
+        ]);
+      return buildWorkflowSuggestions({
+        analytics,
+        handoffs,
+        contacts,
+        templates,
+        compliance,
+      });
+    },
+  );
+
+  app.get(
+    "/admin/tenants/:tenantId/whatsapp/templates",
+    { preHandler: requireAdmin(options.adminToken) },
+    async (request) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      return options.store.listWhatsappTemplates(tenantId);
+    },
+  );
+
+  app.post(
+    "/admin/tenants/:tenantId/whatsapp/templates",
+    { preHandler: requireAdmin(options.adminToken) },
+    async (request, reply) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      const body = WhatsappTemplateSchema.parse(request.body);
+      const template = await options.store.upsertWhatsappTemplate(
+        tenantId,
+        body,
+      );
+      return reply.code(201).send(template);
+    },
+  );
+
+  app.get(
+    "/admin/tenants/:tenantId/whatsapp/compliance",
+    { preHandler: requireAdmin(options.adminToken) },
+    async (request) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      return options.store.getWhatsappCompliance(tenantId);
     },
   );
 
@@ -937,6 +1067,16 @@ export async function buildServer(
     const conversation =
       await options.store.findOrCreateConversation(conversationInput);
     const message = formatLeadCaptureMessage(body.fields, body.pageUrl);
+    await options.store.enrichConversationContact({
+      tenantId: tenant.id,
+      conversationId: conversation.id,
+      channel: "website",
+      externalUserId: body.visitorId ?? null,
+      contact: contactProfileFromFields(body.fields, {
+        pageUrl: body.pageUrl,
+        source: "lead_capture",
+      }),
+    });
 
     await options.store.addMessage({
       tenantId: tenant.id,
@@ -1040,6 +1180,17 @@ export async function buildServer(
       await options.store.findOrCreateConversation(conversationInput);
     const score = scoreReadiness(body.answers);
     const message = formatReadinessMessage(body.answers, score, body.pageUrl);
+    await options.store.enrichConversationContact({
+      tenantId: tenant.id,
+      conversationId: conversation.id,
+      channel: "website",
+      externalUserId: body.visitorId ?? null,
+      contact: contactProfileFromFields(body.answers, {
+        pageUrl: body.pageUrl,
+        source: "readiness_assessment",
+        score,
+      }),
+    });
     const autoQualified =
       automation.autoQualifyReadinessEnabled &&
       score >= automation.readinessQualificationScore;
@@ -1379,7 +1530,7 @@ async function processChannelInboundEvent(input: {
   const conversation =
     await input.options.store.findOrCreateConversation(conversationInput);
 
-  await input.options.store.addMessage({
+  const outboundRecord = await input.options.store.addMessage({
     tenantId: input.tenant.id,
     conversationId: conversation.id,
     channel: input.event.channel,
@@ -1441,6 +1592,22 @@ async function processChannelInboundEvent(input: {
     trace: {
       answer,
       delivery,
+    },
+  });
+
+  await input.options.store.recordMessageDelivery({
+    tenantId: input.tenant.id,
+    messageId: getStringProperty(outboundRecord, "id") ?? null,
+    conversationId: conversation.id,
+    channel: input.event.channel,
+    provider: input.adapter.provider,
+    providerMessageId: delivery.providerMessageId ?? null,
+    status: delivery.status,
+    detail: delivery.detail ?? null,
+    metadata: {
+      providerAccountId: input.event.providerAccountId,
+      externalConversationId: input.event.externalConversationId,
+      externalUserId: input.event.externalUserId,
     },
   });
 
@@ -1965,6 +2132,39 @@ function normalizeFieldMap(fields: Record<string, string>) {
   );
 }
 
+function contactProfileFromFields(
+  fields: Record<string, string>,
+  metadata: Record<string, unknown>,
+): ContactProfileInput {
+  const normalized = normalizeFieldMap(fields);
+  const email = findEmail(fields);
+  const phone =
+    normalized.phone ??
+    Object.values(fields)
+      .map((value) => value.match(/(?:\+?\d[\d\s().-]{5,}\d)/)?.[0])
+      .find(Boolean);
+  const name =
+    normalized.name ??
+    normalized.fullname ??
+    normalized.contact ??
+    normalized.contactperson;
+
+  return {
+    displayName: name || normalized.company || email || phone || null,
+    email: email ?? null,
+    phone: phone ?? null,
+    company: normalized.company || null,
+    metadata: {
+      ...metadata,
+      rawFields: fields,
+      projectType: normalized.projecttype || normalized.project || null,
+      budget: normalized.budget || null,
+      timeline: normalized.timeline || null,
+      contactPreference: normalized.contactpreference || null,
+    },
+  };
+}
+
 function findEmail(fields: Record<string, string>) {
   const emailField = Object.entries(fields).find(
     ([key, value]) => key.toLowerCase().includes("email") && value.trim(),
@@ -1976,6 +2176,106 @@ function findEmail(fields: Record<string, string>) {
     );
 
   return candidate?.match(/[^\s@]+@[^\s@]+\.[^\s@]+/)?.[0];
+}
+
+function buildWorkflowSuggestions(input: {
+  analytics: unknown;
+  handoffs: unknown[];
+  contacts: unknown[];
+  templates: unknown[];
+  compliance: unknown;
+}) {
+  const analytics = asRecord(input.analytics);
+  const compliance = asRecord(input.compliance);
+  const templateStats = asRecord(compliance.templates);
+  const openHandoffs = input.handoffs.filter(
+    (handoff) => asRecord(handoff).status === "open",
+  );
+  const inProgressHandoffs = input.handoffs.filter(
+    (handoff) => asRecord(handoff).status === "in_progress",
+  );
+  const contactsMissingDetails = input.contacts.filter((contact) => {
+    const record = asRecord(contact);
+    return !record.email && !record.phone;
+  });
+  const suggestions = [
+    openHandoffs.length
+      ? {
+          id: "handoff_assignment",
+          priority: "high",
+          category: "handoff",
+          title: "Assign open handoffs",
+          detail: `${openHandoffs.length} customer request${openHandoffs.length === 1 ? "" : "s"} need an owner.`,
+          actionLabel: "Open leads",
+        }
+      : null,
+    inProgressHandoffs.length
+      ? {
+          id: "handoff_resolution",
+          priority: "medium",
+          category: "handoff",
+          title: "Close in-progress conversations",
+          detail: `${inProgressHandoffs.length} handoff${inProgressHandoffs.length === 1 ? "" : "s"} are being worked but not resolved.`,
+          actionLabel: "Review queue",
+        }
+      : null,
+    Number(templateStats.approved ?? 0) === 0
+      ? {
+          id: "whatsapp_template",
+          priority: "high",
+          category: "whatsapp",
+          title: "Create a WhatsApp re-open template",
+          detail:
+            "You need at least one approved utility template before replying outside the 24-hour customer service window.",
+          actionLabel: "Add template",
+        }
+      : null,
+    compliance.canUseFreeformReply === false &&
+    Number(templateStats.approved ?? 0) > 0
+      ? {
+          id: "whatsapp_window",
+          priority: "medium",
+          category: "whatsapp",
+          title: "Use a template for the next WhatsApp reply",
+          detail:
+            "The last inbound WhatsApp message is outside the freeform response window.",
+          actionLabel: "Use template",
+        }
+      : null,
+    contactsMissingDetails.length
+      ? {
+          id: "contact_completion",
+          priority: "medium",
+          category: "contacts",
+          title: "Complete customer contact details",
+          detail: `${contactsMissingDetails.length} contact${contactsMissingDetails.length === 1 ? "" : "s"} have no email or phone number.`,
+          actionLabel: "Open inbox",
+        }
+      : null,
+    Number(analytics.openHandoffs ?? 0) === 0 &&
+    Number(analytics.contacts ?? 0) > 0
+      ? {
+          id: "proactive_followup",
+          priority: "low",
+          category: "automation",
+          title: "Prepare proactive follow-up campaigns",
+          detail:
+            "There are contacts but no open handoffs. Segment them by lead source and follow up with consent-aware templates.",
+          actionLabel: "Plan campaign",
+        }
+      : null,
+  ].filter(Boolean);
+
+  return {
+    generatedAt: new Date().toISOString(),
+    suggestions,
+    counts: {
+      suggestions: suggestions.length,
+      openHandoffs: openHandoffs.length,
+      contacts: input.contacts.length,
+      whatsappTemplates: input.templates.length,
+    },
+  };
 }
 
 function isLeadHandoff(handoff: Record<string, unknown>) {

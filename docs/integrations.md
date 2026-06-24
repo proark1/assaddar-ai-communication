@@ -19,7 +19,10 @@ Current foundation:
 - Meta webhook verification using `hub.mode`, `hub.verify_token`, and `hub.challenge`
 - Incoming payload normalization for text messages
 - Outgoing sender is credential-gated until `WHATSAPP_ACCESS_TOKEN` and phone number mapping are configured
-- Customer-service messaging-window enforcement should be added before production sending
+- Tenant-level template storage for draft/submitted/approved/rejected WhatsApp templates
+- Compliance endpoint showing the last inbound message, 24-hour freeform reply window, template counts, and recent delivery outcomes
+- Provider delivery outcomes are recorded for troubleshooting and future retries
+- Customer-service messaging-window enforcement is surfaced in the admin UI; hard blocking before production sending is still required
 
 Official docs checked:
 
@@ -87,3 +90,5 @@ Official docs checked:
 - Add Twilio signature validation.
 - Add voice call transfer and callback workflows.
 - Add provider-specific integration health dashboards.
+- Add hard enforcement for WhatsApp template-only replies outside the 24-hour response window.
+- Sync WhatsApp template approval status from Meta instead of only storing admin-entered status.

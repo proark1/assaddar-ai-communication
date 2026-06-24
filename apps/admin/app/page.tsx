@@ -98,11 +98,45 @@ type Conversation = {
   id: string;
   publicId: string;
   channel: string;
+  contactId?: string | null;
   externalUserId?: string | null;
   status: string;
   locale: string;
   createdAt: string;
   updatedAt?: string;
+};
+
+type ContactProfile = {
+  id: string;
+  displayName?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  company?: string | null;
+  confidence?: number;
+  identifiers?: Record<string, string[]>;
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+  updatedAt?: string;
+};
+
+type UnifiedInboxItem = Conversation & {
+  contact?: ContactProfile | null;
+  lastMessage?: {
+    id: string;
+    direction: string;
+    role: string;
+    content: string;
+    createdAt: string;
+  } | null;
+  messageCount: number;
+  openHandoffs: Array<{
+    id: string;
+    reason: string;
+    status: string;
+    assignedTo?: string | null;
+    createdAt: string;
+  }>;
+  nextAction: string;
 };
 
 type ConversationMessage = {
@@ -132,6 +166,7 @@ type Handoff = {
 type TenantAnalytics = {
   conversations: number;
   messages: number;
+  contacts?: number;
   approvedKnowledge: number;
   openHandoffs: number;
   totalHandoffs: number;
@@ -142,6 +177,58 @@ type TenantAnalytics = {
     total: number;
     credits: number;
   }>;
+};
+
+type WhatsappTemplate = {
+  id: string;
+  name: string;
+  language: string;
+  category: "marketing" | "utility" | "authentication";
+  status: "draft" | "submitted" | "approved" | "rejected" | "paused";
+  body: string;
+  variables: string[];
+  providerTemplateId?: string | null;
+  createdAt: string;
+  updatedAt?: string;
+};
+
+type WhatsappCompliance = {
+  lastInboundAt?: string | null;
+  windowClosesAt?: string | null;
+  canUseFreeformReply: boolean;
+  templates: {
+    total: number;
+    approved: number;
+    draft: number;
+    needsAttention: number;
+  };
+  recentDeliveries: Array<{
+    id: string;
+    providerMessageId?: string | null;
+    status: string;
+    detail?: string | null;
+    createdAt: string;
+  }>;
+};
+
+type WorkflowSuggestion = {
+  id: string;
+  priority: "high" | "medium" | "low";
+  category: string;
+  title: string;
+  detail: string;
+  actionLabel: string;
+};
+
+type WorkflowSuggestionsResult = {
+  generatedAt: string;
+  suggestions: WorkflowSuggestion[];
+  counts: {
+    suggestions: number;
+    openHandoffs: number;
+    contacts: number;
+    whatsappTemplates: number;
+  };
 };
 
 type WebsiteImportResult = {
@@ -840,6 +927,41 @@ function getLeadNextStep(handoff: Handoff) {
   return stage === "won" ? "Close loop" : "Archive";
 }
 
+function getContactDisplayName(
+  contact?: ContactProfile | null,
+  fallback = "Unknown contact",
+) {
+  return (
+    contact?.displayName ||
+    contact?.company ||
+    contact?.email ||
+    contact?.phone ||
+    fallback
+  );
+}
+
+function getContactSubtitle(contact?: ContactProfile | null) {
+  return [contact?.email, contact?.phone, contact?.company]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function formatWindowState(compliance: WhatsappCompliance | null) {
+  if (!compliance?.lastInboundAt) {
+    return "No inbound WhatsApp message yet";
+  }
+  if (compliance.canUseFreeformReply) {
+    return `Freeform reply until ${formatDate(compliance.windowClosesAt)}`;
+  }
+  return "Template required for next reply";
+}
+
+function extractTemplateVariablesFromBody(body: string) {
+  return Array.from(body.matchAll(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g))
+    .map((match) => match[1] ?? "")
+    .filter(Boolean);
+}
+
 function buildLeadReplyDraft(
   handoff: Handoff,
   tone: "friendly" | "formal" | "short",
@@ -1024,6 +1146,8 @@ export default function DashboardPage() {
   const [knowledge, setKnowledge] = useState<KnowledgeItem[]>([]);
   const [analytics, setAnalytics] = useState<TenantAnalytics | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [unifiedInbox, setUnifiedInbox] = useState<UnifiedInboxItem[]>([]);
+  const [contacts, setContacts] = useState<ContactProfile[]>([]);
   const [selectedConversationId, setSelectedConversationId] = useState("");
   const [conversationMessages, setConversationMessages] = useState<
     ConversationMessage[]
@@ -1032,6 +1156,13 @@ export default function DashboardPage() {
   const [channelConnections, setChannelConnections] = useState<
     ChannelConnection[]
   >([]);
+  const [whatsappTemplates, setWhatsappTemplates] = useState<
+    WhatsappTemplate[]
+  >([]);
+  const [whatsappCompliance, setWhatsappCompliance] =
+    useState<WhatsappCompliance | null>(null);
+  const [workflowSuggestions, setWorkflowSuggestions] =
+    useState<WorkflowSuggestionsResult | null>(null);
   const [channelAccountDrafts, setChannelAccountDrafts] = useState<
     Record<string, string>
   >({});
@@ -1061,6 +1192,15 @@ export default function DashboardPage() {
   const [widgetPlatform, setWidgetPlatform] = useState<WidgetPlatform>("html");
   const [copiedSnippet, setCopiedSnippet] = useState("");
   const [siteUrl, setSiteUrl] = useState(defaultSiteUrl);
+  const [templateName, setTemplateName] = useState("continue_conversation");
+  const [templateLanguage, setTemplateLanguage] = useState("de");
+  const [templateCategory, setTemplateCategory] =
+    useState<WhatsappTemplate["category"]>("utility");
+  const [templateStatus, setTemplateStatus] =
+    useState<WhatsappTemplate["status"]>("draft");
+  const [templateBody, setTemplateBody] = useState(
+    "Hallo {{name}}, wir koennen Ihre Anfrage gerne weiter bearbeiten. Antworten Sie bitte auf diese Nachricht, damit wir fortfahren koennen.",
+  );
   const [crawlMaxPages, setCrawlMaxPages] = useState(4);
   const [websiteImport, setWebsiteImport] =
     useState<WebsiteImportResult | null>(null);
@@ -1136,6 +1276,28 @@ export default function DashboardPage() {
   const selectedConversation = conversations.find(
     (conversation) => conversation.id === selectedConversationId,
   );
+  const handoffConversationIds = new Set(
+    handoffs
+      .filter((handoff) => handoff.status === "open")
+      .map((handoff) => handoff.conversationId)
+      .filter(Boolean),
+  );
+  const inboxItems: UnifiedInboxItem[] = unifiedInbox.length
+    ? unifiedInbox
+    : conversations.map((conversation) => ({
+        ...conversation,
+        contact: null,
+        lastMessage: null,
+        messageCount: 0,
+        openHandoffs: [],
+        nextAction: handoffConversationIds.has(conversation.id)
+          ? "Human follow-up"
+          : "Monitor",
+      }));
+  const selectedInboxItem =
+    inboxItems.find(
+      (conversation) => conversation.id === selectedConversationId,
+    ) ?? null;
   const openHandoffs = handoffs.filter((handoff) => handoff.status === "open");
   const leadHandoffs = handoffs.filter((handoff) =>
     ["lead_capture", "readiness_assessment"].includes(handoff.reason),
@@ -1182,6 +1344,7 @@ export default function DashboardPage() {
     (connection) =>
       connection.status === "connected" || connection.channel === "website",
   ).length;
+  const knownContactCount = analytics?.contacts ?? contacts.length;
   const telephoneConnection = channelConnections.find(
     (connection) => connection.channel === "telephone",
   );
@@ -1193,12 +1356,6 @@ export default function DashboardPage() {
   ).length;
   const unansweredCount = getUsageTotal(analytics, ["handoff", "refused"]);
   const answeredCount = getUsageTotal(analytics, ["answered"]);
-  const handoffConversationIds = new Set(
-    handoffs
-      .filter((handoff) => handoff.status === "open")
-      .map((handoff) => handoff.conversationId)
-      .filter(Boolean),
-  );
   const selectedTags = parseTags(tagInput);
   const duplicateQuestion = knowledge.some(
     (item) =>
@@ -1265,6 +1422,19 @@ export default function DashboardPage() {
   const filteredConversations = conversations.filter((conversation) => {
     if (inboxFilter === "needs_human") {
       return handoffConversationIds.has(conversation.id);
+    }
+    if (inboxFilter === "recent") {
+      const createdAt = new Date(conversation.createdAt).getTime();
+      return Date.now() - createdAt < 1000 * 60 * 60 * 24 * 7;
+    }
+    return true;
+  });
+  const filteredInboxItems = inboxItems.filter((conversation) => {
+    if (inboxFilter === "needs_human") {
+      return (
+        conversation.openHandoffs.length > 0 ||
+        handoffConversationIds.has(conversation.id)
+      );
     }
     if (inboxFilter === "recent") {
       const createdAt = new Date(conversation.createdAt).getTime();
@@ -1669,8 +1839,13 @@ export default function DashboardPage() {
       setKnowledge([]);
       setAnalytics(null);
       setConversations([]);
+      setUnifiedInbox([]);
+      setContacts([]);
       setHandoffs([]);
       setChannelConnections([]);
+      setWhatsappTemplates([]);
+      setWhatsappCompliance(null);
+      setWorkflowSuggestions(null);
       setChannelAccountDrafts({});
       return;
     }
@@ -1679,9 +1854,13 @@ export default function DashboardPage() {
       refreshKnowledge(tenantId),
       refreshAnalytics(tenantId),
       refreshConversations(tenantId),
+      refreshUnifiedInbox(tenantId),
+      refreshContacts(tenantId),
       refreshHandoffs(tenantId),
       refreshChannelConnections(tenantId),
+      refreshWhatsappOperations(tenantId),
       refreshUnanswered(tenantId),
+      refreshWorkflowSuggestions(tenantId),
     ]);
   }
 
@@ -1744,6 +1923,46 @@ export default function DashboardPage() {
     }
   }
 
+  async function refreshUnifiedInbox(tenantId = selectedTenant?.id) {
+    if (!tenantId) {
+      setUnifiedInbox([]);
+      return;
+    }
+
+    try {
+      const items = await apiFetch<UnifiedInboxItem[]>(
+        `/admin/tenants/${tenantId}/inbox`,
+      );
+      setUnifiedInbox(items);
+      if (
+        items[0] &&
+        !items.some(
+          (conversation) => conversation.id === selectedConversationId,
+        )
+      ) {
+        setSelectedConversationId(items[0].id);
+      }
+    } catch {
+      setUnifiedInbox([]);
+    }
+  }
+
+  async function refreshContacts(tenantId = selectedTenant?.id) {
+    if (!tenantId) {
+      setContacts([]);
+      return;
+    }
+
+    try {
+      const items = await apiFetch<ContactProfile[]>(
+        `/admin/tenants/${tenantId}/contacts`,
+      );
+      setContacts(items);
+    } catch {
+      setContacts([]);
+    }
+  }
+
   async function refreshConversationMessages(
     tenantId: string,
     conversationId: string,
@@ -1792,6 +2011,46 @@ export default function DashboardPage() {
       );
     } catch (error) {
       setStatus(readableError(error));
+    }
+  }
+
+  async function refreshWhatsappOperations(tenantId = selectedTenant?.id) {
+    if (!tenantId) {
+      setWhatsappTemplates([]);
+      setWhatsappCompliance(null);
+      return;
+    }
+
+    try {
+      const [templates, compliance] = await Promise.all([
+        apiFetch<WhatsappTemplate[]>(
+          `/admin/tenants/${tenantId}/whatsapp/templates`,
+        ),
+        apiFetch<WhatsappCompliance>(
+          `/admin/tenants/${tenantId}/whatsapp/compliance`,
+        ),
+      ]);
+      setWhatsappTemplates(templates);
+      setWhatsappCompliance(compliance);
+    } catch {
+      setWhatsappTemplates([]);
+      setWhatsappCompliance(null);
+    }
+  }
+
+  async function refreshWorkflowSuggestions(tenantId = selectedTenant?.id) {
+    if (!tenantId) {
+      setWorkflowSuggestions(null);
+      return;
+    }
+
+    try {
+      const result = await apiFetch<WorkflowSuggestionsResult>(
+        `/admin/tenants/${tenantId}/workflows/suggestions`,
+      );
+      setWorkflowSuggestions(result);
+    } catch {
+      setWorkflowSuggestions(null);
     }
   }
 
@@ -2066,6 +2325,33 @@ export default function DashboardPage() {
       );
       await refreshChannelConnections(selectedTenant.id);
       setStatus(`${connection.label} saved`);
+    } catch (error) {
+      setStatus(readableError(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveWhatsappTemplate() {
+    if (!selectedTenant || !templateName || !templateBody) {
+      return;
+    }
+
+    setBusy(true);
+    try {
+      await apiFetch(`/admin/tenants/${selectedTenant.id}/whatsapp/templates`, {
+        method: "POST",
+        body: JSON.stringify({
+          name: templateName,
+          language: templateLanguage,
+          category: templateCategory,
+          status: templateStatus,
+          body: templateBody,
+        }),
+      });
+      await refreshWhatsappOperations(selectedTenant.id);
+      await refreshWorkflowSuggestions(selectedTenant.id);
+      setStatus("WhatsApp template saved");
     } catch (error) {
       setStatus(readableError(error));
     } finally {
@@ -2365,6 +2651,11 @@ export default function DashboardPage() {
         </article>
         <article className="metricCard">
           <UserCheck size={18} />
+          <span>Contacts</span>
+          <strong>{knownContactCount}</strong>
+        </article>
+        <article className="metricCard">
+          <UserCheck size={18} />
           <span>Leads</span>
           <strong>{leadHandoffs.length}</strong>
         </article>
@@ -2530,12 +2821,60 @@ export default function DashboardPage() {
     );
   }
 
+  function renderWorkflowSuggestions() {
+    const suggestions = workflowSuggestions?.suggestions ?? [];
+
+    return (
+      <section className="panel actionPanel">
+        <div className="panelHeader">
+          <div className="panelTitle">
+            <Sparkles size={18} />
+            <h2>Automation recommendations</h2>
+          </div>
+          <span className="countPill">{suggestions.length}</span>
+        </div>
+        <div className="nextActionList">
+          {suggestions.length ? (
+            suggestions.slice(0, 6).map((suggestion) => (
+              <button
+                className="actionItem"
+                data-tone={
+                  suggestion.priority === "high"
+                    ? "urgent"
+                    : suggestion.priority === "medium"
+                      ? "warn"
+                      : "info"
+                }
+                key={suggestion.id}
+                type="button"
+                onClick={() =>
+                  setActiveTab(
+                    suggestion.category === "whatsapp" ? "channels" : "leads",
+                  )
+                }
+              >
+                <span>{suggestion.priority}</span>
+                <strong>{suggestion.title}</strong>
+                <small>{suggestion.detail}</small>
+              </button>
+            ))
+          ) : (
+            <div className="emptyState compact">
+              No automation recommendations yet.
+            </div>
+          )}
+        </div>
+      </section>
+    );
+  }
+
   function renderOverview() {
     return (
       <div className="workspaceStack">
         {renderMetrics()}
         {renderOperationalHealth()}
         {renderTodayPanel()}
+        {renderWorkflowSuggestions()}
         <section className="panel actionPanel">
           <div className="panelHeader">
             <div className="panelTitle">
@@ -3359,6 +3698,44 @@ export default function DashboardPage() {
     );
   }
 
+  function renderContacts() {
+    return (
+      <section className="panel">
+        <div className="panelHeader">
+          <div className="panelTitle">
+            <UserCheck size={18} />
+            <h2>Customer profiles</h2>
+          </div>
+          <span className="countPill">{contacts.length}</span>
+        </div>
+        <div className="contactGrid">
+          {contacts.length ? (
+            contacts.slice(0, 12).map((contact) => (
+              <article className="contactCard" key={contact.id}>
+                <div>
+                  <strong>{getContactDisplayName(contact)}</strong>
+                  <span>{getContactSubtitle(contact) || "No details yet"}</span>
+                </div>
+                <small>{contact.confidence ?? 0}% match</small>
+                <div className="tagRow">
+                  {Object.keys(contact.identifiers ?? {})
+                    .slice(0, 4)
+                    .map((key) => (
+                      <small key={key}>{titleCase(key)}</small>
+                    ))}
+                </div>
+              </article>
+            ))
+          ) : (
+            <div className="emptyState compact">
+              Contacts appear after website leads, WhatsApp messages, or calls.
+            </div>
+          )}
+        </div>
+      </section>
+    );
+  }
+
   function renderLeadDetailDrawer() {
     if (!selectedLead) {
       return null;
@@ -3713,8 +4090,8 @@ export default function DashboardPage() {
 
         <div className="inboxGrid">
           <div className="conversationList framed">
-            {filteredConversations.length ? (
-              filteredConversations.map((conversation) => (
+            {filteredInboxItems.length ? (
+              filteredInboxItems.map((conversation) => (
                 <button
                   className={
                     conversation.id === selectedConversationId
@@ -3725,11 +4102,26 @@ export default function DashboardPage() {
                   type="button"
                   onClick={() => setSelectedConversationId(conversation.id)}
                 >
-                  <strong>{titleCase(conversation.channel)}</strong>
+                  <strong>
+                    {getContactDisplayName(
+                      conversation.contact,
+                      titleCase(conversation.channel),
+                    )}
+                  </strong>
                   <span>
-                    {conversation.externalUserId ?? conversation.publicId}
+                    {titleCase(conversation.channel)} ·{" "}
+                    {getContactSubtitle(conversation.contact) ||
+                      conversation.externalUserId ||
+                      conversation.publicId}
                   </span>
-                  <small>{formatDate(conversation.createdAt)}</small>
+                  <small>
+                    {conversation.lastMessage?.content
+                      ? conversation.lastMessage.content.slice(0, 90)
+                      : formatDate(conversation.createdAt)}
+                  </small>
+                  {conversation.openHandoffs.length ? (
+                    <em>{conversation.openHandoffs.length} handoff</em>
+                  ) : null}
                 </button>
               ))
             ) : (
@@ -3738,18 +4130,55 @@ export default function DashboardPage() {
           </div>
 
           <div className="transcriptPane">
-            {selectedConversation ? (
+            {selectedConversation || selectedInboxItem ? (
               <>
                 <div className="transcriptHeader">
                   <div>
-                    <strong>{selectedConversation.publicId}</strong>
+                    <strong>
+                      {getContactDisplayName(
+                        selectedInboxItem?.contact,
+                        selectedConversation?.publicId ?? "Conversation",
+                      )}
+                    </strong>
                     <span>
-                      {titleCase(selectedConversation.channel)} ·{" "}
-                      {selectedConversation.locale}
+                      {titleCase(
+                        selectedInboxItem?.channel ??
+                          selectedConversation?.channel ??
+                          "conversation",
+                      )}{" "}
+                      · {selectedInboxItem?.nextAction ?? "Monitor"}
                     </span>
                   </div>
-                  <span>{formatDate(selectedConversation.createdAt)}</span>
+                  <span>
+                    {formatDate(
+                      selectedInboxItem?.updatedAt ??
+                        selectedConversation?.updatedAt ??
+                        selectedConversation?.createdAt,
+                    )}
+                  </span>
                 </div>
+                {selectedInboxItem?.contact ? (
+                  <div className="contactContextStrip">
+                    <article>
+                      <span>Email</span>
+                      <strong>
+                        {selectedInboxItem.contact.email ?? "Missing"}
+                      </strong>
+                    </article>
+                    <article>
+                      <span>Phone</span>
+                      <strong>
+                        {selectedInboxItem.contact.phone ?? "Missing"}
+                      </strong>
+                    </article>
+                    <article>
+                      <span>Company</span>
+                      <strong>
+                        {selectedInboxItem.contact.company ?? "Missing"}
+                      </strong>
+                    </article>
+                  </div>
+                ) : null}
                 <div className="messagePreview full">
                   {conversationMessages.length ? (
                     conversationMessages.map((message) => (
@@ -4585,7 +5014,220 @@ export default function DashboardPage() {
             })}
           </div>
         </section>
+
+        {renderWhatsappOperations()}
       </div>
+    );
+  }
+
+  function renderWhatsappOperations() {
+    const variables = extractTemplateVariablesFromBody(templateBody);
+
+    return (
+      <section className="panel">
+        <div className="panelHeader">
+          <div className="panelTitle">
+            <MessageCircle size={18} />
+            <h2>WhatsApp operations</h2>
+          </div>
+          <span
+            className="countPill"
+            data-tone={
+              whatsappCompliance?.canUseFreeformReply ? "good" : "warn"
+            }
+          >
+            {whatsappCompliance?.canUseFreeformReply
+              ? "Window open"
+              : "Template mode"}
+          </span>
+        </div>
+
+        <div className="whatsappOpsGrid">
+          <article className="opsCard">
+            <span>24-hour response window</span>
+            <strong>{formatWindowState(whatsappCompliance)}</strong>
+            <small>
+              Last inbound: {formatDate(whatsappCompliance?.lastInboundAt)}
+            </small>
+          </article>
+          <article className="opsCard">
+            <span>Approved templates</span>
+            <strong>{whatsappCompliance?.templates.approved ?? 0}</strong>
+            <small>
+              {whatsappCompliance?.templates.total ?? whatsappTemplates.length}{" "}
+              total
+            </small>
+          </article>
+          <article
+            className="opsCard"
+            data-alert={
+              whatsappCompliance?.templates.needsAttention ? "true" : "false"
+            }
+          >
+            <span>Needs attention</span>
+            <strong>{whatsappCompliance?.templates.needsAttention ?? 0}</strong>
+            <small>Rejected or paused templates</small>
+          </article>
+        </div>
+
+        <div className="templateGrid">
+          <section className="templateEditor">
+            <div className="panelHeader compact">
+              <div className="panelTitle">
+                <Save size={18} />
+                <h2>Template editor</h2>
+              </div>
+            </div>
+            <div className="formGrid two">
+              <label className="field">
+                <span>Name</span>
+                <input
+                  value={templateName}
+                  onChange={(event) => setTemplateName(event.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>Language</span>
+                <input
+                  value={templateLanguage}
+                  onChange={(event) => setTemplateLanguage(event.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>Category</span>
+                <select
+                  value={templateCategory}
+                  onChange={(event) =>
+                    setTemplateCategory(
+                      event.target.value as WhatsappTemplate["category"],
+                    )
+                  }
+                >
+                  <option value="utility">Utility</option>
+                  <option value="marketing">Marketing</option>
+                  <option value="authentication">Authentication</option>
+                </select>
+              </label>
+              <label className="field">
+                <span>Status</span>
+                <select
+                  value={templateStatus}
+                  onChange={(event) =>
+                    setTemplateStatus(
+                      event.target.value as WhatsappTemplate["status"],
+                    )
+                  }
+                >
+                  <option value="draft">Draft</option>
+                  <option value="submitted">Submitted</option>
+                  <option value="approved">Approved</option>
+                  <option value="rejected">Rejected</option>
+                  <option value="paused">Paused</option>
+                </select>
+              </label>
+            </div>
+            <label className="field">
+              <span>Body</span>
+              <textarea
+                value={templateBody}
+                onChange={(event) => setTemplateBody(event.target.value)}
+                rows={5}
+              />
+            </label>
+            <div className="tagRow">
+              {variables.length ? (
+                variables.map((variable) => (
+                  <small key={variable}>{variable}</small>
+                ))
+              ) : (
+                <small>No variables</small>
+              )}
+            </div>
+            <button
+              className="primaryButton full"
+              type="button"
+              disabled={
+                busy || !selectedTenant || !templateName || !templateBody
+              }
+              onClick={saveWhatsappTemplate}
+            >
+              <Save size={16} />
+              Save template
+            </button>
+          </section>
+
+          <section className="templateList">
+            <div className="panelHeader compact">
+              <div className="panelTitle">
+                <MessageSquare size={18} />
+                <h2>Templates</h2>
+              </div>
+              <span className="countPill">{whatsappTemplates.length}</span>
+            </div>
+            {whatsappTemplates.length ? (
+              whatsappTemplates.map((template) => (
+                <article className="templateCard" key={template.id}>
+                  <div>
+                    <strong>{template.name}</strong>
+                    <span>
+                      {template.language} · {template.category}
+                    </span>
+                  </div>
+                  <small data-status={template.status}>{template.status}</small>
+                  <p>{template.body}</p>
+                  <button
+                    className="secondaryButton"
+                    type="button"
+                    onClick={() => {
+                      setTemplateName(template.name);
+                      setTemplateLanguage(template.language);
+                      setTemplateCategory(template.category);
+                      setTemplateStatus(template.status);
+                      setTemplateBody(template.body);
+                    }}
+                  >
+                    Edit
+                  </button>
+                </article>
+              ))
+            ) : (
+              <div className="emptyState compact">
+                No WhatsApp templates yet. Start with a utility template for
+                continuing conversations after 24 hours.
+              </div>
+            )}
+          </section>
+
+          <section className="templateList">
+            <div className="panelHeader compact">
+              <div className="panelTitle">
+                <BarChart3 size={18} />
+                <h2>Recent deliveries</h2>
+              </div>
+            </div>
+            {whatsappCompliance?.recentDeliveries.length ? (
+              whatsappCompliance.recentDeliveries
+                .slice(0, 6)
+                .map((delivery) => (
+                  <article className="deliveryRow" key={delivery.id}>
+                    <div>
+                      <strong>{delivery.status}</strong>
+                      <span>
+                        {delivery.providerMessageId ?? "No provider id"}
+                      </span>
+                    </div>
+                    <small>{formatDate(delivery.createdAt)}</small>
+                    {delivery.detail ? <p>{delivery.detail}</p> : null}
+                  </article>
+                ))
+            ) : (
+              <div className="emptyState compact">
+                WhatsApp delivery events will appear after live sends.
+              </div>
+            )}
+          </section>
+        </div>
+      </section>
     );
   }
 
@@ -5138,6 +5780,7 @@ export default function DashboardPage() {
           {renderInbox()}
           {renderHandoffs()}
         </div>
+        {renderContacts()}
       </div>
     );
   }

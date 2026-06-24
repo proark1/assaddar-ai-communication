@@ -125,6 +125,24 @@ create table if not exists channel_webhook_events (
 );
 create index if not exists channel_webhook_events_tenant_idx on channel_webhook_events(tenant_id);
 
+create table if not exists contacts (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references tenants(id) on delete cascade,
+  display_name text,
+  email text,
+  phone text,
+  company text,
+  status text not null default 'active',
+  confidence integer not null default 50,
+  identifiers jsonb not null default '{}'::jsonb,
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists contacts_tenant_idx on contacts(tenant_id);
+create index if not exists contacts_tenant_email_idx on contacts(tenant_id, email);
+create index if not exists contacts_tenant_phone_idx on contacts(tenant_id, phone);
+
 create table if not exists audit_logs (
   id uuid primary key default gen_random_uuid(),
   tenant_id uuid references tenants(id) on delete set null,
@@ -238,6 +256,7 @@ create index if not exists escalation_rules_tenant_idx on escalation_rules(tenan
 create table if not exists conversations (
   id uuid primary key default gen_random_uuid(),
   tenant_id uuid not null references tenants(id) on delete cascade,
+  contact_id uuid references contacts(id) on delete set null,
   public_id text not null unique,
   channel text not null,
   external_user_id text,
@@ -249,6 +268,10 @@ create table if not exists conversations (
   updated_at timestamptz not null default now()
 );
 create index if not exists conversations_tenant_channel_idx on conversations(tenant_id, channel);
+create index if not exists conversations_tenant_contact_idx on conversations(tenant_id, contact_id);
+alter table if exists conversations
+  add column if not exists contact_id uuid references contacts(id) on delete set null;
+create index if not exists conversations_tenant_contact_idx on conversations(tenant_id, contact_id);
 
 create table if not exists messages (
   id uuid primary key default gen_random_uuid(),
@@ -320,11 +343,46 @@ create table if not exists answer_feedback (
 );
 create index if not exists answer_feedback_tenant_idx on answer_feedback(tenant_id);
 
+create table if not exists message_deliveries (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references tenants(id) on delete cascade,
+  message_id uuid references messages(id) on delete set null,
+  conversation_id uuid references conversations(id) on delete set null,
+  channel text not null,
+  provider text not null,
+  provider_message_id text,
+  status text not null default 'queued',
+  detail text,
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists message_deliveries_tenant_created_idx on message_deliveries(tenant_id, created_at);
+create index if not exists message_deliveries_provider_message_idx on message_deliveries(provider_message_id);
+
+create table if not exists whatsapp_templates (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references tenants(id) on delete cascade,
+  name text not null,
+  language text not null default 'de',
+  category text not null default 'utility',
+  status text not null default 'draft',
+  body text not null,
+  variables text[] not null default array[]::text[],
+  provider_template_id text,
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (tenant_id, name, language)
+);
+create index if not exists whatsapp_templates_tenant_status_idx on whatsapp_templates(tenant_id, status);
+
 do $$
 declare
   table_name text;
 begin
   foreach table_name in array array[
+    'contacts',
     'knowledge_sources',
     'knowledge_documents',
     'knowledge_chunks',
@@ -337,7 +395,9 @@ begin
     'calls',
     'call_transcripts',
     'handoff_requests',
-    'answer_feedback'
+    'answer_feedback',
+    'message_deliveries',
+    'whatsapp_templates'
   ]
   loop
     execute format('alter table %I enable row level security', table_name);
