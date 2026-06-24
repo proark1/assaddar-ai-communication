@@ -24,8 +24,10 @@
   --danger-bg: #fff0ef;
   --danger-line: #edc0bc;
   --code: #13161b;
-  --shadow: 0 1px 2px rgba(22, 25, 30, 0.04), 0 14px 34px -20px rgba(22, 25, 30, 0.28);
-  --shadow-soft: 0 1px 2px rgba(22, 25, 30, 0.03), 0 18px 52px -34px rgba(22, 25, 30, 0.34);
+  --shadow:
+    0 1px 2px rgba(22, 25, 30, 0.04), 0 14px 34px -20px rgba(22, 25, 30, 0.28);
+  --shadow-soft:
+    0 1px 2px rgba(22, 25, 30, 0.03), 0 18px 52px -34px rgba(22, 25, 30, 0.34);
 }
 
 * {
@@ -712,6 +714,10 @@ textarea {
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 14px;
+}
+
+.panelHeader.compact {
+  margin-bottom: 8px;
 }
 
 .countPill {
@@ -1483,6 +1489,93 @@ textarea {
   word-break: break-word;
 }
 
+.leadContactStrip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.leadContactStrip article {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  padding: 10px;
+}
+
+.leadContactStrip article[data-alert="true"] {
+  border-color: var(--amber-line);
+  background: var(--amber-bg);
+}
+
+.leadContactStrip span,
+.timelineList span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.leadContactStrip strong {
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.replyAssistant {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  padding: 12px;
+}
+
+.replyAssistant .rowActions {
+  justify-content: flex-start;
+}
+
+.replyDraft {
+  min-height: 190px;
+  background: var(--surface);
+}
+
+.timelineList {
+  display: grid;
+  gap: 8px;
+}
+
+.timelineList article {
+  display: grid;
+  gap: 3px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  padding: 10px;
+}
+
+.timelineList article[data-alert="true"] {
+  border-color: var(--amber-line);
+  background: var(--amber-bg);
+}
+
+.timelineList strong {
+  color: var(--text-soft);
+  font-size: 13px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+
+.timelineList small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .linkButton {
   color: inherit;
   text-decoration: none;
@@ -1721,6 +1814,95 @@ textarea {
   font-size: 22px;
 }
 
+.leadActionGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.leadActionColumn {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  padding: 12px;
+}
+
+.leadActionColumn[data-tone="alert"],
+.leadActionColumn[data-tone="hot"] {
+  border-color: var(--amber-line);
+  background: var(--amber-bg);
+}
+
+.leadActionColumn > div:first-child {
+  display: grid;
+  gap: 3px;
+}
+
+.leadActionColumn > div:first-child strong {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.leadActionColumn > div:first-child span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.leadActionItem {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 10px;
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  padding: 10px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.leadActionItem:hover {
+  border-color: var(--accent);
+  background: #ffffff;
+}
+
+.leadActionItem span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.leadActionItem strong,
+.leadActionItem small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.leadActionItem small {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.leadActionItem em {
+  border-radius: 999px;
+  background: var(--accent-bg);
+  color: var(--accent);
+  padding: 3px 7px;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+}
+
 .leadGrid {
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
 }
@@ -1950,6 +2132,58 @@ textarea {
   color: var(--danger);
 }
 
+.channelStepList {
+  display: grid;
+  gap: 8px;
+}
+
+.channelStepList article {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  min-width: 0;
+  border: 1px solid var(--amber-line);
+  border-radius: 8px;
+  background: var(--amber-bg);
+  color: var(--amber);
+  padding: 9px;
+}
+
+.channelStepList article[data-done="true"] {
+  border-color: var(--green-line);
+  background: var(--green-bg);
+  color: var(--green);
+}
+
+.channelStepList svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.channelStepList div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.channelStepList strong,
+.channelStepList span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.channelStepList strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.channelStepList span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .channelStatusRows {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2160,6 +2394,45 @@ textarea {
 
 .todayPanel {
   padding: 14px;
+}
+
+.operationalGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.operationalGrid article {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  padding: 12px;
+}
+
+.operationalGrid article[data-alert="true"] {
+  border-color: var(--amber-line);
+  background: var(--amber-bg);
+}
+
+.operationalGrid span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.operationalGrid strong {
+  font-size: 22px;
+}
+
+.operationalGrid small {
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.35;
 }
 
 .todayGrid {
@@ -2470,7 +2743,9 @@ textarea {
   .settingsGrid,
   .automationGrid,
   .inboxGrid,
-  .quickStartGrid {
+  .quickStartGrid,
+  .operationalGrid,
+  .leadActionGrid {
     grid-template-columns: 1fr;
   }
 
@@ -2530,6 +2805,7 @@ textarea {
   .metricsGrid,
   .compactMetrics,
   .todayGrid,
+  .operationalGrid,
   .automationSummary,
   .readinessList,
   .knowledgeTools,
@@ -2541,6 +2817,8 @@ textarea {
   .funnelGrid,
   .previewFields,
   .pipelineGrid,
+  .leadActionGrid,
+  .leadContactStrip,
   .presetRow,
   .previewQuickReplies,
   .quickActionGrid,

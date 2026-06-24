@@ -122,15 +122,31 @@ void (() => {
     const assistantName = config.theme.assistantName ?? config.tenantName;
     const position = config.theme.position ?? "bottom-right";
     const leadFields = normalizeLeadFields(config.theme.leadCaptureFields);
-    const leadCaptureVisible =
+    const leadCaptureAvailable =
       Boolean(config.theme.leadCaptureEnabled) && !state.leadCaptured;
     const consentVisible =
       Boolean(config.theme.consentEnabled) && !state.consentAccepted;
     const quickReplies = normalizeQuickReplies(config.theme.quickReplies);
     const hasQuickReplies = quickReplies.length > 0;
+    const readinessAvailable =
+      Boolean(config.theme.readinessEnabled) && !state.readinessCaptured;
+    const modeChooserVisible =
+      !consentVisible &&
+      (hasQuickReplies || readinessAvailable || leadCaptureAvailable) &&
+      !state.leadCaptured &&
+      !state.readinessCaptured;
+    const quickRepliesVisible =
+      hasQuickReplies && !consentVisible && !modeChooserVisible;
     const readinessVisible =
-      Boolean(config.theme.readinessEnabled) &&
-      !state.readinessCaptured &&
+      readinessAvailable &&
+      !consentVisible &&
+      !modeChooserVisible &&
+      !hasQuickReplies;
+    const leadCaptureVisible =
+      leadCaptureAvailable &&
+      !consentVisible &&
+      !modeChooserVisible &&
+      !readinessAvailable &&
       !hasQuickReplies;
     const shellSide =
       position === "bottom-left"
@@ -253,37 +269,63 @@ void (() => {
         padding: 12px;
       }
       .lead-form[data-visible="true"] { display: grid; }
-      .consent,
-      .readiness-form,
-      .quick-replies {
+	      .consent,
+	      .intake-modes,
+	      .readiness-form,
+	      .quick-replies {
         display: none;
         gap: 8px;
         border-top: 1px solid rgba(22, 25, 30, 0.12);
         background: #fff;
         padding: 10px 12px;
-      }
-      .consent[data-visible="true"],
-      .readiness-form[data-visible="true"],
-      .quick-replies[data-visible="true"] { display: grid; }
-      .consent p,
-      .readiness-form p {
+	      }
+	      .consent[data-visible="true"],
+	      .intake-modes[data-visible="true"],
+	      .readiness-form[data-visible="true"],
+	      .quick-replies[data-visible="true"] { display: grid; }
+	      .consent p,
+	      .intake-modes p,
+	      .readiness-form p {
         margin: 0;
         color: ${textColor};
         font-size: 12px;
         line-height: 1.4;
-      }
-      .consent button,
-      .quick-replies button,
-      .readiness-form button {
+	      }
+	      .consent button,
+	      .intake-modes button,
+	      .quick-replies button,
+	      .readiness-form button {
         border: 1px solid rgba(22, 25, 30, 0.14);
         border-radius: 6px;
         background: #fff;
         color: ${primaryColor};
         min-height: 34px;
-        cursor: pointer;
-        font-weight: 800;
-      }
-      .quick-replies {
+	        cursor: pointer;
+	        font-weight: 800;
+	      }
+	      .intake-modes {
+	        flex: 0 0 auto;
+	        grid-template-columns: 1fr;
+	      }
+	      .intake-modes button {
+	        display: grid;
+	        grid-template-columns: minmax(0, 1fr) auto;
+	        align-items: center;
+	        min-height: 42px;
+	        padding: 8px 10px;
+	        text-align: left;
+	      }
+	      .intake-modes button span {
+	        min-width: 0;
+	        overflow: hidden;
+	        text-overflow: ellipsis;
+	        white-space: nowrap;
+	      }
+	      .intake-modes button strong {
+	        color: ${primaryColor};
+	        font-size: 12px;
+	      }
+	      .quick-replies {
         flex: 0 0 auto;
         grid-template-columns: repeat(2, minmax(0, 1fr));
       }
@@ -305,17 +347,19 @@ void (() => {
       .quick-replies button[data-action="lead"] {
         background: rgba(166, 110, 47, 0.12);
       }
-      .readiness-form input,
-      .readiness-form textarea,
-      .lead-form strong {
+	      .readiness-form input,
+	      .readiness-form textarea,
+	      .lead-form select,
+	      .lead-form strong {
         display: block;
         color: ${textColor};
         font-size: 13px;
       }
-      .lead-form input,
-      .lead-form textarea,
-      .readiness-form input,
-      .readiness-form textarea {
+	      .lead-form input,
+	      .lead-form textarea,
+	      .lead-form select,
+	      .readiness-form input,
+	      .readiness-form textarea {
         width: 100%;
         box-sizing: border-box;
         border: 1px solid rgba(22, 25, 30, 0.18);
@@ -327,10 +371,11 @@ void (() => {
         font-size: 13px;
         resize: vertical;
       }
-      .lead-form input:focus,
-      .lead-form textarea:focus,
-      .readiness-form input:focus,
-      .readiness-form textarea:focus {
+	      .lead-form input:focus,
+	      .lead-form textarea:focus,
+	      .lead-form select:focus,
+	      .readiness-form input:focus,
+	      .readiness-form textarea:focus {
         border-color: ${primaryColor};
         box-shadow: 0 0 0 3px rgba(166, 110, 47, 0.16);
       }
@@ -396,17 +441,31 @@ void (() => {
           <button class="close" aria-label="Close chat">×</button>
         </div>
         <div class="messages" part="messages"></div>
-        <div class="consent" data-visible="${consentVisible ? "true" : "false"}">
-          <p>${escapeHtml(config.theme.consentText ?? "This assistant uses approved business information and stores messages so the team can follow up.")}</p>
-          <button type="button">Accept</button>
-        </div>
-        <div class="quick-replies" data-visible="${hasQuickReplies && !consentVisible ? "true" : "false"}">
-          ${quickReplies
-            .map(
-              (reply) =>
-                `<button type="button" data-action="${inferQuickReplyAction(reply)}">${escapeHtml(reply)}</button>`,
-            )
-            .join("")}
+	        <div class="consent" data-visible="${consentVisible ? "true" : "false"}">
+	          <p>${escapeHtml(config.theme.consentText ?? "This assistant uses approved business information and stores messages so the team can follow up.")}</p>
+	          <button type="button">Accept</button>
+	        </div>
+	        <div class="intake-modes" data-visible="${modeChooserVisible ? "true" : "false"}">
+	          <p>Was moechten Sie als Naechstes tun?</p>
+	          <button type="button" data-mode="question"><span>Eine Frage stellen</span><strong>Chat</strong></button>
+	          ${
+              readinessAvailable
+                ? `<button type="button" data-mode="readiness"><span>KI-Readiness pruefen</span><strong>Check</strong></button>`
+                : ""
+            }
+	          ${
+              leadCaptureAvailable
+                ? `<button type="button" data-mode="lead"><span>Beratung anfragen</span><strong>Kontakt</strong></button>`
+                : ""
+            }
+	        </div>
+	        <div class="quick-replies" data-visible="${quickRepliesVisible ? "true" : "false"}">
+	          ${quickReplies
+              .map(
+                (reply) =>
+                  `<button type="button" data-action="${inferQuickReplyAction(reply)}">${escapeHtml(reply)}</button>`,
+              )
+              .join("")}
         </div>
         <form class="readiness-form" data-visible="${readinessVisible && !consentVisible ? "true" : "false"}">
           <p>${escapeHtml(config.theme.readinessIntro ?? "Check whether your company is ready for a useful AI automation project.")}</p>
@@ -417,15 +476,9 @@ void (() => {
           <input name="budget" placeholder="Budget range" />
           <button class="primary">Check readiness</button>
         </form>
-        <form class="lead-form" data-visible="${leadCaptureVisible && !consentVisible ? "true" : "false"}">
-          <strong>${escapeHtml(config.theme.leadCaptureIntro ?? "Leave your details and we will follow up.")}</strong>
-          ${leadFields
-            .map((field) =>
-              field === "message"
-                ? `<textarea name="${field}" rows="3" placeholder="${escapeHtml(leadFieldLabel(field))}"></textarea>`
-                : `<input name="${field}" ${field === "email" ? 'type="email"' : 'type="text"'} ${field === "name" || field === "email" ? "required" : ""} placeholder="${escapeHtml(leadFieldLabel(field))}" />`,
-            )
-            .join("")}
+	        <form class="lead-form" data-visible="${leadCaptureVisible && !consentVisible ? "true" : "false"}">
+	          <strong>${escapeHtml(config.theme.leadCaptureIntro ?? "Leave your details and we will follow up.")}</strong>
+	          ${leadFields.map((field) => renderLeadField(field)).join("")}
           <button>Send details</button>
         </form>
         <form class="composer">
@@ -442,9 +495,17 @@ void (() => {
     const close = shadow.querySelector<HTMLButtonElement>(".close");
     const messages = shadow.querySelector<HTMLDivElement>(".messages");
     const consent = shadow.querySelector<HTMLDivElement>(".consent");
-    const consentButton = shadow.querySelector<HTMLButtonElement>(".consent button");
-    const quickReplyButtons =
-      shadow.querySelectorAll<HTMLButtonElement>(".quick-replies button");
+    const consentButton =
+      shadow.querySelector<HTMLButtonElement>(".consent button");
+    const modeChooser = shadow.querySelector<HTMLDivElement>(".intake-modes");
+    const modeButtons = shadow.querySelectorAll<HTMLButtonElement>(
+      ".intake-modes button",
+    );
+    const quickRepliesNode =
+      shadow.querySelector<HTMLDivElement>(".quick-replies");
+    const quickReplyButtons = shadow.querySelectorAll<HTMLButtonElement>(
+      ".quick-replies button",
+    );
     const readinessForm =
       shadow.querySelector<HTMLFormElement>(".readiness-form");
     const leadForm = shadow.querySelector<HTMLFormElement>(".lead-form");
@@ -459,6 +520,8 @@ void (() => {
       !close ||
       !messages ||
       !consent ||
+      !modeChooser ||
+      !quickRepliesNode ||
       !readinessForm ||
       !leadForm ||
       !form ||
@@ -496,8 +559,15 @@ void (() => {
       state.consentAccepted = true;
       persistState(context.config.assistantId, state);
       consent.dataset.visible = "false";
-      const quickRepliesNode = shadow.querySelector<HTMLDivElement>(".quick-replies");
-      if (quickRepliesNode && quickReplyButtons.length) {
+      if (
+        quickReplyButtons.length ||
+        (context.config.theme.readinessEnabled && !state.readinessCaptured) ||
+        (context.config.theme.leadCaptureEnabled && !state.leadCaptured)
+      ) {
+        modeChooser.dataset.visible = "true";
+        return;
+      }
+      if (quickReplyButtons.length) {
         quickRepliesNode.dataset.visible = "true";
       }
       if (
@@ -508,9 +578,57 @@ void (() => {
       ) {
         readinessForm.dataset.visible = "true";
       }
-      if (leadForm && context.config.theme.leadCaptureEnabled && !state.leadCaptured) {
+      if (
+        leadForm &&
+        context.config.theme.leadCaptureEnabled &&
+        !state.leadCaptured
+      ) {
         leadForm.dataset.visible = "true";
       }
+    });
+
+    modeButtons.forEach((button) => {
+      button.addEventListener("click", () => {
+        const mode = button.dataset.mode ?? "question";
+        modeChooser.dataset.visible = "false";
+        quickRepliesNode.dataset.visible = "false";
+        readinessForm.dataset.visible = "false";
+        leadForm.dataset.visible = "false";
+        void trackWidgetEvent(context, state, "intake_mode_selected", { mode });
+
+        if (mode === "readiness") {
+          readinessForm.dataset.visible = "true";
+          state.messages.push({
+            role: "assistant",
+            text: "Gerne. Beantworten Sie kurz die Fragen, dann schaetze ich die KI-Readiness ein.",
+          });
+          persistState(context.config.assistantId, state);
+          drawMessages(messagesEl, state.messages, context.config.theme);
+          return;
+        }
+
+        if (mode === "lead") {
+          leadForm.dataset.visible = "true";
+          state.messages.push({
+            role: "assistant",
+            text: "Gerne. Hinterlassen Sie kurz Ihre Daten, dann kann Assad Dar passend nachfassen.",
+          });
+          persistState(context.config.assistantId, state);
+          drawMessages(messagesEl, state.messages, context.config.theme);
+          return;
+        }
+
+        if (quickReplyButtons.length) {
+          quickRepliesNode.dataset.visible = "true";
+        }
+        state.messages.push({
+          role: "assistant",
+          text: "Stellen Sie Ihre Frage direkt hier im Chat.",
+        });
+        persistState(context.config.assistantId, state);
+        drawMessages(messagesEl, state.messages, context.config.theme);
+        inputEl.focus();
+      });
     });
 
     quickReplyButtons.forEach((button) => {
@@ -523,10 +641,8 @@ void (() => {
         });
 
         if (action === "readiness") {
-          const quickRepliesNode = shadow.querySelector<HTMLDivElement>(".quick-replies");
-          if (quickRepliesNode) {
-            quickRepliesNode.dataset.visible = "false";
-          }
+          modeChooser.dataset.visible = "false";
+          quickRepliesNode.dataset.visible = "false";
           readinessForm.dataset.visible = "true";
           leadForm.dataset.visible = "false";
           state.messages.push({
@@ -539,10 +655,8 @@ void (() => {
         }
 
         if (action === "lead") {
-          const quickRepliesNode = shadow.querySelector<HTMLDivElement>(".quick-replies");
-          if (quickRepliesNode) {
-            quickRepliesNode.dataset.visible = "false";
-          }
+          modeChooser.dataset.visible = "false";
+          quickRepliesNode.dataset.visible = "false";
           leadForm.dataset.visible = "true";
           readinessForm.dataset.visible = "false";
           state.messages.push({
@@ -604,12 +718,16 @@ void (() => {
         );
         state.conversationId = response.conversationId;
         state.readinessCaptured = true;
+        const readinessBookingUrl =
+          response.bookingUrl ?? getPrimaryCtaUrl(context.config.theme);
         state.messages.push({
           role: "assistant",
           text: [
             `AI readiness score: ${response.score}/100. ${response.recommendation}`,
             response.qualified
-              ? "Das sieht nach einem qualifizierten Use Case aus. Der naechste sinnvolle Schritt ist ein kurzes Erstgespraech."
+              ? readinessBookingUrl
+                ? `Das sieht nach einem qualifizierten Use Case aus. Hier koennen Sie direkt einen Termin buchen: ${readinessBookingUrl}`
+                : "Das sieht nach einem qualifizierten Use Case aus. Der naechste sinnvolle Schritt ist ein kurzes Erstgespraech."
               : "",
           ]
             .filter(Boolean)
@@ -668,9 +786,17 @@ void (() => {
 
         state.conversationId = response.conversationId;
         state.leadCaptured = true;
+        const leadBookingUrl = getPrimaryCtaUrl(context.config.theme);
         state.messages.push({
           role: "assistant",
-          text: "Thanks. Your details were sent to the team.",
+          text: [
+            "Danke. Ihre Anfrage ist angekommen und wird von Assad Dar geprueft.",
+            leadBookingUrl
+              ? `Wenn Sie moechten, koennen Sie auch direkt einen Termin buchen: ${leadBookingUrl}`
+              : "",
+          ]
+            .filter(Boolean)
+            .join("\n"),
         });
         persistState(context.config.assistantId, state);
         leadForm.dataset.visible = "false";
@@ -802,9 +928,30 @@ void (() => {
   }
 
   function normalizeLeadFields(fields?: string[]) {
-    const defaults = ["name", "email", "company", "projectType", "timeline"];
+    const defaults = [
+      "name",
+      "email",
+      "company",
+      "projectType",
+      "timeline",
+      "contactPreference",
+    ];
     const values = fields?.length ? fields : defaults;
     return Array.from(new Set(values)).slice(0, 8);
+  }
+
+  function renderLeadField(field: string) {
+    const label = escapeHtml(leadFieldLabel(field));
+    if (field === "message") {
+      return `<textarea name="${field}" rows="3" placeholder="${label}"></textarea>`;
+    }
+    if (field === "contactPreference") {
+      return `<select name="${field}"><option value="">${label}</option><option value="Email">Email</option><option value="Phone">Phone</option><option value="Video call">Video call</option></select>`;
+    }
+    const inputType =
+      field === "email" ? "email" : field === "phone" ? "tel" : "text";
+    const required = field === "name" || field === "email" ? "required" : "";
+    return `<input name="${field}" type="${inputType}" ${required} placeholder="${label}" />`;
   }
 
   function normalizeQuickReplies(replies?: string[]) {
@@ -816,10 +963,9 @@ void (() => {
       "Beratung anfragen",
     ];
     const values = replies?.length ? replies : defaults;
-    return Array.from(new Set(values.map((reply) => reply.trim()).filter(Boolean))).slice(
-      0,
-      8,
-    );
+    return Array.from(
+      new Set(values.map((reply) => reply.trim()).filter(Boolean)),
+    ).slice(0, 8);
   }
 
   function inferQuickReplyAction(reply: string) {
@@ -842,7 +988,11 @@ void (() => {
       config: WidgetConfig;
     },
     state: WidgetState,
-    eventType: "widget_open" | "quick_reply_clicked" | "cta_clicked",
+    eventType:
+      | "widget_open"
+      | "quick_reply_clicked"
+      | "cta_clicked"
+      | "intake_mode_selected",
     metadata: Record<string, unknown> = {},
   ) {
     try {
@@ -869,10 +1019,12 @@ void (() => {
     const labels: Record<string, string> = {
       name: "Name",
       email: "Email",
+      phone: "Phone",
       company: "Company",
       projectType: "Project type",
       budget: "Budget",
       timeline: "Timeline",
+      contactPreference: "Contact preference",
       message: "Message",
     };
     return (

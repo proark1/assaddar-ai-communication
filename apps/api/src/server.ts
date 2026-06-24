@@ -49,7 +49,13 @@ const ParamsMetaChannelSchema = z.object({
 });
 
 const ParamsChannelSchema = ParamsTenantSchema.extend({
-  channel: z.enum(["website", "whatsapp", "messenger", "instagram", "telephone"]),
+  channel: z.enum([
+    "website",
+    "whatsapp",
+    "messenger",
+    "instagram",
+    "telephone",
+  ]),
 });
 
 const CreateTenantSchema = z.object({
@@ -189,7 +195,13 @@ const MetaWebhookQuerySchema = z.object({
 });
 
 const ChannelConnectionSchema = z.object({
-  channel: z.enum(["website", "whatsapp", "messenger", "instagram", "telephone"]),
+  channel: z.enum([
+    "website",
+    "whatsapp",
+    "messenger",
+    "instagram",
+    "telephone",
+  ]),
   provider: z.string().min(1).max(80),
   externalAccountId: z.string().max(256).nullable().optional(),
   status: z.enum(["pending", "connected", "disabled"]).optional(),
@@ -530,7 +542,8 @@ export async function buildServer(
         pagesScanned: documents.map((document) => ({
           url: document.finalUrl,
           statusCode: document.status,
-          title: extractTitle(document.html) || new URL(document.finalUrl).hostname,
+          title:
+            extractTitle(document.html) || new URL(document.finalUrl).hostname,
         })),
         ...buildWebsiteImport(
           documents.map((document) => document.html).join("\n"),
@@ -767,7 +780,11 @@ export async function buildServer(
       return {
         checkedUrl: document.finalUrl,
         statusCode: document.status,
-        ...inspectWidgetInstall(document.html, body.assistantId, body.widgetUrl),
+        ...inspectWidgetInstall(
+          document.html,
+          body.assistantId,
+          body.widgetUrl,
+        ),
       };
     },
   );
@@ -900,10 +917,7 @@ export async function buildServer(
     }
     const theme = tenant.theme ?? {};
     const automation = getAutomationSettings(theme);
-    const autoQualified = shouldAutoQualifyLeadDetails(
-      body.fields,
-      automation,
-    );
+    const autoQualified = shouldAutoQualifyLeadDetails(body.fields, automation);
     const pipelineStage = autoQualified ? "qualified" : "new";
 
     const conversationInput: Parameters<
@@ -1267,7 +1281,12 @@ function buildChannelConnectionDashboard(input: {
     label: string,
     extras: Omit<
       ChannelDashboardItem,
-      "channel" | "provider" | "label" | "status" | "settings" | "credentialConfigured"
+      | "channel"
+      | "provider"
+      | "label"
+      | "status"
+      | "settings"
+      | "credentialConfigured"
     > & {
       credentialConfigured: boolean;
       defaultStatus?: ChannelDashboardItem["status"];
@@ -1349,8 +1368,9 @@ async function processChannelInboundEvent(input: {
     locale: input.tenant.defaultLocale,
   };
   if (input.event.externalConversationId) {
-    conversationInput.publicConversationId =
-      buildProviderConversationId(input.event);
+    conversationInput.publicConversationId = buildProviderConversationId(
+      input.event,
+    );
   }
   if (input.event.externalUserId) {
     conversationInput.externalUserId = input.event.externalUserId;
@@ -1556,7 +1576,9 @@ function extractSameOriginLinks(html: string, sourceUrl: string) {
       }
     })
     .filter((url) => url.origin === origin)
-    .filter((url) => !/\.(pdf|png|jpg|jpeg|gif|svg|webp|zip)$/i.test(url.pathname))
+    .filter(
+      (url) => !/\.(pdf|png|jpg|jpeg|gif|svg|webp|zip)$/i.test(url.pathname),
+    )
     .map((url) => url.toString());
 
   return Array.from(new Set(links)).filter((link) => link !== sourceUrl);
@@ -1564,15 +1586,18 @@ function extractSameOriginLinks(html: string, sourceUrl: string) {
 
 function buildUnansweredQueue(handoffs: unknown[]) {
   return handoffs
-    .map((handoff) => handoff as {
-      id: string;
-      conversationId?: string | null;
-      channel: string;
-      reason: string;
-      requesterMessage: string;
-      status: string;
-      createdAt: string;
-    })
+    .map(
+      (handoff) =>
+        handoff as {
+          id: string;
+          conversationId?: string | null;
+          channel: string;
+          reason: string;
+          requesterMessage: string;
+          status: string;
+          createdAt: string;
+        },
+    )
     .filter((handoff) => handoff.reason !== "lead_capture")
     .filter((handoff) => handoff.reason !== "readiness_assessment")
     .map((handoff) => ({
@@ -1583,7 +1608,9 @@ function buildUnansweredQueue(handoffs: unknown[]) {
       question: handoff.requesterMessage,
       status: handoff.status,
       createdAt: handoff.createdAt,
-      suggestedTags: ["unanswered", handoff.reason, handoff.channel].filter(Boolean),
+      suggestedTags: ["unanswered", handoff.reason, handoff.channel].filter(
+        Boolean,
+      ),
     }));
 }
 
@@ -1839,7 +1866,10 @@ function buildWeeklyReportEmail(
   );
   const unanswered = buildUnansweredQueue(handoffs).slice(0, 5);
   const staleLeads = openLeads.filter((handoff) =>
-    isOlderThanDays(asRecord(handoff).createdAt, automation.staleLeadReminderDays),
+    isOlderThanDays(
+      asRecord(handoff).createdAt,
+      automation.staleLeadReminderDays,
+    ),
   );
 
   return {
@@ -1873,7 +1903,9 @@ function buildWeeklyReportEmail(
   };
 }
 
-function getAutomationSettings(theme?: WidgetThemeInput | null): AutomationSettings {
+function getAutomationSettings(
+  theme?: WidgetThemeInput | null,
+): AutomationSettings {
   const automation = theme?.automation;
   return {
     ownerLeadEmailEnabled:
@@ -2047,7 +2079,9 @@ async function sendSmtpEmail(
   const socketReady = new Promise<void>((resolve, reject) => {
     socket.once(smtp.secure ? "secureConnect" : "connect", () => resolve());
     socket.once("error", reject);
-    socket.once("timeout", () => reject(new Error("SMTP connection timed out.")));
+    socket.once("timeout", () =>
+      reject(new Error("SMTP connection timed out.")),
+    );
   });
 
   function readResponse() {
@@ -2094,9 +2128,7 @@ async function sendSmtpEmail(
 }
 
 function formatSmtpMessage(email: LeadNotificationEmail) {
-  const body = email.text
-    .replace(/\r?\n/g, "\r\n")
-    .replace(/^\./gm, "..");
+  const body = email.text.replace(/\r?\n/g, "\r\n").replace(/^\./gm, "..");
   return [
     `From: ${email.from}`,
     `To: ${email.to}`,
@@ -2240,15 +2272,19 @@ function formatLeadCaptureMessage(
   const labelMap: Record<string, string> = {
     name: "Name",
     email: "Email",
+    phone: "Phone",
     company: "Company",
     projectType: "Project type",
     budget: "Budget",
     timeline: "Timeline",
+    contactPreference: "Contact preference",
     message: "Message",
   };
   const lines = Object.entries(fields)
     .filter(([, value]) => value.trim())
-    .map(([key, value]) => `${labelMap[key] ?? titleCase(key)}: ${value.trim()}`);
+    .map(
+      ([key, value]) => `${labelMap[key] ?? titleCase(key)}: ${value.trim()}`,
+    );
 
   if (pageUrl) {
     lines.push(`Page: ${pageUrl}`);
@@ -2273,7 +2309,9 @@ function formatReadinessMessage(
   };
   const lines = Object.entries(answers)
     .filter(([, value]) => value.trim())
-    .map(([key, value]) => `${labelMap[key] ?? titleCase(key)}: ${value.trim()}`);
+    .map(
+      ([key, value]) => `${labelMap[key] ?? titleCase(key)}: ${value.trim()}`,
+    );
 
   lines.unshift(`Readiness score: ${score}/100`);
   if (pageUrl) {
@@ -2301,10 +2339,14 @@ function scoreReadiness(answers: Record<string, string>) {
   if (answers.budget?.trim()) {
     score += 10;
   }
-  if (/(crm|erp|sap|hubspot|salesforce|excel|database|api|datenbank)/.test(text)) {
+  if (
+    /(crm|erp|sap|hubspot|salesforce|excel|database|api|datenbank)/.test(text)
+  ) {
     score += 8;
   }
-  if (/(manual|manuell|repetitive|wiederkehrend|email|e-mail|dokument)/.test(text)) {
+  if (
+    /(manual|manuell|repetitive|wiederkehrend|email|e-mail|dokument)/.test(text)
+  ) {
     score += 8;
   }
 
@@ -2357,8 +2399,9 @@ function extractReadableSnippets(text: string) {
     .filter((sentence) => sentence.length >= 45 && sentence.length <= 420)
     .filter(
       (sentence, index, all) =>
-        all.findIndex((item) => item.toLowerCase() === sentence.toLowerCase()) ===
-        index,
+        all.findIndex(
+          (item) => item.toLowerCase() === sentence.toLowerCase(),
+        ) === index,
     )
     .slice(0, 16);
 }
@@ -2366,8 +2409,9 @@ function extractReadableSnippets(text: string) {
 function detectLanguage(text: string) {
   const lower = text.toLowerCase();
   const germanMatches = (
-    lower.match(/\b(und|der|die|das|beratung|kontakt|leistungen|daten|für)\b/g) ??
-    []
+    lower.match(
+      /\b(und|der|die|das|beratung|kontakt|leistungen|daten|für)\b/g,
+    ) ?? []
   ).length;
   const englishMatches = (
     lower.match(/\b(and|the|consulting|contact|services|data|for)\b/g) ?? []
