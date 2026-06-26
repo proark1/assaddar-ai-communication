@@ -69,11 +69,12 @@ NEXT_PUBLIC_API_BASE_URL=https://your-api-domain
 Voice:
 
 ```text
-TWILIO_ACCOUNT_SID=<when Twilio is enabled>
-TWILIO_AUTH_TOKEN=<when Twilio is enabled>
-TWILIO_FROM_NUMBER=<when outbound calling is enabled>
 VOICE_PUBLIC_URL=https://your-voice-domain
-TWILIO_TRANSFER_PHONE_NUMBER=<when press-0 transfer is enabled>
+VOICE_SIP_DOMAIN=<sip-target-domain-for-provider-trunks>
+TWILIO_ACCOUNT_SID=<legacy Twilio route only>
+TWILIO_AUTH_TOKEN=<legacy Twilio route only>
+TWILIO_FROM_NUMBER=<legacy outbound calling only>
+TWILIO_TRANSFER_PHONE_NUMBER=<legacy press-0 transfer only>
 TWILIO_VOICE_LANGUAGE=de-DE
 TWILIO_VOICE_NAME=alice
 ```

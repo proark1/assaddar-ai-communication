@@ -109,32 +109,51 @@ export const openApiDocument = {
     },
     "/admin/tenants/{tenantId}/telephone/twilio/search": {
       get: {
-        summary: "Search available Twilio phone numbers for AI voice setup",
+        summary: "Legacy: search available Twilio phone numbers",
       },
     },
     "/admin/tenants/{tenantId}/telephone/twilio/numbers": {
       get: {
-        summary: "List Twilio phone numbers owned by the configured account",
+        summary: "Legacy: list Twilio phone numbers owned by the account",
       },
     },
     "/admin/tenants/{tenantId}/telephone/twilio/purchase": {
       post: {
-        summary: "Purchase a Twilio phone number and route it to the assistant",
+        summary: "Legacy: purchase a Twilio phone number",
       },
     },
     "/admin/tenants/{tenantId}/telephone/twilio/connect-existing": {
       post: {
-        summary: "Route an existing Twilio phone number to the assistant",
+        summary: "Legacy: route an existing Twilio number to the assistant",
+      },
+    },
+    "/admin/tenants/{tenantId}/telephone/new-number": {
+      post: {
+        summary:
+          "Save a new-number setup with a German/EU SIP provider such as easybell, sipgate, or peoplefone",
       },
     },
     "/admin/tenants/{tenantId}/telephone/carrier-forwarding": {
       post: {
-        summary: "Save existing carrier number forwarding instructions",
+        summary:
+          "Save an existing-number forwarding setup to a provider AI destination number",
       },
     },
     "/admin/tenants/{tenantId}/telephone/sip-byoc": {
       post: {
-        summary: "Save SIP or bring-your-own-carrier telephone setup",
+        summary:
+          "Save SIP trunk or PBX routing details for the Assaddar voice edge",
+      },
+    },
+    "/admin/tenants/{tenantId}/telephone/settings": {
+      put: {
+        summary:
+          "Save telephone checklist, test call, business-hours, handoff, GDPR, and voice-quality settings",
+      },
+    },
+    "/admin/tenants/{tenantId}/telephone/voice-edge-status": {
+      get: {
+        summary: "Check the configured Railway voice bridge health endpoint",
       },
     },
     "/admin/tenants/{tenantId}/weekly-report": {

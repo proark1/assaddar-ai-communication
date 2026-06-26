@@ -29,7 +29,7 @@ apps/api       Fastify API, admin endpoints, public widget endpoints, webhooks
 apps/admin     Next.js internal/customer dashboard MVP
 apps/widget    Embeddable website chatbot script and example page
 apps/workers   Background job foundation for parsing, embeddings, retries, metering
-apps/voice     Twilio-first telephone webhook proof of concept
+apps/voice     Telephone voice bridge with a generic /voice/turn API and legacy Twilio route
 packages/core  Answer engine, policy enforcement, retrieval, guardrails
 packages/db    Drizzle schema, migrations, tenant-safe repository, seed data
 packages/channels Channel adapter contracts and mock/provider skeletons

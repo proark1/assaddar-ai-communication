@@ -69,39 +69,38 @@ Adapter/runtime:
 
 Current foundation:
 
-- Incoming call webhook receives Twilio form data
-- First request prompts with TwiML `<Gather input="speech">`
-- Speech result is normalized, sent through the answer engine, stored, and returned with TwiML `<Say>`
-- Pressing `0` transfers to `TWILIO_TRANSFER_PHONE_NUMBER` when configured
-- Admin setup can search Twilio inventory, purchase a Twilio phone number, attach the assistant voice webhook, and persist the connection
-- Admin setup can connect an existing Twilio number by phone number or `PN...` SID
-- Admin setup can save carrier-forwarding and SIP/BYOC instructions when the customer keeps an existing number outside Twilio
-- Human handoff summaries, media streams, callback workflows, and deeper call analytics are TODOs behind the same runtime boundary
+- The product treats telephone providers as number/SIP carriers only; Assaddar owns the AI, inbox, summaries, and handoff workflow.
+- Admin setup supports three paths: request/connect a new provider number, forward an existing customer number to an AI destination number, or connect a SIP trunk/PBX.
+- Supported provider labels are `easybell`, `sipgate`, `peoplefone`, and `custom_sip`.
+- `apps/voice` exposes `POST /voice/turn` for a SIP/RTP edge such as Asterisk or FreeSWITCH. The edge sends transcribed text plus call metadata and receives the assistant reply, confidence, and handoff state.
+- Admin setup also tracks launch checklist, test-call result, voice-edge health, provider setup guides, business hours, handoff rules, GDPR phone settings, voice quality, and recent phone transcripts.
+- The legacy Twilio TwiML route remains available for old tests/deployments, but it is no longer the main product direction.
+- Human handoff summaries, media streams, callback workflows, and deeper call analytics are TODOs behind the same runtime boundary.
 
-Required env for number automation in `apps/api`:
+Required env for the Railway voice bridge:
 
-- `TWILIO_ACCOUNT_SID`
-- `TWILIO_AUTH_TOKEN`
 - `VOICE_PUBLIC_URL`
+- `VOICE_SIP_DOMAIN` or `VOICE_EDGE_SIP_DOMAIN` once a SIP edge is deployed
+- `TWILIO_TRANSFER_PHONE_NUMBER` only for the legacy Twilio route
 
-German numbers can require Twilio Regulatory Compliance bundles. If purchase fails with a compliance error, attach an approved bundle in Twilio or complete the required business documentation first. German toll-free numbers require allocation by BNetzA before Twilio activation.
+Voice edge contract:
+
+- `POST /voice/turn?assistantId=<public assistant id>`
+- JSON body: `text`, optional `callId`, `from`, `to`, `provider`, `locale`, and metadata.
+- JSON response: `reply`, `status`, `confidence`, `handoffRecommended`, and optional `transferPhoneNumber`.
 
 Official docs checked:
 
-- [Twilio Voice webhooks](https://www.twilio.com/docs/usage/webhooks/voice-webhooks)
-- [Twilio TwiML for Programmable Voice](https://www.twilio.com/docs/voice/twiml)
-- [Twilio Gather](https://www.twilio.com/docs/voice/twiml/gather)
-- [Twilio Phone Numbers API](https://www.twilio.com/docs/phone-numbers)
-- [Twilio IncomingPhoneNumber API](https://www.twilio.com/docs/phone-numbers/api/incomingphonenumber-resource)
-- [Twilio AvailablePhoneNumber API](https://www.twilio.com/docs/phone-numbers/api/availablephonenumberlocal-resource)
-- [Twilio Phone Number Pricing API](https://www.twilio.com/docs/phone-numbers/pricing)
-- [Twilio Regulatory Compliance API](https://www.twilio.com/docs/phone-numbers/regulatory/api)
-- [Twilio BYOC](https://www.twilio.com/docs/voice/bring-your-own-carrier-byoc)
+- [easybell SIP Trunks](https://en.easybell.de/business/sip-trunks/)
+- [sipgate trunking](https://teamhelp.sipgate.co.uk/integrations-and-connections/using-sipgate-trunking/what-is-sipgate-trunking)
+- [peoplefone SIP trunk](https://support.peoplefone.com/en-che/peoplefone-sip-trunk/)
+- [Asterisk SIP trunking](https://www.asterisk.org/sip-trunking-for-asterisk/)
+- [FreeSWITCH](https://signalwire.com/freeswitch)
 
 Planned provider expansion:
 
-- Telnyx number ordering, international porting, and SIP trunking can be added as a second provider adapter when we need embedded international porting.
-- OpenAI Realtime SIP can be added when we need lower-latency, more natural live telephone conversations than the current Twilio Gather/Say loop.
+- Add provider-specific API automation only after partner/reseller access is available.
+- Add an EU/self-hosted SIP/RTP edge for live audio before selling production phone AI as GDPR-ready.
 
 ## TODOs Before Production Credentials
 

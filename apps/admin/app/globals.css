@@ -2404,18 +2404,70 @@ textarea {
 }
 
 .telephoneWebhook {
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
+  display: grid;
+  gap: 8px;
 }
 
-.telephoneWebhook span,
-.telephoneWebhook code {
+.telephoneEndpoint {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 5px 10px;
+  align-items: center;
+  min-width: 0;
+}
+
+.telephoneEndpoint span,
+.telephoneEndpoint code {
   grid-column: 1;
 }
 
-.telephoneWebhook button {
+.telephoneEndpoint button {
   grid-column: 2;
   grid-row: 1 / span 2;
+}
+
+.providerOptionGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.providerOptionGrid button {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  color: var(--text);
+  padding: 10px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.providerOptionGrid button[data-selected="true"] {
+  border-color: rgba(166, 110, 47, 0.55);
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+
+.providerOptionGrid strong,
+.providerOptionGrid span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.providerOptionGrid strong {
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.providerOptionGrid span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .inlineNotice {
@@ -2458,6 +2510,231 @@ textarea {
 .telephoneFlow {
   display: grid;
   gap: 12px;
+}
+
+.telephonePolishGrid,
+.telephoneRuntimeGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.telephoneControlPanel,
+.telephoneTestCall,
+.recentCallList {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  padding: 12px;
+}
+
+.miniPanelHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.miniPanelHeader strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.miniPanelHeader span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.checklistStack {
+  display: grid;
+  gap: 8px;
+}
+
+.voiceEdgeStatus {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.voiceEdgeStatus strong {
+  color: var(--text);
+  text-transform: capitalize;
+}
+
+.voiceEdgeStatus[data-status="online"] strong {
+  color: var(--green);
+}
+
+.voiceEdgeStatus[data-status="degraded"] strong,
+.voiceEdgeStatus[data-status="offline"] strong {
+  color: var(--danger);
+}
+
+.voiceEdgeStatus span,
+.voiceEdgeStatus small {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.providerGuideGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.providerGuideGrid a {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  color: var(--text);
+  padding: 9px 10px;
+  font-size: 12px;
+  font-weight: 900;
+  text-decoration: none;
+}
+
+.providerGuideGrid span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.telephoneWarnings {
+  display: grid;
+  gap: 8px;
+}
+
+.telephoneWarnings article {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  border: 1px solid var(--amber-line);
+  border-radius: 8px;
+  background: var(--amber-bg);
+  color: var(--text-soft);
+  padding: 10px;
+}
+
+.telephoneWarnings article[data-level="info"] {
+  border-color: var(--slate-line);
+  background: var(--slate-bg);
+}
+
+.telephoneWarnings div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.telephoneWarnings strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.telephoneWarnings span {
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.telephoneTestCall {
+  grid-template-columns: minmax(0, 1fr) repeat(2, minmax(180px, 240px)) auto;
+  align-items: end;
+}
+
+.telephoneTestCall > div:first-child {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.telephoneTestCall > div:first-child span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.recentCallList button {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 0.5fr) minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  padding: 9px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.recentCallList span,
+.recentCallList small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recentCallList span {
+  font-weight: 900;
+}
+
+.recentCallList small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.callDetailStrip {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.callDetailStrip article {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  padding: 10px;
+}
+
+.callDetailStrip span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.callDetailStrip strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
 }
 
 .numberResults {
@@ -3243,6 +3520,12 @@ textarea {
   .contactContextStrip,
   .telephoneSummary,
   .modeSelector,
+  .providerOptionGrid,
+  .providerGuideGrid,
+  .telephonePolishGrid,
+  .telephoneRuntimeGrid,
+  .telephoneTestCall,
+  .callDetailStrip,
   .providerRoadmap {
     grid-template-columns: 1fr;
   }
@@ -3306,6 +3589,12 @@ textarea {
   .operationalGrid,
   .telephoneSummary,
   .modeSelector,
+  .providerOptionGrid,
+  .providerGuideGrid,
+  .telephonePolishGrid,
+  .telephoneRuntimeGrid,
+  .telephoneTestCall,
+  .callDetailStrip,
   .numberResults,
   .providerRoadmap,
   .automationSummary,
@@ -3367,18 +3656,26 @@ textarea {
     width: 100%;
   }
 
-  .telephoneWebhook {
+  .telephoneEndpoint {
     grid-template-columns: 1fr;
   }
 
-  .telephoneWebhook button,
-  .telephoneWebhook code,
-  .telephoneWebhook span {
+  .telephoneEndpoint button,
+  .telephoneEndpoint code,
+  .telephoneEndpoint span {
     grid-column: auto;
     grid-row: auto;
   }
 
   .numberCard {
     grid-template-columns: 1fr;
+  }
+
+  .recentCallList button {
+    grid-template-columns: 18px minmax(0, 1fr);
+  }
+
+  .recentCallList small {
+    grid-column: 2;
   }
 }

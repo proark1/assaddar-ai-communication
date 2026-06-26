@@ -226,15 +226,24 @@ const E164PhoneNumberSchema = z
   .trim()
   .regex(/^\+[1-9]\d{6,14}$/, "Use E.164 format, for example +49301234567.");
 
+const TelephoneProviderSchema = z.enum([
+  "easybell",
+  "sipgate",
+  "peoplefone",
+  "custom_sip",
+]);
+const TelephoneNumberTypeSchema = z.enum(["local", "mobile", "toll-free"]);
 const TwilioNumberTypeSchema = z.enum(["local", "mobile", "toll-free"]);
 
+const TelephoneCountrySchema = z
+  .string()
+  .trim()
+  .length(2)
+  .default("DE")
+  .transform((value) => value.toUpperCase());
+
 const TwilioNumberSearchQuerySchema = z.object({
-  country: z
-    .string()
-    .trim()
-    .length(2)
-    .default("DE")
-    .transform((value) => value.toUpperCase()),
+  country: TelephoneCountrySchema,
   numberType: TwilioNumberTypeSchema.default("local"),
   contains: z.string().trim().min(1).max(32).optional(),
   locality: z.string().trim().min(1).max(80).optional(),
@@ -265,25 +274,101 @@ const ConnectExistingTwilioNumberSchema = z
     message: "Provide a Twilio phone number SID or phone number.",
   });
 
+const NewTelephoneNumberSetupSchema = z.object({
+  provider: TelephoneProviderSchema.default("easybell"),
+  requestedCountry: TelephoneCountrySchema,
+  numberType: TelephoneNumberTypeSchema.default("local"),
+  areaCode: z.string().trim().min(1).max(24).optional(),
+  locality: z.string().trim().min(1).max(80).optional(),
+  orderedNumber: E164PhoneNumberSchema.optional(),
+  sipRegistrar: z.string().trim().min(3).max(240).optional(),
+  sipUsername: z.string().trim().min(1).max(160).optional(),
+  sipConfigured: z.boolean().default(false),
+  fallbackNumber: E164PhoneNumberSchema.optional(),
+  notes: z.string().trim().max(1000).optional(),
+});
+
 const CarrierForwardingSchema = z.object({
+  provider: TelephoneProviderSchema.default("easybell"),
   existingNumber: E164PhoneNumberSchema,
   aiNumber: E164PhoneNumberSchema,
   carrierName: z.string().trim().min(1).max(120).optional(),
   forwardingConfirmed: z.boolean().default(false),
+  fallbackNumber: E164PhoneNumberSchema.optional(),
   notes: z.string().trim().max(1000).optional(),
 });
 
 const SipByocSetupSchema = z.object({
+  provider: TelephoneProviderSchema.default("custom_sip"),
   carrierName: z.string().trim().min(1).max(120).optional(),
   sipDomain: z.string().trim().min(3).max(240).optional(),
-  trunkSid: z
-    .string()
-    .trim()
-    .regex(/^TK[0-9a-fA-F]{32}$/)
-    .optional(),
+  sipRegistrar: z.string().trim().min(3).max(240).optional(),
+  sipUsername: z.string().trim().min(1).max(160).optional(),
+  trunkSid: z.string().trim().min(2).max(160).optional(),
   inboundSipUri: z.string().trim().min(3).max(240).optional(),
+  publicNumber: E164PhoneNumberSchema.optional(),
+  fallbackNumber: E164PhoneNumberSchema.optional(),
   sipConfigured: z.boolean().default(false),
   notes: z.string().trim().max(1000).optional(),
+});
+
+const TelephoneSettingsSchema = z.object({
+  provider: TelephoneProviderSchema.optional(),
+  setupChecklist: z
+    .object({
+      numberOrdered: z.boolean().optional(),
+      sipConfigured: z.boolean().optional(),
+      testCallCompleted: z.boolean().optional(),
+      fallbackSet: z.boolean().optional(),
+      disclosureConfirmed: z.boolean().optional(),
+    })
+    .optional(),
+  businessHours: z
+    .object({
+      mode: z
+        .enum(["always_on", "business_hours", "after_hours_only"])
+        .default("always_on"),
+      timezone: z.string().trim().min(1).max(80).default("Europe/Berlin"),
+      hours: z.string().trim().max(240).optional(),
+      afterHoursAction: z
+        .enum(["answer", "voicemail", "callback", "transfer"])
+        .default("answer"),
+    })
+    .optional(),
+  handoffRules: z
+    .object({
+      lowConfidence: z.boolean().default(true),
+      urgentKeywords: z.boolean().default(true),
+      officeHoursTransfer: z.boolean().default(false),
+      repeatedFailure: z.boolean().default(true),
+      askBeforeTransfer: z.boolean().default(true),
+    })
+    .optional(),
+  gdpr: z
+    .object({
+      disclosureText: z.string().trim().min(1).max(500).optional(),
+      recordingEnabled: z.boolean().default(false),
+      storeTranscripts: z.boolean().default(true),
+      transcriptRetentionDays: z.coerce.number().int().min(1).max(3650).default(90),
+    })
+    .optional(),
+  voiceQuality: z
+    .object({
+      language: z.string().trim().min(2).max(16).default("de-DE"),
+      speakingStyle: z
+        .enum(["professional", "friendly", "concise"])
+        .default("professional"),
+      maxAnswerLength: z.coerce.number().int().min(160).max(1200).default(450),
+      askBeforeTransfer: z.boolean().default(true),
+    })
+    .optional(),
+  testCall: z
+    .object({
+      status: z.enum(["not_started", "pending", "passed", "failed"]),
+      phoneNumber: E164PhoneNumberSchema.optional(),
+      notes: z.string().trim().max(1000).optional(),
+    })
+    .optional(),
 });
 
 const ContactProfileSchema = z.object({
@@ -1087,6 +1172,73 @@ export async function buildServer(
   );
 
   app.post(
+    "/admin/tenants/:tenantId/telephone/new-number",
+    { preHandler: requireTenantAccess(options) },
+    async (request, reply) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      const tenant = await options.store.getTenant(tenantId);
+      if (!tenant) {
+        return reply.code(404).send({ error: "Tenant not found." });
+      }
+      const body = NewTelephoneNumberSetupSchema.parse(request.body);
+      const voiceBridgeUrl = buildTelephoneVoiceBridgeUrl(options, tenant);
+      const sipTarget = buildTelephoneSipTarget(tenant);
+      const instructions = buildNewTelephoneNumberInstructions({
+        provider: body.provider,
+        requestedCountry: body.requestedCountry,
+        numberType: body.numberType,
+        areaCode: body.areaCode,
+        locality: body.locality,
+        orderedNumber: body.orderedNumber,
+        sipTarget,
+      });
+      const status =
+        body.orderedNumber && body.sipConfigured ? "connected" : "pending";
+      const externalAccountId =
+        body.orderedNumber ??
+        [
+          body.provider,
+          body.requestedCountry,
+          body.areaCode,
+          body.locality,
+        ]
+          .filter(Boolean)
+          .join(":");
+      const connection = await options.store.upsertChannelConnection(tenantId, {
+        channel: "telephone",
+        provider: body.provider,
+        externalAccountId,
+        status,
+        settings: {
+          mode: "new_number_provider",
+          setupType: "new_number",
+          provider: body.provider,
+          requestedCountry: body.requestedCountry,
+          numberType: body.numberType,
+          areaCode: body.areaCode ?? null,
+          locality: body.locality ?? null,
+          orderedNumber: body.orderedNumber ?? null,
+          sipRegistrar: body.sipRegistrar ?? null,
+          sipUsername: body.sipUsername ?? null,
+          sipConfigured: body.sipConfigured,
+          fallbackNumber: body.fallbackNumber ?? null,
+          voiceBridgeUrl,
+          sipTarget,
+          instructions,
+          notes: body.notes ?? null,
+          updatedAt: new Date().toISOString(),
+        },
+      });
+      return reply.code(201).send({
+        connection,
+        webhookUrl: voiceBridgeUrl,
+        sipTarget,
+        instructions,
+      });
+    },
+  );
+
+  app.post(
     "/admin/tenants/:tenantId/telephone/carrier-forwarding",
     { preHandler: requireTenantAccess(options) },
     async (request, reply) => {
@@ -1096,20 +1248,29 @@ export async function buildServer(
         return reply.code(404).send({ error: "Tenant not found." });
       }
       const body = CarrierForwardingSchema.parse(request.body);
-      const webhookUrl = buildTelephoneVoiceWebhookUrl(options, tenant);
-      const instructions = buildCarrierForwardingInstructions(body.aiNumber);
+      const voiceBridgeUrl = buildTelephoneVoiceBridgeUrl(options, tenant);
+      const sipTarget = buildTelephoneSipTarget(tenant);
+      const instructions = buildCarrierForwardingInstructions({
+        aiNumber: body.aiNumber,
+        provider: body.provider,
+        sipTarget,
+      });
       const connection = await options.store.upsertChannelConnection(tenantId, {
         channel: "telephone",
-        provider: "twilio",
+        provider: body.provider,
         externalAccountId: body.existingNumber,
         status: body.forwardingConfirmed ? "connected" : "pending",
         settings: {
           mode: "carrier_forwarding",
+          setupType: "existing_forwarding",
+          provider: body.provider,
           existingNumber: body.existingNumber,
           aiNumber: body.aiNumber,
           carrierName: body.carrierName ?? null,
           forwardingConfirmed: body.forwardingConfirmed,
-          voiceUrl: webhookUrl,
+          fallbackNumber: body.fallbackNumber ?? null,
+          voiceBridgeUrl,
+          sipTarget,
           instructions,
           notes: body.notes ?? null,
           updatedAt: new Date().toISOString(),
@@ -1117,7 +1278,8 @@ export async function buildServer(
       });
       return {
         connection,
-        webhookUrl,
+        webhookUrl: voiceBridgeUrl,
+        sipTarget,
         instructions,
       };
     },
@@ -1133,22 +1295,39 @@ export async function buildServer(
         return reply.code(404).send({ error: "Tenant not found." });
       }
       const body = SipByocSetupSchema.parse(request.body);
-      const webhookUrl = buildTelephoneVoiceWebhookUrl(options, tenant);
-      const instructions = buildSipByocInstructions(webhookUrl);
+      const voiceBridgeUrl = buildTelephoneVoiceBridgeUrl(options, tenant);
+      const sipTarget = buildTelephoneSipTarget(tenant);
+      const instructions = buildSipByocInstructions({
+        provider: body.provider,
+        voiceBridgeUrl,
+        sipTarget,
+      });
       const connection = await options.store.upsertChannelConnection(tenantId, {
         channel: "telephone",
-        provider: "twilio",
+        provider: body.provider,
         externalAccountId:
-          body.inboundSipUri ?? body.trunkSid ?? body.sipDomain ?? "SIP/BYOC",
+          body.publicNumber ??
+          body.inboundSipUri ??
+          body.trunkSid ??
+          body.sipRegistrar ??
+          body.sipDomain ??
+          "SIP/BYOC",
         status: body.sipConfigured ? "connected" : "pending",
         settings: {
           mode: "sip_byoc",
+          setupType: "sip_trunk",
+          provider: body.provider,
           carrierName: body.carrierName ?? null,
           sipDomain: body.sipDomain ?? null,
+          sipRegistrar: body.sipRegistrar ?? null,
+          sipUsername: body.sipUsername ?? null,
           trunkSid: body.trunkSid ?? null,
           inboundSipUri: body.inboundSipUri ?? null,
+          publicNumber: body.publicNumber ?? null,
+          fallbackNumber: body.fallbackNumber ?? null,
           sipConfigured: body.sipConfigured,
-          voiceUrl: webhookUrl,
+          voiceBridgeUrl,
+          sipTarget,
           instructions,
           notes: body.notes ?? null,
           updatedAt: new Date().toISOString(),
@@ -1156,9 +1335,74 @@ export async function buildServer(
       });
       return {
         connection,
-        webhookUrl,
+        webhookUrl: voiceBridgeUrl,
+        sipTarget,
         instructions,
       };
+    },
+  );
+
+  app.put(
+    "/admin/tenants/:tenantId/telephone/settings",
+    { preHandler: requireTenantAccess(options) },
+    async (request, reply) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      const tenant = await options.store.getTenant(tenantId);
+      if (!tenant) {
+        return reply.code(404).send({ error: "Tenant not found." });
+      }
+      const body = TelephoneSettingsSchema.parse(request.body);
+      const connections = await options.store.listChannelConnections(tenantId);
+      const current = connections
+        .map((connection) => asRecord(connection))
+        .find((connection) => connection.channel === "telephone");
+      const provider = body.provider ?? normalizeTelephoneProvider(current?.provider);
+      const currentSettings = asRecord(current?.settings);
+      const voiceBridgeUrl = buildTelephoneVoiceBridgeUrl(options, tenant);
+      const sipTarget = buildTelephoneSipTarget(tenant);
+      const settings = buildTelephoneRuntimeSettings({
+        currentSettings,
+        update: body,
+        provider,
+        voiceBridgeUrl,
+        sipTarget,
+      });
+      const externalAccountId =
+        typeof current?.externalAccountId === "string" &&
+        current.externalAccountId.trim()
+          ? current.externalAccountId
+          : telephoneExternalAccountIdFromSettings(settings);
+      const connection = await options.store.upsertChannelConnection(tenantId, {
+        channel: "telephone",
+        provider,
+        externalAccountId,
+        status:
+          current?.status === "connected" ||
+          current?.status === "disabled" ||
+          current?.status === "pending"
+            ? current.status
+            : "pending",
+        settings,
+      });
+      return {
+        connection,
+        webhookUrl: voiceBridgeUrl,
+        sipTarget,
+        warnings: buildTelephoneSetupWarnings(settings),
+      };
+    },
+  );
+
+  app.get(
+    "/admin/tenants/:tenantId/telephone/voice-edge-status",
+    { preHandler: requireTenantAccess(options) },
+    async (request, reply) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      const tenant = await options.store.getTenant(tenantId);
+      if (!tenant) {
+        return reply.code(404).send({ error: "Tenant not found." });
+      }
+      return checkTelephoneVoiceEdge(options);
     },
   );
 
@@ -2571,6 +2815,27 @@ function buildTelephoneVoiceWebhookUrl(
   )}`;
 }
 
+function buildTelephoneVoiceBridgeUrl(
+  options: BuildServerOptions,
+  tenant: StoreTenant,
+) {
+  const voiceBase =
+    options.voicePublicUrl ??
+    process.env.VOICE_PUBLIC_URL ??
+    "https://assaddar-voice-production.up.railway.app";
+  return `${voiceBase}/voice/turn?assistantId=${encodeURIComponent(
+    tenant.publicId,
+  )}`;
+}
+
+function buildTelephoneSipTarget(tenant: StoreTenant) {
+  const sipDomain =
+    process.env.VOICE_SIP_DOMAIN ??
+    process.env.VOICE_EDGE_SIP_DOMAIN ??
+    "voice-edge.assaddar.de";
+  return `sip:${tenant.publicId}@${sipDomain}`;
+}
+
 function buildTelephoneComplianceNotice(
   country: string,
   numberType: z.infer<typeof TwilioNumberTypeSchema>,
@@ -2606,22 +2871,235 @@ function countryFromE164Number(phoneNumber: string) {
   return "UNKNOWN";
 }
 
-function buildCarrierForwardingInstructions(aiNumber: string) {
+function buildNewTelephoneNumberInstructions(input: {
+  provider: z.infer<typeof TelephoneProviderSchema>;
+  requestedCountry: string;
+  numberType: z.infer<typeof TelephoneNumberTypeSchema>;
+  areaCode?: string | undefined;
+  locality?: string | undefined;
+  orderedNumber?: string | undefined;
+  sipTarget: string;
+}) {
+  const providerName = telephoneProviderLabel(input.provider);
+  const location = [input.areaCode, input.locality].filter(Boolean).join(" / ");
+  return [
+    input.orderedNumber
+      ? `Use ${input.orderedNumber} as the public ${providerName} AI number.`
+      : `Order a ${input.requestedCountry} ${input.numberType} number with ${providerName}${
+          location ? ` for ${location}` : ""
+        }.`,
+    `Create or select the SIP trunk for that number in ${providerName}.`,
+    `Route inbound calls from the provider/PBX to ${input.sipTarget}.`,
+    "Place a test call from an external phone and confirm the Assaddar AI call appears in the inbox.",
+    "Keep the provider contract in the customer's name unless Assaddar becomes a formal telecom reseller.",
+  ];
+}
+
+function buildCarrierForwardingInstructions(input: {
+  aiNumber: string;
+  provider: z.infer<typeof TelephoneProviderSchema>;
+  sipTarget: string;
+}) {
+  const providerName = telephoneProviderLabel(input.provider);
   return [
     `Open the current carrier or PBX settings for the existing business number.`,
-    `Create unconditional call forwarding to ${aiNumber}.`,
+    `Create unconditional call forwarding to ${input.aiNumber}.`,
+    `Make sure ${input.aiNumber} is routed by ${providerName} into ${input.sipTarget}.`,
     "Place a test call from an external phone and confirm the AI answers.",
     "If caller ID or call recording rules matter, verify them with the carrier before publishing.",
   ];
 }
 
-function buildSipByocInstructions(webhookUrl: string) {
+function buildSipByocInstructions(input: {
+  provider: z.infer<typeof TelephoneProviderSchema>;
+  voiceBridgeUrl: string;
+  sipTarget: string;
+}) {
+  const providerName = telephoneProviderLabel(input.provider);
   return [
-    "Create or reuse a Twilio SIP Domain, Elastic SIP Trunk, or BYOC trunk.",
-    "Route inbound PSTN traffic from the carrier or PBX into Twilio.",
-    `Configure the Twilio voice handler to use ${webhookUrl}.`,
+    `Create or reuse the SIP trunk with ${providerName}.`,
+    `Route inbound PSTN traffic from the provider or PBX to ${input.sipTarget}.`,
+    `Configure the voice edge to call the Railway voice bridge at ${input.voiceBridgeUrl}.`,
     "Place a test call, confirm speech recognition, and verify fallback to a human transfer.",
   ];
+}
+
+function buildTelephoneRuntimeSettings(input: {
+  currentSettings: Record<string, unknown>;
+  update: z.infer<typeof TelephoneSettingsSchema>;
+  provider: z.infer<typeof TelephoneProviderSchema>;
+  voiceBridgeUrl: string;
+  sipTarget: string;
+}) {
+  const current = input.currentSettings;
+  const merged: Record<string, unknown> = {
+    ...current,
+    provider: input.provider,
+    voiceBridgeUrl: input.voiceBridgeUrl,
+    sipTarget: input.sipTarget,
+    updatedAt: new Date().toISOString(),
+  };
+
+  if (input.update.setupChecklist) {
+    merged.setupChecklist = {
+      ...asRecord(current.setupChecklist),
+      ...input.update.setupChecklist,
+    };
+  }
+  if (input.update.businessHours) {
+    merged.businessHours = {
+      ...asRecord(current.businessHours),
+      ...input.update.businessHours,
+    };
+  }
+  if (input.update.handoffRules) {
+    merged.handoffRules = {
+      ...asRecord(current.handoffRules),
+      ...input.update.handoffRules,
+    };
+  }
+  if (input.update.gdpr) {
+    merged.gdpr = {
+      ...asRecord(current.gdpr),
+      ...input.update.gdpr,
+    };
+  }
+  if (input.update.voiceQuality) {
+    merged.voiceQuality = {
+      ...asRecord(current.voiceQuality),
+      ...input.update.voiceQuality,
+    };
+  }
+  if (input.update.testCall) {
+    merged.testCall = {
+      ...asRecord(current.testCall),
+      ...input.update.testCall,
+      testedAt:
+        input.update.testCall.status === "not_started"
+          ? null
+          : new Date().toISOString(),
+    };
+    if (input.update.testCall.status === "passed") {
+      merged.setupChecklist = {
+        ...asRecord(merged.setupChecklist),
+        testCallCompleted: true,
+      };
+    }
+  }
+
+  return merged;
+}
+
+function telephoneExternalAccountIdFromSettings(
+  settings: Record<string, unknown>,
+) {
+  for (const key of [
+    "orderedNumber",
+    "publicNumber",
+    "aiNumber",
+    "existingNumber",
+    "sipTarget",
+  ]) {
+    const value = settings[key];
+    if (typeof value === "string" && value.trim()) {
+      return value;
+    }
+  }
+  return "telephone-settings";
+}
+
+function buildTelephoneSetupWarnings(settings: Record<string, unknown>) {
+  const checklist = asRecord(settings.setupChecklist);
+  const gdpr = asRecord(settings.gdpr);
+  const testCall = asRecord(settings.testCall);
+  const warnings: Array<{
+    level: "info" | "warn";
+    title: string;
+    detail: string;
+  }> = [];
+
+  if (!checklist.numberOrdered) {
+    warnings.push({
+      level: "warn",
+      title: "Number not confirmed",
+      detail: "Add the provider number or mark the new number order complete.",
+    });
+  }
+  if (!checklist.sipConfigured) {
+    warnings.push({
+      level: "warn",
+      title: "SIP routing pending",
+      detail: "Route the provider trunk/PBX to the Assaddar voice edge.",
+    });
+  }
+  if (!checklist.testCallCompleted && testCall.status !== "passed") {
+    warnings.push({
+      level: "warn",
+      title: "Test call missing",
+      detail: "Place a real test call before publishing the AI number.",
+    });
+  }
+  if (!checklist.fallbackSet && !settings.fallbackNumber) {
+    warnings.push({
+      level: "info",
+      title: "Fallback number missing",
+      detail: "Add a human fallback number for urgent or low-confidence calls.",
+    });
+  }
+  if (!checklist.disclosureConfirmed && !gdpr.disclosureText) {
+    warnings.push({
+      level: "warn",
+      title: "AI disclosure missing",
+      detail: "Add the phone disclosure text callers hear at the start.",
+    });
+  }
+  return warnings;
+}
+
+function normalizeTelephoneProvider(
+  provider: unknown,
+): z.infer<typeof TelephoneProviderSchema> {
+  const parsed = TelephoneProviderSchema.safeParse(provider);
+  return parsed.success ? parsed.data : "easybell";
+}
+
+async function checkTelephoneVoiceEdge(options: BuildServerOptions) {
+  const voiceBase =
+    options.voicePublicUrl ??
+    process.env.VOICE_PUBLIC_URL ??
+    "https://assaddar-voice-production.up.railway.app";
+  const healthUrl = `${voiceBase.replace(/\/$/, "")}/health`;
+  const checkedAt = new Date().toISOString();
+  try {
+    const response = await fetch(healthUrl, {
+      signal: AbortSignal.timeout(4_000),
+    });
+    return {
+      status: response.ok ? "online" : "degraded",
+      url: healthUrl,
+      checkedAt,
+      responseStatus: response.status,
+    };
+  } catch (error) {
+    return {
+      status: "offline",
+      url: healthUrl,
+      checkedAt,
+      detail: error instanceof Error ? error.message : "health_check_failed",
+    };
+  }
+}
+
+function telephoneProviderLabel(
+  provider: z.infer<typeof TelephoneProviderSchema>,
+) {
+  const labels: Record<z.infer<typeof TelephoneProviderSchema>, string> = {
+    easybell: "easybell",
+    sipgate: "sipgate",
+    peoplefone: "peoplefone",
+    custom_sip: "custom SIP provider",
+  };
+  return labels[provider];
 }
 
 type ChannelDashboardItem = {
@@ -2650,6 +3128,13 @@ function buildChannelConnectionDashboard(input: {
     process.env.VOICE_PUBLIC_URL ??
     "https://assaddar-voice-production.up.railway.app";
   const assistantId = input.tenant?.publicId;
+  const telephoneConnection = input.connections
+    .map((connection) => asRecord(connection))
+    .find((connection) => connection.channel === "telephone");
+  const telephoneProvider =
+    typeof telephoneConnection?.provider === "string"
+      ? telephoneConnection.provider
+      : "easybell";
   const connectionMap = new Map(
     input.connections.map((connection) => {
       const record = asRecord(connection);
@@ -2708,13 +3193,14 @@ function buildChannelConnectionDashboard(input: {
         ? `${apiBase}/widget/config/${assistantId}`
         : undefined,
     }),
-    item("telephone", "twilio", "Telephone", {
-      credentialConfigured: Boolean(
-        input.options.twilioAccountSid && input.options.twilioAuthToken,
-      ),
+    item("telephone", telephoneProvider, "Telephone AI", {
+      credentialConfigured:
+        telephoneProvider === "twilio"
+          ? Boolean(input.options.twilioAccountSid && input.options.twilioAuthToken)
+          : true,
       webhookUrl: assistantId
-        ? `${voiceBase}/twilio/voice?assistantId=${assistantId}`
-        : `${voiceBase}/twilio/voice`,
+        ? `${voiceBase}/voice/turn?assistantId=${assistantId}`
+        : `${voiceBase}/voice/turn`,
     }),
     item("whatsapp", "meta-whatsapp-cloud", "WhatsApp Business", {
       credentialConfigured: Boolean(input.options.whatsappAccessToken),

@@ -1821,17 +1821,55 @@ describe("API", () => {
     await app.close();
   });
 
-  it("saves carrier forwarding and SIP/BYOC telephone setup modes", async () => {
+  it("saves provider number, forwarding, and SIP trunk telephone setup modes", async () => {
     const store = new MemoryPlatformStore();
     const app = await buildServer({
       store,
       adminToken: "test-token",
       allowedOrigins: ["*"],
-      voicePublicUrl: "https://voice.example.com",
+      voicePublicUrl: "http://127.0.0.1:1",
     });
     const tenant = await store.createTenant({
       name: "Tenant One",
       slug: "tenant-one",
+    });
+
+    const newNumberResponse = await app.inject({
+      method: "POST",
+      url: `/admin/tenants/${tenant.id}/telephone/new-number`,
+      headers: { "x-admin-token": "test-token" },
+      payload: {
+        provider: "easybell",
+        requestedCountry: "DE",
+        numberType: "local",
+        areaCode: "030",
+        locality: "Berlin",
+        orderedNumber: "+49303333333",
+        sipRegistrar: "sip.easybell.de",
+        sipUsername: "tenant-one",
+        sipConfigured: true,
+      },
+    });
+
+    expect(newNumberResponse.statusCode).toBe(201);
+    expect(newNumberResponse.json()).toMatchObject({
+      sipTarget: expect.stringContaining("asst_"),
+      instructions: expect.arrayContaining([
+        expect.stringContaining("easybell"),
+      ]),
+    });
+    expect(
+      store.channelConnections.find(
+        (connection) => connection.provider === "easybell",
+      ),
+    ).toMatchObject({
+      externalAccountId: "+49303333333",
+      status: "connected",
+      settings: {
+        mode: "new_number_provider",
+        setupType: "new_number",
+        provider: "easybell",
+      },
     });
 
     const forwardingResponse = await app.inject({
@@ -1839,6 +1877,7 @@ describe("API", () => {
       url: `/admin/tenants/${tenant.id}/telephone/carrier-forwarding`,
       headers: { "x-admin-token": "test-token" },
       payload: {
+        provider: "sipgate",
         existingNumber: "+49301111111",
         aiNumber: "+49302222222",
         carrierName: "Telekom",
@@ -1851,11 +1890,16 @@ describe("API", () => {
         expect.stringContaining("+49302222222"),
       ]),
     });
-    expect(store.channelConnections[0]).toMatchObject({
+    expect(
+      store.channelConnections.find(
+        (connection) => connection.provider === "sipgate",
+      ),
+    ).toMatchObject({
       externalAccountId: "+49301111111",
       status: "pending",
       settings: {
         mode: "carrier_forwarding",
+        provider: "sipgate",
       },
     });
 
@@ -1864,19 +1908,108 @@ describe("API", () => {
       url: `/admin/tenants/${tenant.id}/telephone/sip-byoc`,
       headers: { "x-admin-token": "test-token" },
       payload: {
+        provider: "custom_sip",
         carrierName: "PBX",
-        sipDomain: "voice.example.sip.twilio.com",
+        sipDomain: "pbx.example.com",
+        sipRegistrar: "sip.example.com",
+        sipUsername: "tenant-one",
+        publicNumber: "+49304444444",
         sipConfigured: true,
       },
     });
 
     expect(sipResponse.statusCode).toBe(200);
-    expect(store.channelConnections[0]).toMatchObject({
-      externalAccountId: "voice.example.sip.twilio.com",
+    expect(
+      store.channelConnections.find(
+        (connection) => connection.provider === "custom_sip",
+      ),
+    ).toMatchObject({
+      externalAccountId: "+49304444444",
       status: "connected",
       settings: {
         mode: "sip_byoc",
+        setupType: "sip_trunk",
+        provider: "custom_sip",
       },
+    });
+
+    const settingsResponse = await app.inject({
+      method: "PUT",
+      url: `/admin/tenants/${tenant.id}/telephone/settings`,
+      headers: { "x-admin-token": "test-token" },
+      payload: {
+        provider: "easybell",
+        setupChecklist: {
+          numberOrdered: true,
+          sipConfigured: true,
+          testCallCompleted: true,
+          fallbackSet: true,
+          disclosureConfirmed: true,
+        },
+        businessHours: {
+          mode: "business_hours",
+          timezone: "Europe/Berlin",
+          hours: "Mo-Fr 09:00-18:00",
+          afterHoursAction: "callback",
+        },
+        handoffRules: {
+          lowConfidence: true,
+          urgentKeywords: true,
+          officeHoursTransfer: false,
+          repeatedFailure: true,
+          askBeforeTransfer: true,
+        },
+        gdpr: {
+          disclosureText: "AI disclosure",
+          recordingEnabled: false,
+          storeTranscripts: true,
+          transcriptRetentionDays: 90,
+        },
+        voiceQuality: {
+          language: "de-DE",
+          speakingStyle: "professional",
+          maxAnswerLength: 450,
+          askBeforeTransfer: true,
+        },
+        testCall: {
+          status: "passed",
+          phoneNumber: "+491701234567",
+          notes: "Call answered.",
+        },
+      },
+    });
+
+    expect(settingsResponse.statusCode).toBe(200);
+    expect(settingsResponse.json()).toMatchObject({
+      warnings: [],
+    });
+    expect(
+      store.channelConnections.find(
+        (connection) => connection.provider === "easybell",
+      ),
+    ).toMatchObject({
+      settings: {
+        businessHours: {
+          mode: "business_hours",
+        },
+        gdpr: {
+          transcriptRetentionDays: 90,
+        },
+        testCall: {
+          status: "passed",
+        },
+      },
+    });
+
+    const edgeResponse = await app.inject({
+      method: "GET",
+      url: `/admin/tenants/${tenant.id}/telephone/voice-edge-status`,
+      headers: { "x-admin-token": "test-token" },
+    });
+    expect(edgeResponse.statusCode).toBe(200);
+    expect(edgeResponse.json()).toMatchObject({
+      status: "offline",
+      url: "http://127.0.0.1:1/health",
     });
     await app.close();
   });

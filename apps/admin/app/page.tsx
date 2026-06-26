@@ -149,6 +149,7 @@ type ConversationMessage = {
   direction: string;
   role: string;
   content: string;
+  trace?: Record<string, unknown>;
   createdAt: string;
 };
 
@@ -328,13 +329,13 @@ type ChannelConnection = {
   updatedAt?: string;
 };
 
-type TelephoneSetupMode =
-  | "buy"
-  | "existing_twilio"
-  | "forwarding"
-  | "sip_byoc";
+type TelephoneSetupMode = "new_number" | "forwarding" | "sip_byoc";
 
-type TwilioNumberType = "local" | "mobile" | "toll-free";
+type TelephoneProvider = "easybell" | "sipgate" | "peoplefone" | "custom_sip";
+
+type TelephoneNumberType = "local" | "mobile" | "toll-free";
+
+type TwilioNumberType = TelephoneNumberType;
 
 type TwilioNumberCapabilities = {
   voice: boolean;
@@ -391,6 +392,22 @@ type TelephoneSetupResponse = {
   number?: TwilioOwnedNumber;
   instructions?: string[];
   compliance?: TelephoneComplianceNotice;
+  warnings?: TelephoneSetupWarning[];
+  sipTarget?: string;
+};
+
+type TelephoneSetupWarning = {
+  level: "info" | "warn";
+  title: string;
+  detail: string;
+};
+
+type TelephoneVoiceEdgeStatus = {
+  status: "online" | "degraded" | "offline";
+  url: string;
+  checkedAt: string;
+  responseStatus?: number;
+  detail?: string;
 };
 
 type InstallCheckResult = {
@@ -455,8 +472,8 @@ const channelImplementationGuides: Partial<
   Record<ChannelConnection["channel"], { label: string; url: string }>
 > = {
   telephone: {
-    label: "Twilio Voice webhooks",
-    url: "https://www.twilio.com/docs/usage/webhooks/voice-webhooks",
+    label: "SIP trunk setup",
+    url: "https://en.easybell.de/business/sip-trunks/",
   },
   whatsapp: {
     label: "WhatsApp webhooks",
@@ -1296,7 +1313,18 @@ export default function DashboardPage() {
     Record<string, string>
   >({});
   const [telephoneSetupMode, setTelephoneSetupMode] =
-    useState<TelephoneSetupMode>("buy");
+    useState<TelephoneSetupMode>("new_number");
+  const [newNumberProvider, setNewNumberProvider] =
+    useState<TelephoneProvider>("easybell");
+  const [newNumberCountry, setNewNumberCountry] = useState("DE");
+  const [newNumberType, setNewNumberType] =
+    useState<TelephoneNumberType>("local");
+  const [newNumberAreaCode, setNewNumberAreaCode] = useState("");
+  const [newNumberLocality, setNewNumberLocality] = useState("");
+  const [orderedPhoneNumber, setOrderedPhoneNumber] = useState("");
+  const [newNumberSipRegistrar, setNewNumberSipRegistrar] = useState("");
+  const [newNumberSipUsername, setNewNumberSipUsername] = useState("");
+  const [newNumberSipConfigured, setNewNumberSipConfigured] = useState(false);
   const [twilioSearchCountry, setTwilioSearchCountry] = useState("DE");
   const [twilioNumberType, setTwilioNumberType] =
     useState<TwilioNumberType>("local");
@@ -1309,15 +1337,70 @@ export default function DashboardPage() {
   >([]);
   const [existingTwilioNumber, setExistingTwilioNumber] = useState("");
   const [existingTwilioSid, setExistingTwilioSid] = useState("");
+  const [forwardingProvider, setForwardingProvider] =
+    useState<TelephoneProvider>("easybell");
   const [forwardingExistingNumber, setForwardingExistingNumber] = useState("");
   const [forwardingAiNumber, setForwardingAiNumber] = useState("");
   const [forwardingCarrierName, setForwardingCarrierName] = useState("");
   const [forwardingConfirmed, setForwardingConfirmed] = useState(false);
+  const [sipProvider, setSipProvider] =
+    useState<TelephoneProvider>("easybell");
   const [sipCarrierName, setSipCarrierName] = useState("");
   const [sipDomain, setSipDomain] = useState("");
+  const [sipRegistrar, setSipRegistrar] = useState("");
+  const [sipUsername, setSipUsername] = useState("");
   const [sipTrunkSid, setSipTrunkSid] = useState("");
   const [sipInboundUri, setSipInboundUri] = useState("");
+  const [sipPublicNumber, setSipPublicNumber] = useState("");
   const [sipConfigured, setSipConfigured] = useState(false);
+  const [telephoneFallbackNumber, setTelephoneFallbackNumber] = useState("");
+  const [telephoneNotes, setTelephoneNotes] = useState("");
+  const [phoneNumberOrdered, setPhoneNumberOrdered] = useState(false);
+  const [phoneSipConfigured, setPhoneSipConfigured] = useState(false);
+  const [phoneTestCallCompleted, setPhoneTestCallCompleted] = useState(false);
+  const [phoneFallbackSet, setPhoneFallbackSet] = useState(false);
+  const [phoneDisclosureConfirmed, setPhoneDisclosureConfirmed] =
+    useState(false);
+  const [telephoneTestCallStatus, setTelephoneTestCallStatus] = useState<
+    "not_started" | "pending" | "passed" | "failed"
+  >("not_started");
+  const [telephoneTestCallNumber, setTelephoneTestCallNumber] = useState("");
+  const [telephoneTestCallNotes, setTelephoneTestCallNotes] = useState("");
+  const [businessHoursMode, setBusinessHoursMode] = useState<
+    "always_on" | "business_hours" | "after_hours_only"
+  >("always_on");
+  const [businessHoursTimezone, setBusinessHoursTimezone] =
+    useState("Europe/Berlin");
+  const [businessHoursText, setBusinessHoursText] = useState(
+    "Mo-Fr 09:00-18:00",
+  );
+  const [afterHoursAction, setAfterHoursAction] = useState<
+    "answer" | "voicemail" | "callback" | "transfer"
+  >("answer");
+  const [handoffLowConfidence, setHandoffLowConfidence] = useState(true);
+  const [handoffUrgentKeywords, setHandoffUrgentKeywords] = useState(true);
+  const [handoffOfficeHoursTransfer, setHandoffOfficeHoursTransfer] =
+    useState(false);
+  const [handoffRepeatedFailure, setHandoffRepeatedFailure] = useState(true);
+  const [handoffAskBeforeTransfer, setHandoffAskBeforeTransfer] =
+    useState(true);
+  const [phoneDisclosureText, setPhoneDisclosureText] = useState(
+    "Hinweis: Dieser Anruf wird von einem KI-Assistenten verarbeitet. Bei Bedarf verbinden wir Sie mit einem Menschen.",
+  );
+  const [phoneRecordingEnabled, setPhoneRecordingEnabled] = useState(false);
+  const [phoneStoreTranscripts, setPhoneStoreTranscripts] = useState(true);
+  const [phoneTranscriptRetentionDays, setPhoneTranscriptRetentionDays] =
+    useState(90);
+  const [phoneVoiceLanguage, setPhoneVoiceLanguage] = useState("de-DE");
+  const [phoneSpeakingStyle, setPhoneSpeakingStyle] = useState<
+    "professional" | "friendly" | "concise"
+  >("professional");
+  const [phoneMaxAnswerLength, setPhoneMaxAnswerLength] = useState(450);
+  const [telephoneWarnings, setTelephoneWarnings] = useState<
+    TelephoneSetupWarning[]
+  >([]);
+  const [voiceEdgeStatus, setVoiceEdgeStatus] =
+    useState<TelephoneVoiceEdgeStatus | null>(null);
   const [telephoneInstructions, setTelephoneInstructions] = useState<string[]>(
     [],
   );
@@ -1685,7 +1768,7 @@ export default function DashboardPage() {
       ? {
           tone: "info",
           title: "Connect telephone",
-          detail: "Add the Twilio number and webhook URL for phone support.",
+          detail: "Add a provider number, forwarding setup, or SIP trunk.",
           tab: "channels" as TabKey,
         }
       : null,
@@ -1773,6 +1856,97 @@ export default function DashboardPage() {
     },
   ];
   const completedSteps = setupSteps.filter((step) => step.done).length;
+
+  useEffect(() => {
+    if (!telephoneConnection) {
+      setTelephoneWarnings([]);
+      return;
+    }
+    const settings = telephoneConnection.settings ?? {};
+    const provider = normalizeTelephoneProviderUi(telephoneConnection.provider);
+    setNewNumberProvider(provider);
+    setForwardingProvider(provider);
+    setSipProvider(provider);
+
+    const checklist = settingRecord(settings.setupChecklist);
+    const businessHours = settingRecord(settings.businessHours);
+    const handoffRules = settingRecord(settings.handoffRules);
+    const gdpr = settingRecord(settings.gdpr);
+    const voiceQuality = settingRecord(settings.voiceQuality);
+    const testCall = settingRecord(settings.testCall);
+
+    setPhoneNumberOrdered(
+      settingBoolean(checklist.numberOrdered, Boolean(telephoneConnection.externalAccountId)),
+    );
+    setPhoneSipConfigured(settingBoolean(checklist.sipConfigured, false));
+    setPhoneTestCallCompleted(
+      settingBoolean(
+        checklist.testCallCompleted,
+        settingString(testCall.status) === "passed",
+      ),
+    );
+    setPhoneFallbackSet(
+      settingBoolean(checklist.fallbackSet, Boolean(settingString(settings.fallbackNumber))),
+    );
+    setPhoneDisclosureConfirmed(
+      settingBoolean(checklist.disclosureConfirmed, Boolean(settingString(gdpr.disclosureText))),
+    );
+
+    setTelephoneFallbackNumber(settingString(settings.fallbackNumber) ?? "");
+    setTelephoneNotes(settingString(settings.notes) ?? "");
+    setTelephoneTestCallStatus(
+      settingTestCallStatus(settingString(testCall.status)),
+    );
+    setTelephoneTestCallNumber(settingString(testCall.phoneNumber) ?? "");
+    setTelephoneTestCallNotes(settingString(testCall.notes) ?? "");
+
+    setBusinessHoursMode(
+      settingBusinessHoursMode(settingString(businessHours.mode)),
+    );
+    setBusinessHoursTimezone(
+      settingString(businessHours.timezone) ?? "Europe/Berlin",
+    );
+    setBusinessHoursText(
+      settingString(businessHours.hours) ?? "Mo-Fr 09:00-18:00",
+    );
+    setAfterHoursAction(
+      settingAfterHoursAction(settingString(businessHours.afterHoursAction)),
+    );
+
+    setHandoffLowConfidence(settingBoolean(handoffRules.lowConfidence, true));
+    setHandoffUrgentKeywords(settingBoolean(handoffRules.urgentKeywords, true));
+    setHandoffOfficeHoursTransfer(
+      settingBoolean(handoffRules.officeHoursTransfer, false),
+    );
+    setHandoffRepeatedFailure(settingBoolean(handoffRules.repeatedFailure, true));
+    setHandoffAskBeforeTransfer(
+      settingBoolean(handoffRules.askBeforeTransfer, true),
+    );
+
+    setPhoneDisclosureText(
+      settingString(gdpr.disclosureText) ??
+        "Hinweis: Dieser Anruf wird von einem KI-Assistenten verarbeitet. Bei Bedarf verbinden wir Sie mit einem Menschen.",
+    );
+    setPhoneRecordingEnabled(settingBoolean(gdpr.recordingEnabled, false));
+    setPhoneStoreTranscripts(settingBoolean(gdpr.storeTranscripts, true));
+    setPhoneTranscriptRetentionDays(
+      settingNumber(gdpr.transcriptRetentionDays, 90),
+    );
+
+    setPhoneVoiceLanguage(settingString(voiceQuality.language) ?? "de-DE");
+    setPhoneSpeakingStyle(
+      settingSpeakingStyle(settingString(voiceQuality.speakingStyle)),
+    );
+    setPhoneMaxAnswerLength(settingNumber(voiceQuality.maxAnswerLength, 450));
+    setTelephoneWarnings(
+      buildTelephoneWarningsFromSettings(settings, telephoneConnection),
+    );
+  }, [
+    telephoneConnection?.externalAccountId,
+    telephoneConnection?.provider,
+    telephoneConnection?.status,
+    telephoneConnection?.updatedAt,
+  ]);
 
   useEffect(() => {
     const savedToken = window.localStorage.getItem("assaddar_admin_token");
@@ -2771,6 +2945,46 @@ export default function DashboardPage() {
     }
   }
 
+  async function saveNewTelephoneNumberSetup() {
+    if (!selectedTenant) {
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const result = await apiFetch<TelephoneSetupResponse>(
+        `/admin/tenants/${selectedTenant.id}/telephone/new-number`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            provider: newNumberProvider,
+            requestedCountry: newNumberCountry.trim() || "DE",
+            numberType: newNumberType,
+            areaCode: newNumberAreaCode || undefined,
+            locality: newNumberLocality || undefined,
+            orderedNumber: orderedPhoneNumber || undefined,
+            sipRegistrar: newNumberSipRegistrar || undefined,
+            sipUsername: newNumberSipUsername || undefined,
+            sipConfigured: newNumberSipConfigured,
+            fallbackNumber: telephoneFallbackNumber || undefined,
+            notes: telephoneNotes || undefined,
+          }),
+        },
+      );
+      setTelephoneInstructions(result.instructions ?? []);
+      await refreshChannelConnections(selectedTenant.id);
+      setStatus(
+        orderedPhoneNumber && newNumberSipConfigured
+          ? "New provider number marked connected"
+          : "New provider number setup saved",
+      );
+    } catch (error) {
+      setStatus(readableError(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function saveCarrierForwardingSetup() {
     if (!selectedTenant || !forwardingExistingNumber || !forwardingAiNumber) {
       return;
@@ -2783,10 +2997,13 @@ export default function DashboardPage() {
         {
           method: "POST",
           body: JSON.stringify({
+            provider: forwardingProvider,
             existingNumber: forwardingExistingNumber,
             aiNumber: forwardingAiNumber,
             carrierName: forwardingCarrierName || undefined,
             forwardingConfirmed,
+            fallbackNumber: telephoneFallbackNumber || undefined,
+            notes: telephoneNotes || undefined,
           }),
         },
       );
@@ -2816,24 +3033,173 @@ export default function DashboardPage() {
         {
           method: "POST",
           body: JSON.stringify({
+            provider: sipProvider,
             carrierName: sipCarrierName || undefined,
             sipDomain: sipDomain || undefined,
+            sipRegistrar: sipRegistrar || undefined,
+            sipUsername: sipUsername || undefined,
             trunkSid: sipTrunkSid || undefined,
             inboundSipUri: sipInboundUri || undefined,
+            publicNumber: sipPublicNumber || undefined,
+            fallbackNumber: telephoneFallbackNumber || undefined,
             sipConfigured,
+            notes: telephoneNotes || undefined,
           }),
         },
       );
       setTelephoneInstructions(result.instructions ?? []);
       await refreshChannelConnections(selectedTenant.id);
       setStatus(
-        sipConfigured ? "SIP/BYOC marked connected" : "SIP/BYOC setup saved",
+        sipConfigured ? "SIP trunk marked connected" : "SIP trunk setup saved",
       );
     } catch (error) {
       setStatus(readableError(error));
     } finally {
       setBusy(false);
     }
+  }
+
+  async function saveTelephoneRuntimeSettings() {
+    if (!selectedTenant) {
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const result = await apiFetch<TelephoneSetupResponse>(
+        `/admin/tenants/${selectedTenant.id}/telephone/settings`,
+        {
+          method: "PUT",
+          body: JSON.stringify(buildTelephoneSettingsPayload()),
+        },
+      );
+      setTelephoneWarnings(result.warnings ?? []);
+      await refreshChannelConnections(selectedTenant.id);
+      setStatus("Telephone settings saved");
+    } catch (error) {
+      setStatus(readableError(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveTelephoneTestCall(
+    testStatus: "pending" | "passed" | "failed",
+  ) {
+    if (!selectedTenant) {
+      return;
+    }
+
+    setTelephoneTestCallStatus(testStatus);
+    if (testStatus === "passed") {
+      setPhoneTestCallCompleted(true);
+    }
+
+    setBusy(true);
+    try {
+      const result = await apiFetch<TelephoneSetupResponse>(
+        `/admin/tenants/${selectedTenant.id}/telephone/settings`,
+        {
+          method: "PUT",
+          body: JSON.stringify(buildTelephoneSettingsPayload(testStatus)),
+        },
+      );
+      setTelephoneWarnings(result.warnings ?? []);
+      await refreshChannelConnections(selectedTenant.id);
+      setStatus(
+        testStatus === "passed"
+          ? "Test call marked successful"
+          : `Test call marked ${testStatus}`,
+      );
+    } catch (error) {
+      setStatus(readableError(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function refreshVoiceEdgeStatus() {
+    if (!selectedTenant) {
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const result = await apiFetch<TelephoneVoiceEdgeStatus>(
+        `/admin/tenants/${selectedTenant.id}/telephone/voice-edge-status`,
+      );
+      setVoiceEdgeStatus(result);
+      setStatus(`Voice edge is ${result.status}`);
+    } catch (error) {
+      setStatus(readableError(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function buildTelephoneSettingsPayload(
+    testStatus = telephoneTestCallStatus,
+  ) {
+    const provider = currentTelephoneProvider();
+    const testCallCompleted =
+      testStatus === "passed" || phoneTestCallCompleted;
+    return {
+      provider,
+      setupChecklist: {
+        numberOrdered: phoneNumberOrdered,
+        sipConfigured: phoneSipConfigured,
+        testCallCompleted,
+        fallbackSet: phoneFallbackSet || Boolean(telephoneFallbackNumber),
+        disclosureConfirmed:
+          phoneDisclosureConfirmed || Boolean(phoneDisclosureText.trim()),
+      },
+      businessHours: {
+        mode: businessHoursMode,
+        timezone: businessHoursTimezone,
+        hours: businessHoursText,
+        afterHoursAction,
+      },
+      handoffRules: {
+        lowConfidence: handoffLowConfidence,
+        urgentKeywords: handoffUrgentKeywords,
+        officeHoursTransfer: handoffOfficeHoursTransfer,
+        repeatedFailure: handoffRepeatedFailure,
+        askBeforeTransfer: handoffAskBeforeTransfer,
+      },
+      gdpr: {
+        disclosureText: phoneDisclosureText,
+        recordingEnabled: phoneRecordingEnabled,
+        storeTranscripts: phoneStoreTranscripts,
+        transcriptRetentionDays: phoneTranscriptRetentionDays,
+      },
+      voiceQuality: {
+        language: phoneVoiceLanguage,
+        speakingStyle: phoneSpeakingStyle,
+        maxAnswerLength: phoneMaxAnswerLength,
+        askBeforeTransfer: handoffAskBeforeTransfer,
+      },
+      testCall: {
+        status: testStatus,
+        phoneNumber: telephoneTestCallNumber || undefined,
+        notes: telephoneTestCallNotes || undefined,
+      },
+    };
+  }
+
+  function currentTelephoneProvider(): TelephoneProvider {
+    const connectionProvider = normalizeTelephoneProviderUi(
+      telephoneConnection?.provider,
+    );
+    if (telephoneConnection?.provider) {
+      return connectionProvider;
+    }
+    if (telephoneSetupMode === "forwarding") {
+      return forwardingProvider;
+    }
+    if (telephoneSetupMode === "sip_byoc") {
+      return sipProvider;
+    }
+    return newNumberProvider;
   }
 
   async function saveWhatsappTemplate() {
@@ -4685,6 +5051,47 @@ export default function DashboardPage() {
                     </article>
                   </div>
                 ) : null}
+                {isTelephoneConversation(
+                  selectedInboxItem,
+                  selectedConversation,
+                ) ? (
+                  <div className="callDetailStrip">
+                    <article>
+                      <span>Caller</span>
+                      <strong>
+                        {selectedInboxItem?.externalUserId ??
+                          selectedInboxItem?.contact?.phone ??
+                          selectedConversation?.publicId ??
+                          "Unknown"}
+                      </strong>
+                    </article>
+                    <article>
+                      <span>Messages</span>
+                      <strong>
+                        {selectedInboxItem?.messageCount ??
+                          conversationMessages.length}
+                      </strong>
+                    </article>
+                    <article>
+                      <span>Confidence</span>
+                      <strong>{latestAnswerConfidence(conversationMessages)}</strong>
+                    </article>
+                    <article>
+                      <span>Handoff</span>
+                      <strong>{latestHandoffState(conversationMessages)}</strong>
+                    </article>
+                    <article>
+                      <span>Recording</span>
+                      <strong>
+                        {phoneRecordingEnabled ? "Enabled" : "Disabled"}
+                      </strong>
+                    </article>
+                    <article>
+                      <span>Retention</span>
+                      <strong>{phoneTranscriptRetentionDays} days</strong>
+                    </article>
+                  </div>
+                ) : null}
                 <div className="messagePreview full">
                   {conversationMessages.length ? (
                     conversationMessages.map((message) => (
@@ -5531,7 +5938,12 @@ export default function DashboardPage() {
   }
 
   function renderTelephoneSetup(connection?: ChannelConnection) {
-    const webhook = connection?.assistantWebhookUrl ?? connection?.webhookUrl ?? "";
+    const voiceBridgeUrl =
+      telephoneSettingString(connection, "voiceBridgeUrl") ??
+      connection?.webhookUrl ??
+      connection?.assistantWebhookUrl ??
+      "";
+    const sipTarget = telephoneSettingString(connection, "sipTarget") ?? "";
     const savedInstructions = Array.isArray(connection?.settings?.instructions)
       ? connection.settings.instructions.filter(
           (item): item is string => typeof item === "string",
@@ -5548,8 +5960,9 @@ export default function DashboardPage() {
       connection?.externalAccountId ??
       telephoneSettingString(connection, "phoneNumber") ??
       telephoneSettingString(connection, "aiNumber") ??
+      telephoneSettingString(connection, "orderedNumber") ??
+      telephoneSettingString(connection, "publicNumber") ??
       "";
-    const compliance = telephoneCompliance ?? twilioNumberSearch?.compliance;
     const modes: Array<{
       key: TelephoneSetupMode;
       label: string;
@@ -5557,30 +5970,87 @@ export default function DashboardPage() {
       icon: typeof PhoneCall;
     }> = [
       {
-        key: "buy",
-        label: "Buy AI number",
-        detail: "Search and connect",
+        key: "new_number",
+        label: "New number",
+        detail: "Provider number",
         icon: ShoppingCart,
       },
       {
-        key: "existing_twilio",
-        label: "Existing Twilio",
-        detail: "Reuse account number",
-        icon: PhoneCall,
-      },
-      {
         key: "forwarding",
-        label: "Forward number",
-        detail: "Carrier to AI",
+        label: "Existing number",
+        detail: "Forward calls",
         icon: Link2,
       },
       {
         key: "sip_byoc",
-        label: "SIP/BYOC",
-        detail: "PBX or carrier",
+        label: "SIP trunk",
+        detail: "Provider/PBX",
         icon: Router,
       },
     ];
+    const providerOptions: Array<{
+      value: TelephoneProvider;
+      label: string;
+      detail: string;
+    }> = [
+      {
+        value: "easybell",
+        label: "easybell",
+        detail: "German SIP trunk and numbers",
+      },
+      {
+        value: "sipgate",
+        label: "sipgate",
+        detail: "German number and trunking provider",
+      },
+      {
+        value: "peoplefone",
+        label: "peoplefone",
+        detail: "DACH/EU SIP trunk option",
+      },
+      {
+        value: "custom_sip",
+        label: "Custom SIP",
+        detail: "Any customer PBX or SIP provider",
+      },
+    ];
+    const activeWarnings = telephoneWarnings.length
+      ? telephoneWarnings
+      : buildTelephoneWarningsFromSettings(connection?.settings ?? {}, connection);
+    const checklistItems: Array<{
+      label: string;
+      checked: boolean;
+      onChange: (checked: boolean) => void;
+    }> = [
+      {
+        label: "Number ordered or assigned",
+        checked: phoneNumberOrdered,
+        onChange: setPhoneNumberOrdered,
+      },
+      {
+        label: "SIP trunk configured",
+        checked: phoneSipConfigured,
+        onChange: setPhoneSipConfigured,
+      },
+      {
+        label: "Test call completed",
+        checked: phoneTestCallCompleted,
+        onChange: setPhoneTestCallCompleted,
+      },
+      {
+        label: "Fallback number set",
+        checked: phoneFallbackSet || Boolean(telephoneFallbackNumber),
+        onChange: setPhoneFallbackSet,
+      },
+      {
+        label: "AI disclosure confirmed",
+        checked: phoneDisclosureConfirmed || Boolean(phoneDisclosureText.trim()),
+        onChange: setPhoneDisclosureConfirmed,
+      },
+    ];
+    const recentTelephoneConversations = inboxItems
+      .filter((item) => item.channel === "telephone")
+      .slice(0, 4);
 
     return (
       <section className="panel telephoneSetupPanel">
@@ -5600,13 +6070,17 @@ export default function DashboardPage() {
             <strong>{formatTelephoneMode(currentMode)}</strong>
           </article>
           <article>
+            <span>Provider</span>
+            <strong>{telephoneProviderLabel(connection?.provider)}</strong>
+          </article>
+          <article>
             <span>Number</span>
             <strong>{currentNumber || "Not connected"}</strong>
           </article>
-          <article data-alert={connection?.credentialConfigured ? "false" : "true"}>
-            <span>Twilio API</span>
+          <article data-alert={connection?.status === "connected" ? "false" : "true"}>
+            <span>Call routing</span>
             <strong>
-              {connection?.credentialConfigured ? "Ready" : "Credentials needed"}
+              {connection?.status === "connected" ? "Ready" : "Setup needed"}
             </strong>
           </article>
         </div>
@@ -5629,52 +6103,166 @@ export default function DashboardPage() {
           })}
         </div>
 
-        {webhook ? (
+        {voiceBridgeUrl || sipTarget ? (
           <div className="webhookBox telephoneWebhook">
-            <span>Voice webhook</span>
-            <code>{webhook}</code>
-            <button
-              className="secondaryButton"
-              type="button"
-              onClick={() => copyText(webhook, "Telephone webhook")}
+            {voiceBridgeUrl ? (
+              <div className="telephoneEndpoint">
+                <span>Railway voice bridge</span>
+                <code>{voiceBridgeUrl}</code>
+                <button
+                  className="secondaryButton"
+                  type="button"
+                  onClick={() => copyText(voiceBridgeUrl, "Voice bridge")}
+                >
+                  <Copy size={15} />
+                  Copy
+                </button>
+              </div>
+            ) : null}
+            {sipTarget ? (
+              <div className="telephoneEndpoint">
+                <span>SIP target</span>
+                <code>{sipTarget}</code>
+                <button
+                  className="secondaryButton"
+                  type="button"
+                  onClick={() => copyText(sipTarget, "SIP target")}
+                >
+                  <Copy size={15} />
+                  Copy
+                </button>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        <div className="inlineNotice">
+          <ShieldCheck size={16} />
+          <span>
+            The telephone provider supplies numbers and SIP routing only. The
+            AI, inbox, summaries, and handoff logic stay inside Assaddar.
+          </span>
+        </div>
+
+        <div className="telephonePolishGrid">
+          <section className="telephoneControlPanel">
+            <div className="miniPanelHeader">
+              <strong>Setup checklist</strong>
+              <button
+                className="secondaryButton"
+                type="button"
+                disabled={busy || !selectedTenant}
+                onClick={saveTelephoneRuntimeSettings}
+              >
+                <Save size={15} />
+                Save
+              </button>
+            </div>
+            <div className="checklistStack">
+              {checklistItems.map((item) => (
+                <label className="toggle" key={item.label}>
+                  <input
+                    type="checkbox"
+                    checked={item.checked}
+                    onChange={(event) => item.onChange(event.target.checked)}
+                  />
+                  <span>{item.label}</span>
+                </label>
+              ))}
+            </div>
+          </section>
+
+          <section className="telephoneControlPanel">
+            <div className="miniPanelHeader">
+              <strong>Voice edge</strong>
+              <button
+                className="secondaryButton"
+                type="button"
+                disabled={busy || !selectedTenant}
+                onClick={refreshVoiceEdgeStatus}
+              >
+                <RefreshCw size={15} />
+                Check
+              </button>
+            </div>
+            <div className="voiceEdgeStatus" data-status={voiceEdgeStatus?.status ?? "unknown"}>
+              <strong>{voiceEdgeStatus?.status ?? "Not checked"}</strong>
+              <span>
+                {voiceEdgeStatus?.url ??
+                  telephoneSettingString(connection, "voiceBridgeUrl") ??
+                  "No voice bridge URL yet"}
+              </span>
+              <small>
+                {voiceEdgeStatus?.checkedAt
+                  ? `Checked ${formatDate(voiceEdgeStatus.checkedAt)}`
+                  : "Checks the Railway voice service health endpoint."}
+              </small>
+            </div>
+          </section>
+        </div>
+
+        <div className="providerGuideGrid">
+          {providerOptions.map((provider) => (
+            <a
+              href={telephoneProviderGuideUrl(provider.value)}
+              key={provider.value}
+              rel="noreferrer"
+              target="_blank"
             >
-              <Copy size={15} />
-              Copy
-            </button>
+              <ExternalLink size={15} />
+              <span>{provider.label} guide</span>
+            </a>
+          ))}
+        </div>
+
+        {activeWarnings.length ? (
+          <div className="telephoneWarnings">
+            {activeWarnings.map((warning) => (
+              <article data-level={warning.level} key={warning.title}>
+                <AlertCircle size={15} />
+                <div>
+                  <strong>{warning.title}</strong>
+                  <span>{warning.detail}</span>
+                </div>
+              </article>
+            ))}
           </div>
         ) : null}
 
-        {!connection?.credentialConfigured &&
-        ["buy", "existing_twilio"].includes(telephoneSetupMode) ? (
-          <div className="inlineNotice" data-tone="warn">
-            <AlertCircle size={16} />
-            <span>
-              Add <code>TWILIO_ACCOUNT_SID</code> and{" "}
-              <code>TWILIO_AUTH_TOKEN</code> in Railway to search, buy, or
-              update Twilio numbers from this dashboard.
-            </span>
-          </div>
-        ) : null}
-
-        {telephoneSetupMode === "buy" ? (
+        {telephoneSetupMode === "new_number" ? (
           <div className="telephoneFlow">
+            <div className="providerOptionGrid">
+              {providerOptions.map((provider) => (
+                <button
+                  data-selected={
+                    newNumberProvider === provider.value ? "true" : "false"
+                  }
+                  key={provider.value}
+                  type="button"
+                  onClick={() => setNewNumberProvider(provider.value)}
+                >
+                  <strong>{provider.label}</strong>
+                  <span>{provider.detail}</span>
+                </button>
+              ))}
+            </div>
             <div className="formGrid two">
               <label className="field">
                 <span>Country</span>
                 <input
                   maxLength={2}
-                  value={twilioSearchCountry}
+                  value={newNumberCountry}
                   onChange={(event) =>
-                    setTwilioSearchCountry(event.target.value.toUpperCase())
+                    setNewNumberCountry(event.target.value.toUpperCase())
                   }
                 />
               </label>
               <label className="field">
                 <span>Number type</span>
                 <select
-                  value={twilioNumberType}
+                  value={newNumberType}
                   onChange={(event) =>
-                    setTwilioNumberType(event.target.value as TwilioNumberType)
+                    setNewNumberType(event.target.value as TelephoneNumberType)
                   }
                 >
                   <option value="local">Local</option>
@@ -5683,156 +6271,89 @@ export default function DashboardPage() {
                 </select>
               </label>
               <label className="field">
-                <span>City or locality</span>
+                <span>Area code</span>
                 <input
-                  placeholder="Berlin"
-                  value={twilioSearchLocality}
-                  onChange={(event) => setTwilioSearchLocality(event.target.value)}
+                  placeholder="030"
+                  value={newNumberAreaCode}
+                  onChange={(event) => setNewNumberAreaCode(event.target.value)}
                 />
               </label>
               <label className="field">
-                <span>Contains</span>
+                <span>City or locality</span>
                 <input
-                  placeholder="Optional digits"
-                  value={twilioSearchContains}
-                  onChange={(event) => setTwilioSearchContains(event.target.value)}
+                  placeholder="Berlin"
+                  value={newNumberLocality}
+                  onChange={(event) => setNewNumberLocality(event.target.value)}
                 />
+              </label>
+              <label className="field">
+                <span>Ordered number</span>
+                <input
+                  placeholder="+49301234567"
+                  value={orderedPhoneNumber}
+                  onChange={(event) => setOrderedPhoneNumber(event.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>SIP registrar</span>
+                <input
+                  placeholder="sip.easybell.de"
+                  value={newNumberSipRegistrar}
+                  onChange={(event) =>
+                    setNewNumberSipRegistrar(event.target.value)
+                  }
+                />
+              </label>
+              <label className="field">
+                <span>SIP username</span>
+                <input
+                  placeholder="Provider SIP user"
+                  value={newNumberSipUsername}
+                  onChange={(event) =>
+                    setNewNumberSipUsername(event.target.value)
+                  }
+                />
+              </label>
+              <label className="toggle">
+                <input
+                  type="checkbox"
+                  checked={newNumberSipConfigured}
+                  onChange={(event) =>
+                    setNewNumberSipConfigured(event.target.checked)
+                  }
+                />
+                <span>Number and SIP routing are active</span>
               </label>
             </div>
             <button
               className="primaryButton"
               type="button"
               disabled={busy || !selectedTenant}
-              onClick={searchTwilioNumbers}
+              onClick={saveNewTelephoneNumberSetup}
             >
-              <Search size={16} />
-              Search numbers
-            </button>
-
-            {compliance ? (
-              <div className="inlineNotice">
-                <ShieldCheck size={16} />
-                <span>
-                  <strong>{compliance.title}</strong> {compliance.detail}
-                </span>
-              </div>
-            ) : null}
-
-            <div className="numberResults">
-              {twilioNumberSearch?.numbers.length ? (
-                twilioNumberSearch.numbers.map((number) => (
-                  <article className="numberCard" key={number.phoneNumber}>
-                    <div>
-                      <strong>{number.phoneNumber}</strong>
-                      <span>
-                        {[number.locality, number.region, number.isoCountry]
-                          .filter(Boolean)
-                          .join(", ") || number.friendlyName}
-                      </span>
-                    </div>
-                    <small>
-                      {formatMonthlyNumberPrice(
-                        number.monthlyPrice,
-                        number.currency,
-                      )}
-                    </small>
-                    <button
-                      className="primaryButton"
-                      type="button"
-                      disabled={busy}
-                      onClick={() => purchaseTwilioNumber(number)}
-                    >
-                      <ShoppingCart size={15} />
-                      Buy & connect
-                    </button>
-                  </article>
-                ))
-              ) : (
-                <div className="emptyState compact">
-                  Search Twilio inventory to pick a voice-enabled AI phone
-                  number.
-                </div>
-              )}
-            </div>
-          </div>
-        ) : null}
-
-        {telephoneSetupMode === "existing_twilio" ? (
-          <div className="telephoneFlow">
-            <div className="rowActions">
-              <button
-                className="secondaryButton"
-                type="button"
-                disabled={busy || !selectedTenant}
-                onClick={loadTwilioOwnedNumbers}
-              >
-                <RefreshCw size={16} />
-                Load Twilio numbers
-              </button>
-              <a
-                className="secondaryButton linkButton"
-                href="https://www.twilio.com/docs/phone-numbers/api/incomingphonenumber-resource"
-                rel="noreferrer"
-                target="_blank"
-              >
-                <ExternalLink size={15} />
-                Twilio guide
-              </a>
-            </div>
-
-            {twilioOwnedNumbers.length ? (
-              <div className="ownedNumberList">
-                {twilioOwnedNumbers.map((number) => (
-                  <button
-                    data-selected={
-                      existingTwilioSid === number.sid ? "true" : "false"
-                    }
-                    key={number.sid ?? number.phoneNumber}
-                    type="button"
-                    onClick={() => {
-                      setExistingTwilioSid(number.sid ?? "");
-                      setExistingTwilioNumber(number.phoneNumber ?? "");
-                    }}
-                  >
-                    <strong>{number.phoneNumber ?? number.sid}</strong>
-                    <span>{number.voiceUrl ? "Webhook set" : "No webhook"}</span>
-                  </button>
-                ))}
-              </div>
-            ) : null}
-
-            <div className="formGrid two">
-              <label className="field">
-                <span>Twilio phone number</span>
-                <input
-                  placeholder="+49301234567"
-                  value={existingTwilioNumber}
-                  onChange={(event) => setExistingTwilioNumber(event.target.value)}
-                />
-              </label>
-              <label className="field">
-                <span>Twilio number SID</span>
-                <input
-                  placeholder="PN..."
-                  value={existingTwilioSid}
-                  onChange={(event) => setExistingTwilioSid(event.target.value)}
-                />
-              </label>
-            </div>
-            <button
-              className="primaryButton"
-              type="button"
-              disabled={busy || (!existingTwilioNumber && !existingTwilioSid)}
-              onClick={connectExistingTwilioNumber}
-            >
-              <PhoneCall size={16} />
-              Connect existing Twilio number
+              <Save size={16} />
+              Save new number setup
             </button>
           </div>
         ) : null}
 
         {telephoneSetupMode === "forwarding" ? (
           <div className="telephoneFlow">
+            <div className="providerOptionGrid">
+              {providerOptions.map((provider) => (
+                <button
+                  data-selected={
+                    forwardingProvider === provider.value ? "true" : "false"
+                  }
+                  key={provider.value}
+                  type="button"
+                  onClick={() => setForwardingProvider(provider.value)}
+                >
+                  <strong>{provider.label}</strong>
+                  <span>{provider.detail}</span>
+                </button>
+              ))}
+            </div>
             <div className="formGrid two">
               <label className="field">
                 <span>Existing business number</span>
@@ -5845,7 +6366,7 @@ export default function DashboardPage() {
                 />
               </label>
               <label className="field">
-                <span>AI Twilio number</span>
+                <span>AI destination number</span>
                 <input
                   placeholder="+49307654321"
                   value={forwardingAiNumber}
@@ -5889,6 +6410,19 @@ export default function DashboardPage() {
 
         {telephoneSetupMode === "sip_byoc" ? (
           <div className="telephoneFlow">
+            <div className="providerOptionGrid">
+              {providerOptions.map((provider) => (
+                <button
+                  data-selected={sipProvider === provider.value ? "true" : "false"}
+                  key={provider.value}
+                  type="button"
+                  onClick={() => setSipProvider(provider.value)}
+                >
+                  <strong>{provider.label}</strong>
+                  <span>{provider.detail}</span>
+                </button>
+              ))}
+            </div>
             <div className="formGrid two">
               <label className="field">
                 <span>Carrier or PBX</span>
@@ -5901,15 +6435,31 @@ export default function DashboardPage() {
               <label className="field">
                 <span>SIP domain</span>
                 <input
-                  placeholder="voice.example.sip.twilio.com"
+                  placeholder="customer-pbx.example.com"
                   value={sipDomain}
                   onChange={(event) => setSipDomain(event.target.value)}
                 />
               </label>
               <label className="field">
-                <span>Twilio trunk SID</span>
+                <span>SIP registrar</span>
                 <input
-                  placeholder="TK..."
+                  placeholder="sip.easybell.de"
+                  value={sipRegistrar}
+                  onChange={(event) => setSipRegistrar(event.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>SIP username</span>
+                <input
+                  placeholder="Provider SIP user"
+                  value={sipUsername}
+                  onChange={(event) => setSipUsername(event.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>Trunk or account ID</span>
+                <input
+                  placeholder="Optional provider ID"
                   value={sipTrunkSid}
                   onChange={(event) => setSipTrunkSid(event.target.value)}
                 />
@@ -5920,6 +6470,14 @@ export default function DashboardPage() {
                   placeholder="sip:..."
                   value={sipInboundUri}
                   onChange={(event) => setSipInboundUri(event.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>Public number</span>
+                <input
+                  placeholder="+49301234567"
+                  value={sipPublicNumber}
+                  onChange={(event) => setSipPublicNumber(event.target.value)}
                 />
               </label>
               <label className="toggle">
@@ -5939,20 +6497,279 @@ export default function DashboardPage() {
                 onClick={saveSipByocSetup}
               >
                 <RadioTower size={16} />
-                Save SIP/BYOC setup
+                Save SIP trunk setup
               </button>
               <a
                 className="secondaryButton linkButton"
-                href="https://www.twilio.com/docs/voice/bring-your-own-carrier-byoc"
+                href="https://en.easybell.de/business/sip-trunks/"
                 rel="noreferrer"
                 target="_blank"
               >
                 <ExternalLink size={15} />
-                BYOC guide
+                SIP guide
               </a>
             </div>
           </div>
         ) : null}
+
+        <div className="formGrid two">
+          <label className="field">
+            <span>Fallback human number</span>
+            <input
+              placeholder="+491701234567"
+              value={telephoneFallbackNumber}
+              onChange={(event) => setTelephoneFallbackNumber(event.target.value)}
+            />
+          </label>
+          <label className="field">
+            <span>Internal notes</span>
+            <input
+              placeholder="Contract owner, porting date, routing notes..."
+              value={telephoneNotes}
+              onChange={(event) => setTelephoneNotes(event.target.value)}
+            />
+          </label>
+        </div>
+
+        <div className="telephoneRuntimeGrid">
+          <section className="telephoneControlPanel">
+            <div className="miniPanelHeader">
+              <strong>Business hours</strong>
+            </div>
+            <div className="formGrid two">
+              <label className="field">
+                <span>Mode</span>
+                <select
+                  value={businessHoursMode}
+                  onChange={(event) =>
+                    setBusinessHoursMode(
+                      event.target.value as typeof businessHoursMode,
+                    )
+                  }
+                >
+                  <option value="always_on">Always on</option>
+                  <option value="business_hours">Business hours</option>
+                  <option value="after_hours_only">After hours only</option>
+                </select>
+              </label>
+              <label className="field">
+                <span>Timezone</span>
+                <input
+                  value={businessHoursTimezone}
+                  onChange={(event) =>
+                    setBusinessHoursTimezone(event.target.value)
+                  }
+                />
+              </label>
+              <label className="field">
+                <span>Hours</span>
+                <input
+                  value={businessHoursText}
+                  onChange={(event) => setBusinessHoursText(event.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>After hours</span>
+                <select
+                  value={afterHoursAction}
+                  onChange={(event) =>
+                    setAfterHoursAction(event.target.value as typeof afterHoursAction)
+                  }
+                >
+                  <option value="answer">Answer normally</option>
+                  <option value="voicemail">Take voicemail</option>
+                  <option value="callback">Offer callback</option>
+                  <option value="transfer">Transfer to fallback</option>
+                </select>
+              </label>
+            </div>
+          </section>
+
+          <section className="telephoneControlPanel">
+            <div className="miniPanelHeader">
+              <strong>Handoff rules</strong>
+            </div>
+            <div className="checklistStack">
+              {[
+                {
+                  label: "Low confidence",
+                  checked: handoffLowConfidence,
+                  onChange: setHandoffLowConfidence,
+                },
+                {
+                  label: "Urgent keywords",
+                  checked: handoffUrgentKeywords,
+                  onChange: setHandoffUrgentKeywords,
+                },
+                {
+                  label: "Office-hours transfer",
+                  checked: handoffOfficeHoursTransfer,
+                  onChange: setHandoffOfficeHoursTransfer,
+                },
+                {
+                  label: "Repeated failed answer",
+                  checked: handoffRepeatedFailure,
+                  onChange: setHandoffRepeatedFailure,
+                },
+                {
+                  label: "Ask before transfer",
+                  checked: handoffAskBeforeTransfer,
+                  onChange: setHandoffAskBeforeTransfer,
+                },
+              ].map((item) => (
+                <label className="toggle" key={item.label}>
+                  <input
+                    type="checkbox"
+                    checked={item.checked}
+                    onChange={(event) => item.onChange(event.target.checked)}
+                  />
+                  <span>{item.label}</span>
+                </label>
+              ))}
+            </div>
+          </section>
+
+          <section className="telephoneControlPanel">
+            <div className="miniPanelHeader">
+              <strong>GDPR phone settings</strong>
+            </div>
+            <label className="field">
+              <span>Caller disclosure</span>
+              <textarea
+                rows={3}
+                value={phoneDisclosureText}
+                onChange={(event) => setPhoneDisclosureText(event.target.value)}
+              />
+            </label>
+            <div className="formGrid two">
+              <label className="field">
+                <span>Transcript retention</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={3650}
+                  value={phoneTranscriptRetentionDays}
+                  onChange={(event) =>
+                    setPhoneTranscriptRetentionDays(Number(event.target.value))
+                  }
+                />
+              </label>
+              <label className="toggle">
+                <input
+                  type="checkbox"
+                  checked={phoneRecordingEnabled}
+                  onChange={(event) =>
+                    setPhoneRecordingEnabled(event.target.checked)
+                  }
+                />
+                <span>Call recording enabled</span>
+              </label>
+              <label className="toggle">
+                <input
+                  type="checkbox"
+                  checked={phoneStoreTranscripts}
+                  onChange={(event) =>
+                    setPhoneStoreTranscripts(event.target.checked)
+                  }
+                />
+                <span>Store transcripts</span>
+              </label>
+            </div>
+          </section>
+
+          <section className="telephoneControlPanel">
+            <div className="miniPanelHeader">
+              <strong>Voice quality</strong>
+            </div>
+            <div className="formGrid two">
+              <label className="field">
+                <span>Language</span>
+                <input
+                  value={phoneVoiceLanguage}
+                  onChange={(event) => setPhoneVoiceLanguage(event.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>Style</span>
+                <select
+                  value={phoneSpeakingStyle}
+                  onChange={(event) =>
+                    setPhoneSpeakingStyle(event.target.value as typeof phoneSpeakingStyle)
+                  }
+                >
+                  <option value="professional">Professional</option>
+                  <option value="friendly">Friendly</option>
+                  <option value="concise">Concise</option>
+                </select>
+              </label>
+              <label className="field">
+                <span>Max answer length</span>
+                <input
+                  type="number"
+                  min={160}
+                  max={1200}
+                  value={phoneMaxAnswerLength}
+                  onChange={(event) =>
+                    setPhoneMaxAnswerLength(Number(event.target.value))
+                  }
+                />
+              </label>
+            </div>
+          </section>
+        </div>
+
+        <div className="telephoneTestCall">
+          <div>
+            <strong>Test call</strong>
+            <span>
+              Status: {titleCase(telephoneTestCallStatus)}. Place a real call
+              after SIP routing is active.
+            </span>
+          </div>
+          <label className="field">
+            <span>Test caller number</span>
+            <input
+              placeholder="+491701234567"
+              value={telephoneTestCallNumber}
+              onChange={(event) => setTelephoneTestCallNumber(event.target.value)}
+            />
+          </label>
+          <label className="field">
+            <span>Result notes</span>
+            <input
+              placeholder="Answered, transcript saved, fallback checked..."
+              value={telephoneTestCallNotes}
+              onChange={(event) => setTelephoneTestCallNotes(event.target.value)}
+            />
+          </label>
+          <div className="rowActions">
+            <button
+              className="secondaryButton"
+              type="button"
+              disabled={busy || !selectedTenant}
+              onClick={() => saveTelephoneTestCall("pending")}
+            >
+              Pending
+            </button>
+            <button
+              className="primaryButton"
+              type="button"
+              disabled={busy || !selectedTenant}
+              onClick={() => saveTelephoneTestCall("passed")}
+            >
+              <CheckCircle2 size={15} />
+              Passed
+            </button>
+            <button
+              className="dangerButton"
+              type="button"
+              disabled={busy || !selectedTenant}
+              onClick={() => saveTelephoneTestCall("failed")}
+            >
+              Failed
+            </button>
+          </div>
+        </div>
 
         {activeInstructions.length ? (
           <div className="instructionList">
@@ -5965,21 +6782,57 @@ export default function DashboardPage() {
           </div>
         ) : null}
 
+        <div className="recentCallList">
+          <div className="miniPanelHeader">
+            <strong>Recent phone conversations</strong>
+            <span>{recentTelephoneConversations.length}</span>
+          </div>
+          {recentTelephoneConversations.length ? (
+            recentTelephoneConversations.map((conversation) => (
+              <button
+                key={conversation.id}
+                type="button"
+                onClick={() => {
+                  setSelectedConversationId(conversation.id);
+                  setActiveTab("leads");
+                }}
+              >
+                <PhoneCall size={15} />
+                <span>
+                  {conversation.externalUserId ||
+                    conversation.contact?.phone ||
+                    conversation.publicId}
+                </span>
+                <small>
+                  {conversation.lastMessage?.content
+                    ? conversation.lastMessage.content.slice(0, 70)
+                    : formatDate(conversation.createdAt)}
+                </small>
+              </button>
+            ))
+          ) : (
+            <div className="emptyState compact">
+              Calls will appear here after the voice edge sends turns to the
+              Railway bridge.
+            </div>
+          )}
+        </div>
+
         <div className="providerRoadmap">
           <article>
-            <span>Later</span>
-            <strong>Telnyx international porting</strong>
+            <span>Provider role</span>
+            <strong>Numbers and SIP only</strong>
             <p>
-              Add when we need embedded number ordering, porting, and SIP across
-              more countries.
+              The carrier provides regulated phone access; Assaddar owns the AI
+              assistant, inbox, and customer workflow.
             </p>
           </article>
           <article>
-            <span>Later</span>
-            <strong>OpenAI Realtime SIP</strong>
+            <span>Voice edge</span>
+            <strong>Asterisk or FreeSWITCH</strong>
             <p>
-              Add when phone calls need lower-latency, more natural live
-              conversations.
+              SIP/RTP media terminates on a voice edge, which calls the Railway
+              voice bridge after transcription.
             </p>
           </article>
         </div>
@@ -6210,11 +7063,197 @@ export default function DashboardPage() {
     const labels: Record<string, string> = {
       purchased_twilio: "Purchased Twilio number",
       existing_twilio: "Existing Twilio number",
+      new_number_provider: "Provider number",
       carrier_forwarding: "Carrier forwarding",
-      sip_byoc: "SIP/BYOC",
+      sip_byoc: "SIP trunk",
       not_configured: "Not configured",
     };
     return labels[value] ?? value.replace(/_/g, " ");
+  }
+
+  function telephoneProviderLabel(provider: string | undefined) {
+    const labels: Record<string, string> = {
+      easybell: "easybell",
+      sipgate: "sipgate",
+      peoplefone: "peoplefone",
+      custom_sip: "Custom SIP",
+      twilio: "Twilio",
+    };
+    return provider ? labels[provider] ?? provider : "Not selected";
+  }
+
+  function normalizeTelephoneProviderUi(
+    provider: string | undefined,
+  ): TelephoneProvider {
+    if (
+      provider === "easybell" ||
+      provider === "sipgate" ||
+      provider === "peoplefone" ||
+      provider === "custom_sip"
+    ) {
+      return provider;
+    }
+    return "easybell";
+  }
+
+  function telephoneProviderGuideUrl(provider: TelephoneProvider) {
+    const guides: Record<TelephoneProvider, string> = {
+      easybell: "https://en.easybell.de/business/sip-trunks/",
+      sipgate:
+        "https://teamhelp.sipgate.co.uk/integrations-and-connections/using-sipgate-trunking/what-is-sipgate-trunking",
+      peoplefone: "https://support.peoplefone.com/en-che/peoplefone-sip-trunk/",
+      custom_sip: "https://www.asterisk.org/sip-trunking-for-asterisk/",
+    };
+    return guides[provider];
+  }
+
+  function settingRecord(value: unknown): Record<string, unknown> {
+    return typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {};
+  }
+
+  function settingString(value: unknown) {
+    return typeof value === "string" ? value : undefined;
+  }
+
+  function settingBoolean(value: unknown, fallback: boolean) {
+    return typeof value === "boolean" ? value : fallback;
+  }
+
+  function settingNumber(value: unknown, fallback: number) {
+    return typeof value === "number" && Number.isFinite(value)
+      ? value
+      : fallback;
+  }
+
+  function settingTestCallStatus(value: string | undefined) {
+    if (value === "pending" || value === "passed" || value === "failed") {
+      return value;
+    }
+    return "not_started";
+  }
+
+  function settingBusinessHoursMode(value: string | undefined) {
+    if (
+      value === "business_hours" ||
+      value === "after_hours_only" ||
+      value === "always_on"
+    ) {
+      return value;
+    }
+    return "always_on";
+  }
+
+  function settingAfterHoursAction(value: string | undefined) {
+    if (
+      value === "voicemail" ||
+      value === "callback" ||
+      value === "transfer" ||
+      value === "answer"
+    ) {
+      return value;
+    }
+    return "answer";
+  }
+
+  function settingSpeakingStyle(value: string | undefined) {
+    if (
+      value === "friendly" ||
+      value === "concise" ||
+      value === "professional"
+    ) {
+      return value;
+    }
+    return "professional";
+  }
+
+  function buildTelephoneWarningsFromSettings(
+    settings: Record<string, unknown>,
+    connection?: ChannelConnection,
+  ): TelephoneSetupWarning[] {
+    const checklist = settingRecord(settings.setupChecklist);
+    const gdpr = settingRecord(settings.gdpr);
+    const testCall = settingRecord(settings.testCall);
+    const warnings: TelephoneSetupWarning[] = [];
+    if (!settingBoolean(checklist.numberOrdered, Boolean(connection?.externalAccountId))) {
+      warnings.push({
+        level: "warn",
+        title: "Number not confirmed",
+        detail: "Confirm the provider number or forwarding destination.",
+      });
+    }
+    if (!settingBoolean(checklist.sipConfigured, false)) {
+      warnings.push({
+        level: "warn",
+        title: "SIP routing pending",
+        detail: "Route the provider trunk or PBX to the voice edge.",
+      });
+    }
+    if (
+      !settingBoolean(checklist.testCallCompleted, false) &&
+      settingString(testCall.status) !== "passed"
+    ) {
+      warnings.push({
+        level: "warn",
+        title: "Test call missing",
+        detail: "Complete a live call test before publishing the number.",
+      });
+    }
+    if (
+      !settingBoolean(checklist.fallbackSet, false) &&
+      !settingString(settings.fallbackNumber)
+    ) {
+      warnings.push({
+        level: "info",
+        title: "Fallback number missing",
+        detail: "Add a human fallback number for transfer and emergencies.",
+      });
+    }
+    if (
+      !settingBoolean(checklist.disclosureConfirmed, false) &&
+      !settingString(gdpr.disclosureText)
+    ) {
+      warnings.push({
+        level: "warn",
+        title: "AI disclosure missing",
+        detail: "Add the disclosure callers hear before AI processing starts.",
+      });
+    }
+    return warnings;
+  }
+
+  function isTelephoneConversation(
+    inboxItem?: UnifiedInboxItem | null,
+    conversation?: Conversation | null,
+  ) {
+    return (inboxItem?.channel ?? conversation?.channel) === "telephone";
+  }
+
+  function latestAnswerConfidence(messages: ConversationMessage[]) {
+    const answer = latestAnswerTrace(messages);
+    const confidence = answer ? answer["confidence"] : undefined;
+    return typeof confidence === "number" ? formatPercent(confidence) : "N/A";
+  }
+
+  function latestHandoffState(messages: ConversationMessage[]) {
+    const answer = latestAnswerTrace(messages);
+    const handoff = answer ? answer["handoffRecommended"] : undefined;
+    if (typeof handoff === "boolean") {
+      return handoff ? "Recommended" : "No";
+    }
+    return "N/A";
+  }
+
+  function latestAnswerTrace(messages: ConversationMessage[]) {
+    for (const message of [...messages].reverse()) {
+      const trace = settingRecord(message.trace);
+      const answer = settingRecord(trace.answer);
+      if (Object.keys(answer).length) {
+        return answer;
+      }
+    }
+    return null;
   }
 
   function formatMonthlyNumberPrice(
@@ -6250,7 +7289,7 @@ export default function DashboardPage() {
 
   function channelAccountLabel(channel: ChannelConnection["channel"]) {
     if (channel === "telephone") {
-      return "Twilio phone number";
+      return "Phone number or SIP trunk";
     }
     if (channel === "whatsapp") {
       return "WhatsApp phone number ID";
@@ -6266,7 +7305,7 @@ export default function DashboardPage() {
 
   function channelSetupHint(connection: ChannelConnection) {
     if (connection.channel === "telephone") {
-      return "Set this URL as the Twilio Voice webhook for incoming calls. Pressing 0 can transfer if TWILIO_TRANSFER_PHONE_NUMBER is configured.";
+      return "Use a phone provider for numbers/SIP only. Route calls into the Assaddar voice edge so the AI and inbox stay in this platform.";
     }
     if (connection.channel === "whatsapp") {
       return "Use the WhatsApp Cloud API phone number ID. The webhook accepts mapped account traffic or the assistant-specific URL.";

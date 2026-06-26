@@ -27,7 +27,7 @@ flowchart LR
 - `apps/admin`: Next.js dashboard for internal admin and customer self-service. It covers tenant setup, daily operations, lead follow-up, unified inbox, contact profiles, FAQ management, assistant testing, widget embed access, channel setup, and WhatsApp operations.
 - `apps/widget`: Shadow DOM isolated website chatbot script with public config loading, conversation continuity, theming, and client-side message throttling.
 - `apps/workers`: BullMQ worker foundation for file parsing, embeddings, webhook processing, retries, summaries, and usage metering.
-- `apps/voice`: Twilio-first voice webhook runtime using speech input, the shared answer engine, and TwiML responses.
+- `apps/voice`: telephone voice runtime with a provider-neutral `/voice/turn` bridge for SIP/RTP edges plus a legacy Twilio TwiML route.
 
 ## Packages
 
