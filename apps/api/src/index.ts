@@ -51,6 +51,13 @@ async function main() {
   if (env.MESSENGER_PAGE_ACCESS_TOKEN) {
     serverOptions.messengerPageAccessToken = env.MESSENGER_PAGE_ACCESS_TOKEN;
   }
+  if (env.VOICE_PUBLIC_URL) {
+    serverOptions.voicePublicUrl = env.VOICE_PUBLIC_URL;
+  }
+  if (env.TWILIO_ACCOUNT_SID && env.TWILIO_AUTH_TOKEN) {
+    serverOptions.twilioAccountSid = env.TWILIO_ACCOUNT_SID;
+    serverOptions.twilioAuthToken = env.TWILIO_AUTH_TOKEN;
+  }
 
   const app = await buildServer(serverOptions);
 

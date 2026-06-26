@@ -1228,6 +1228,283 @@ describe("API", () => {
     await app.close();
   });
 
+  it("returns a clear error when Twilio number automation credentials are missing", async () => {
+    const store = new MemoryPlatformStore();
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+    });
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/admin/tenants/${tenant.id}/telephone/twilio/search`,
+      headers: { "x-admin-token": "test-token" },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({
+      error: "Twilio credentials are not configured.",
+    });
+    await app.close();
+  });
+
+  it("searches Twilio inventory for available AI phone numbers", async () => {
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("pricing.twilio.com") || url.includes("/v1/PhoneNumbers")) {
+        return new Response(
+          JSON.stringify({
+            price_unit: "EUR",
+            phone_number_prices: [
+              {
+                number_type: "local",
+                current_price: "1.50",
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          available_phone_numbers: [
+            {
+              phone_number: "+49301234567",
+              friendly_name: "+49 30 1234567",
+              locality: "Berlin",
+              region: "Berlin",
+              iso_country: "DE",
+              capabilities: { voice: true, SMS: false, MMS: false },
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+    const store = new MemoryPlatformStore();
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+      twilioAccountSid: "ACaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      twilioAuthToken: "auth-token",
+      voicePublicUrl: "https://voice.example.com",
+    });
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/admin/tenants/${tenant.id}/telephone/twilio/search?country=DE&numberType=local&locality=Berlin`,
+      headers: { "x-admin-token": "test-token" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      webhookUrl: `https://voice.example.com/twilio/voice?assistantId=${tenant.publicId}`,
+      numbers: [
+        {
+          phoneNumber: "+49301234567",
+          monthlyPrice: "1.50",
+          currency: "EUR",
+        },
+      ],
+    });
+    await app.close();
+  });
+
+  it("purchases a Twilio phone number and connects it to telephone AI", async () => {
+    globalThis.fetch = vi.fn(async () => {
+      return new Response(
+        JSON.stringify({
+          sid: "PNaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          phone_number: "+49301234567",
+          friendly_name: "Tenant One AI phone",
+          iso_country: "DE",
+          capabilities: { voice: true, SMS: false, MMS: false },
+          voice_url:
+            "https://voice.example.com/twilio/voice?assistantId=asst_test",
+          voice_method: "POST",
+        }),
+        { status: 201, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+    const store = new MemoryPlatformStore();
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+      twilioAccountSid: "ACaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      twilioAuthToken: "auth-token",
+      voicePublicUrl: "https://voice.example.com",
+    });
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/admin/tenants/${tenant.id}/telephone/twilio/purchase`,
+      headers: { "x-admin-token": "test-token" },
+      payload: {
+        phoneNumber: "+49301234567",
+        numberType: "local",
+        friendlyName: "Tenant One AI phone",
+      },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toMatchObject({
+      number: {
+        sid: "PNaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        phoneNumber: "+49301234567",
+      },
+    });
+    expect(store.channelConnections[0]).toMatchObject({
+      channel: "telephone",
+      provider: "twilio",
+      externalAccountId: "+49301234567",
+      status: "connected",
+      settings: {
+        mode: "purchased_twilio",
+        providerNumberSid: "PNaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      },
+    });
+    await app.close();
+  });
+
+  it("connects an existing Twilio number by phone number", async () => {
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("IncomingPhoneNumbers.json")) {
+        return new Response(
+          JSON.stringify({
+            incoming_phone_numbers: [
+              {
+                sid: "PNbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                phone_number: "+49307654321",
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          sid: "PNbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          phone_number: "+49307654321",
+          capabilities: { voice: true, SMS: false, MMS: false },
+          voice_url:
+            "https://voice.example.com/twilio/voice?assistantId=asst_test",
+          voice_method: "POST",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+    const store = new MemoryPlatformStore();
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+      twilioAccountSid: "ACaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      twilioAuthToken: "auth-token",
+      voicePublicUrl: "https://voice.example.com",
+    });
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/admin/tenants/${tenant.id}/telephone/twilio/connect-existing`,
+      headers: { "x-admin-token": "test-token" },
+      payload: {
+        phoneNumber: "+49307654321",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(store.channelConnections[0]).toMatchObject({
+      channel: "telephone",
+      externalAccountId: "+49307654321",
+      status: "connected",
+      settings: {
+        mode: "existing_twilio",
+        providerNumberSid: "PNbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      },
+    });
+    await app.close();
+  });
+
+  it("saves carrier forwarding and SIP/BYOC telephone setup modes", async () => {
+    const store = new MemoryPlatformStore();
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+      voicePublicUrl: "https://voice.example.com",
+    });
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+
+    const forwardingResponse = await app.inject({
+      method: "POST",
+      url: `/admin/tenants/${tenant.id}/telephone/carrier-forwarding`,
+      headers: { "x-admin-token": "test-token" },
+      payload: {
+        existingNumber: "+49301111111",
+        aiNumber: "+49302222222",
+        carrierName: "Telekom",
+      },
+    });
+
+    expect(forwardingResponse.statusCode).toBe(200);
+    expect(forwardingResponse.json()).toMatchObject({
+      instructions: expect.arrayContaining([
+        expect.stringContaining("+49302222222"),
+      ]),
+    });
+    expect(store.channelConnections[0]).toMatchObject({
+      externalAccountId: "+49301111111",
+      status: "pending",
+      settings: {
+        mode: "carrier_forwarding",
+      },
+    });
+
+    const sipResponse = await app.inject({
+      method: "POST",
+      url: `/admin/tenants/${tenant.id}/telephone/sip-byoc`,
+      headers: { "x-admin-token": "test-token" },
+      payload: {
+        carrierName: "PBX",
+        sipDomain: "voice.example.sip.twilio.com",
+        sipConfigured: true,
+      },
+    });
+
+    expect(sipResponse.statusCode).toBe(200);
+    expect(store.channelConnections[0]).toMatchObject({
+      externalAccountId: "voice.example.sip.twilio.com",
+      status: "connected",
+      settings: {
+        mode: "sip_byoc",
+      },
+    });
+    await app.close();
+  });
+
   it("routes WhatsApp webhooks through a mapped channel connection", async () => {
     const store = new MemoryPlatformStore();
     globalThis.fetch = vi.fn(async () => {

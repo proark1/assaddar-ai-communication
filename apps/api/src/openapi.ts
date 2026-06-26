@@ -71,6 +71,36 @@ export const openApiDocument = {
         summary: "Create or update a tenant channel connection",
       },
     },
+    "/admin/tenants/{tenantId}/telephone/twilio/search": {
+      get: {
+        summary: "Search available Twilio phone numbers for AI voice setup",
+      },
+    },
+    "/admin/tenants/{tenantId}/telephone/twilio/numbers": {
+      get: {
+        summary: "List Twilio phone numbers owned by the configured account",
+      },
+    },
+    "/admin/tenants/{tenantId}/telephone/twilio/purchase": {
+      post: {
+        summary: "Purchase a Twilio phone number and route it to the assistant",
+      },
+    },
+    "/admin/tenants/{tenantId}/telephone/twilio/connect-existing": {
+      post: {
+        summary: "Route an existing Twilio phone number to the assistant",
+      },
+    },
+    "/admin/tenants/{tenantId}/telephone/carrier-forwarding": {
+      post: {
+        summary: "Save existing carrier number forwarding instructions",
+      },
+    },
+    "/admin/tenants/{tenantId}/telephone/sip-byoc": {
+      post: {
+        summary: "Save SIP or bring-your-own-carrier telephone setup",
+      },
+    },
     "/admin/tenants/{tenantId}/weekly-report": {
       post: {
         summary: "Send the tenant weekly automation summary email",

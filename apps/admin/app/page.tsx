@@ -17,17 +17,22 @@ import {
   Inbox,
   KeyRound,
   Layers,
+  Link2,
   Loader2,
   MessageCircle,
   MessageSquare,
+  PhoneCall,
   Plus,
+  RadioTower,
   RefreshCw,
+  Router,
   Save,
   Search,
   Send,
   Settings,
   ShieldCheck,
   Sparkles,
+  ShoppingCart,
   Trash2,
   Upload,
   UserCheck,
@@ -281,6 +286,71 @@ type ChannelConnection = {
   credentialConfigured: boolean;
   settings: Record<string, unknown>;
   updatedAt?: string;
+};
+
+type TelephoneSetupMode =
+  | "buy"
+  | "existing_twilio"
+  | "forwarding"
+  | "sip_byoc";
+
+type TwilioNumberType = "local" | "mobile" | "toll-free";
+
+type TwilioNumberCapabilities = {
+  voice: boolean;
+  sms: boolean;
+  mms: boolean;
+};
+
+type TwilioAvailableNumber = {
+  phoneNumber: string;
+  friendlyName: string;
+  locality?: string | null;
+  region?: string | null;
+  isoCountry?: string | null;
+  capabilities: TwilioNumberCapabilities;
+  monthlyPrice?: string | null;
+  currency?: string | null;
+};
+
+type TwilioOwnedNumber = {
+  sid?: string | null;
+  phoneNumber?: string | null;
+  friendlyName?: string | null;
+  isoCountry?: string | null;
+  capabilities: TwilioNumberCapabilities;
+  voiceUrl?: string | null;
+  voiceMethod?: string | null;
+};
+
+type TelephoneComplianceNotice = {
+  level: string;
+  title: string;
+  detail: string;
+};
+
+type TwilioNumberSearchResult = {
+  webhookUrl: string;
+  pricing?: {
+    currency: string | null;
+    monthlyPrice: string | null;
+    numberType: string;
+  };
+  compliance?: TelephoneComplianceNotice;
+  numbers: TwilioAvailableNumber[];
+};
+
+type TwilioOwnedNumbersResult = {
+  webhookUrl: string;
+  numbers: TwilioOwnedNumber[];
+};
+
+type TelephoneSetupResponse = {
+  connection: ChannelConnection;
+  webhookUrl?: string;
+  number?: TwilioOwnedNumber;
+  instructions?: string[];
+  compliance?: TelephoneComplianceNotice;
 };
 
 type InstallCheckResult = {
@@ -1166,6 +1236,34 @@ export default function DashboardPage() {
   const [channelAccountDrafts, setChannelAccountDrafts] = useState<
     Record<string, string>
   >({});
+  const [telephoneSetupMode, setTelephoneSetupMode] =
+    useState<TelephoneSetupMode>("buy");
+  const [twilioSearchCountry, setTwilioSearchCountry] = useState("DE");
+  const [twilioNumberType, setTwilioNumberType] =
+    useState<TwilioNumberType>("local");
+  const [twilioSearchLocality, setTwilioSearchLocality] = useState("");
+  const [twilioSearchContains, setTwilioSearchContains] = useState("");
+  const [twilioNumberSearch, setTwilioNumberSearch] =
+    useState<TwilioNumberSearchResult | null>(null);
+  const [twilioOwnedNumbers, setTwilioOwnedNumbers] = useState<
+    TwilioOwnedNumber[]
+  >([]);
+  const [existingTwilioNumber, setExistingTwilioNumber] = useState("");
+  const [existingTwilioSid, setExistingTwilioSid] = useState("");
+  const [forwardingExistingNumber, setForwardingExistingNumber] = useState("");
+  const [forwardingAiNumber, setForwardingAiNumber] = useState("");
+  const [forwardingCarrierName, setForwardingCarrierName] = useState("");
+  const [forwardingConfirmed, setForwardingConfirmed] = useState(false);
+  const [sipCarrierName, setSipCarrierName] = useState("");
+  const [sipDomain, setSipDomain] = useState("");
+  const [sipTrunkSid, setSipTrunkSid] = useState("");
+  const [sipInboundUri, setSipInboundUri] = useState("");
+  const [sipConfigured, setSipConfigured] = useState(false);
+  const [telephoneInstructions, setTelephoneInstructions] = useState<string[]>(
+    [],
+  );
+  const [telephoneCompliance, setTelephoneCompliance] =
+    useState<TelephoneComplianceNotice | null>(null);
   const [unansweredQuestions, setUnansweredQuestions] = useState<
     UnansweredQuestion[]
   >([]);
@@ -2325,6 +2423,189 @@ export default function DashboardPage() {
       );
       await refreshChannelConnections(selectedTenant.id);
       setStatus(`${connection.label} saved`);
+    } catch (error) {
+      setStatus(readableError(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function searchTwilioNumbers() {
+    if (!selectedTenant) {
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const query = new URLSearchParams({
+        country: twilioSearchCountry.trim() || "DE",
+        numberType: twilioNumberType,
+        limit: "12",
+      });
+      if (twilioSearchLocality.trim()) {
+        query.set("locality", twilioSearchLocality.trim());
+      }
+      if (twilioSearchContains.trim()) {
+        query.set("contains", twilioSearchContains.trim());
+      }
+
+      const result = await apiFetch<TwilioNumberSearchResult>(
+        `/admin/tenants/${selectedTenant.id}/telephone/twilio/search?${query.toString()}`,
+      );
+      setTwilioNumberSearch(result);
+      setTelephoneCompliance(result.compliance ?? null);
+      setStatus(`${result.numbers.length} Twilio numbers found`);
+    } catch (error) {
+      setStatus(readableError(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function loadTwilioOwnedNumbers() {
+    if (!selectedTenant) {
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const result = await apiFetch<TwilioOwnedNumbersResult>(
+        `/admin/tenants/${selectedTenant.id}/telephone/twilio/numbers`,
+      );
+      setTwilioOwnedNumbers(result.numbers);
+      setStatus(`${result.numbers.length} Twilio account numbers loaded`);
+    } catch (error) {
+      setStatus(readableError(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function purchaseTwilioNumber(number: TwilioAvailableNumber) {
+    if (!selectedTenant || !number.phoneNumber) {
+      return;
+    }
+    const confirmed = window.confirm(
+      `Buy ${number.phoneNumber} in Twilio and connect it to this assistant? Twilio may bill the monthly number fee immediately.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const result = await apiFetch<TelephoneSetupResponse>(
+        `/admin/tenants/${selectedTenant.id}/telephone/twilio/purchase`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            phoneNumber: number.phoneNumber,
+            numberType: twilioNumberType,
+            friendlyName: `${selectedTenant.name} AI phone`,
+          }),
+        },
+      );
+      if (result.number?.phoneNumber) {
+        setForwardingAiNumber(result.number.phoneNumber);
+      }
+      setTelephoneCompliance(result.compliance ?? telephoneCompliance);
+      await refreshChannelConnections(selectedTenant.id);
+      setStatus(`${number.phoneNumber} bought and connected`);
+    } catch (error) {
+      setStatus(readableError(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function connectExistingTwilioNumber() {
+    if (!selectedTenant || (!existingTwilioNumber && !existingTwilioSid)) {
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const result = await apiFetch<TelephoneSetupResponse>(
+        `/admin/tenants/${selectedTenant.id}/telephone/twilio/connect-existing`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            phoneNumber: existingTwilioNumber || undefined,
+            phoneNumberSid: existingTwilioSid || undefined,
+            numberType: twilioNumberType,
+          }),
+        },
+      );
+      if (result.number?.phoneNumber) {
+        setForwardingAiNumber(result.number.phoneNumber);
+      }
+      await refreshChannelConnections(selectedTenant.id);
+      setStatus("Existing Twilio number connected");
+    } catch (error) {
+      setStatus(readableError(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveCarrierForwardingSetup() {
+    if (!selectedTenant || !forwardingExistingNumber || !forwardingAiNumber) {
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const result = await apiFetch<TelephoneSetupResponse>(
+        `/admin/tenants/${selectedTenant.id}/telephone/carrier-forwarding`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            existingNumber: forwardingExistingNumber,
+            aiNumber: forwardingAiNumber,
+            carrierName: forwardingCarrierName || undefined,
+            forwardingConfirmed,
+          }),
+        },
+      );
+      setTelephoneInstructions(result.instructions ?? []);
+      await refreshChannelConnections(selectedTenant.id);
+      setStatus(
+        forwardingConfirmed
+          ? "Carrier forwarding marked connected"
+          : "Carrier forwarding instructions saved",
+      );
+    } catch (error) {
+      setStatus(readableError(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveSipByocSetup() {
+    if (!selectedTenant) {
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const result = await apiFetch<TelephoneSetupResponse>(
+        `/admin/tenants/${selectedTenant.id}/telephone/sip-byoc`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            carrierName: sipCarrierName || undefined,
+            sipDomain: sipDomain || undefined,
+            trunkSid: sipTrunkSid || undefined,
+            inboundSipUri: sipInboundUri || undefined,
+            sipConfigured,
+          }),
+        },
+      );
+      setTelephoneInstructions(result.instructions ?? []);
+      await refreshChannelConnections(selectedTenant.id);
+      setStatus(
+        sipConfigured ? "SIP/BYOC marked connected" : "SIP/BYOC setup saved",
+      );
     } catch (error) {
       setStatus(readableError(error));
     } finally {
@@ -4811,11 +5092,13 @@ export default function DashboardPage() {
           </article>
         </section>
 
+        {renderTelephoneSetup(telephoneConnection)}
+
         <section className="panel">
           <div className="panelHeader">
             <div className="panelTitle">
               <Globe2 size={18} />
-              <h2>Channel setup</h2>
+              <h2>Other channel setup</h2>
             </div>
             <button
               className="secondaryButton"
@@ -4828,7 +5111,9 @@ export default function DashboardPage() {
             </button>
           </div>
           <div className="channelGrid">
-            {channelConnections.map((connection) => {
+            {channelConnections
+              .filter((connection) => connection.channel !== "telephone")
+              .map((connection) => {
               const webhook =
                 connection.assistantWebhookUrl ?? connection.webhookUrl ?? "";
               const draftValue =
@@ -5017,6 +5302,463 @@ export default function DashboardPage() {
 
         {renderWhatsappOperations()}
       </div>
+    );
+  }
+
+  function renderTelephoneSetup(connection?: ChannelConnection) {
+    const webhook = connection?.assistantWebhookUrl ?? connection?.webhookUrl ?? "";
+    const savedInstructions = Array.isArray(connection?.settings?.instructions)
+      ? connection.settings.instructions.filter(
+          (item): item is string => typeof item === "string",
+        )
+      : [];
+    const activeInstructions = telephoneInstructions.length
+      ? telephoneInstructions
+      : savedInstructions;
+    const currentMode =
+      typeof connection?.settings?.mode === "string"
+        ? connection.settings.mode
+        : "not_configured";
+    const currentNumber =
+      connection?.externalAccountId ??
+      telephoneSettingString(connection, "phoneNumber") ??
+      telephoneSettingString(connection, "aiNumber") ??
+      "";
+    const compliance = telephoneCompliance ?? twilioNumberSearch?.compliance;
+    const modes: Array<{
+      key: TelephoneSetupMode;
+      label: string;
+      detail: string;
+      icon: typeof PhoneCall;
+    }> = [
+      {
+        key: "buy",
+        label: "Buy AI number",
+        detail: "Search and connect",
+        icon: ShoppingCart,
+      },
+      {
+        key: "existing_twilio",
+        label: "Existing Twilio",
+        detail: "Reuse account number",
+        icon: PhoneCall,
+      },
+      {
+        key: "forwarding",
+        label: "Forward number",
+        detail: "Carrier to AI",
+        icon: Link2,
+      },
+      {
+        key: "sip_byoc",
+        label: "SIP/BYOC",
+        detail: "PBX or carrier",
+        icon: Router,
+      },
+    ];
+
+    return (
+      <section className="panel telephoneSetupPanel">
+        <div className="panelHeader">
+          <div className="panelTitle">
+            <PhoneCall size={18} />
+            <h2>Telephone AI setup</h2>
+          </div>
+          <span className="countPill" data-tone={connection?.status === "connected" ? "good" : "warn"}>
+            {connection?.status ?? "pending"}
+          </span>
+        </div>
+
+        <div className="telephoneSummary">
+          <article>
+            <span>Current mode</span>
+            <strong>{formatTelephoneMode(currentMode)}</strong>
+          </article>
+          <article>
+            <span>Number</span>
+            <strong>{currentNumber || "Not connected"}</strong>
+          </article>
+          <article data-alert={connection?.credentialConfigured ? "false" : "true"}>
+            <span>Twilio API</span>
+            <strong>
+              {connection?.credentialConfigured ? "Ready" : "Credentials needed"}
+            </strong>
+          </article>
+        </div>
+
+        <div className="modeSelector" aria-label="Telephone setup mode">
+          {modes.map((mode) => {
+            const Icon = mode.icon;
+            return (
+              <button
+                data-active={telephoneSetupMode === mode.key ? "true" : "false"}
+                key={mode.key}
+                type="button"
+                onClick={() => setTelephoneSetupMode(mode.key)}
+              >
+                <Icon size={16} />
+                <span>{mode.label}</span>
+                <small>{mode.detail}</small>
+              </button>
+            );
+          })}
+        </div>
+
+        {webhook ? (
+          <div className="webhookBox telephoneWebhook">
+            <span>Voice webhook</span>
+            <code>{webhook}</code>
+            <button
+              className="secondaryButton"
+              type="button"
+              onClick={() => copyText(webhook, "Telephone webhook")}
+            >
+              <Copy size={15} />
+              Copy
+            </button>
+          </div>
+        ) : null}
+
+        {!connection?.credentialConfigured &&
+        ["buy", "existing_twilio"].includes(telephoneSetupMode) ? (
+          <div className="inlineNotice" data-tone="warn">
+            <AlertCircle size={16} />
+            <span>
+              Add <code>TWILIO_ACCOUNT_SID</code> and{" "}
+              <code>TWILIO_AUTH_TOKEN</code> in Railway to search, buy, or
+              update Twilio numbers from this dashboard.
+            </span>
+          </div>
+        ) : null}
+
+        {telephoneSetupMode === "buy" ? (
+          <div className="telephoneFlow">
+            <div className="formGrid two">
+              <label className="field">
+                <span>Country</span>
+                <input
+                  maxLength={2}
+                  value={twilioSearchCountry}
+                  onChange={(event) =>
+                    setTwilioSearchCountry(event.target.value.toUpperCase())
+                  }
+                />
+              </label>
+              <label className="field">
+                <span>Number type</span>
+                <select
+                  value={twilioNumberType}
+                  onChange={(event) =>
+                    setTwilioNumberType(event.target.value as TwilioNumberType)
+                  }
+                >
+                  <option value="local">Local</option>
+                  <option value="mobile">Mobile</option>
+                  <option value="toll-free">Toll-free</option>
+                </select>
+              </label>
+              <label className="field">
+                <span>City or locality</span>
+                <input
+                  placeholder="Berlin"
+                  value={twilioSearchLocality}
+                  onChange={(event) => setTwilioSearchLocality(event.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>Contains</span>
+                <input
+                  placeholder="Optional digits"
+                  value={twilioSearchContains}
+                  onChange={(event) => setTwilioSearchContains(event.target.value)}
+                />
+              </label>
+            </div>
+            <button
+              className="primaryButton"
+              type="button"
+              disabled={busy || !selectedTenant}
+              onClick={searchTwilioNumbers}
+            >
+              <Search size={16} />
+              Search numbers
+            </button>
+
+            {compliance ? (
+              <div className="inlineNotice">
+                <ShieldCheck size={16} />
+                <span>
+                  <strong>{compliance.title}</strong> {compliance.detail}
+                </span>
+              </div>
+            ) : null}
+
+            <div className="numberResults">
+              {twilioNumberSearch?.numbers.length ? (
+                twilioNumberSearch.numbers.map((number) => (
+                  <article className="numberCard" key={number.phoneNumber}>
+                    <div>
+                      <strong>{number.phoneNumber}</strong>
+                      <span>
+                        {[number.locality, number.region, number.isoCountry]
+                          .filter(Boolean)
+                          .join(", ") || number.friendlyName}
+                      </span>
+                    </div>
+                    <small>
+                      {formatMonthlyNumberPrice(
+                        number.monthlyPrice,
+                        number.currency,
+                      )}
+                    </small>
+                    <button
+                      className="primaryButton"
+                      type="button"
+                      disabled={busy}
+                      onClick={() => purchaseTwilioNumber(number)}
+                    >
+                      <ShoppingCart size={15} />
+                      Buy & connect
+                    </button>
+                  </article>
+                ))
+              ) : (
+                <div className="emptyState compact">
+                  Search Twilio inventory to pick a voice-enabled AI phone
+                  number.
+                </div>
+              )}
+            </div>
+          </div>
+        ) : null}
+
+        {telephoneSetupMode === "existing_twilio" ? (
+          <div className="telephoneFlow">
+            <div className="rowActions">
+              <button
+                className="secondaryButton"
+                type="button"
+                disabled={busy || !selectedTenant}
+                onClick={loadTwilioOwnedNumbers}
+              >
+                <RefreshCw size={16} />
+                Load Twilio numbers
+              </button>
+              <a
+                className="secondaryButton linkButton"
+                href="https://www.twilio.com/docs/phone-numbers/api/incomingphonenumber-resource"
+                rel="noreferrer"
+                target="_blank"
+              >
+                <ExternalLink size={15} />
+                Twilio guide
+              </a>
+            </div>
+
+            {twilioOwnedNumbers.length ? (
+              <div className="ownedNumberList">
+                {twilioOwnedNumbers.map((number) => (
+                  <button
+                    data-selected={
+                      existingTwilioSid === number.sid ? "true" : "false"
+                    }
+                    key={number.sid ?? number.phoneNumber}
+                    type="button"
+                    onClick={() => {
+                      setExistingTwilioSid(number.sid ?? "");
+                      setExistingTwilioNumber(number.phoneNumber ?? "");
+                    }}
+                  >
+                    <strong>{number.phoneNumber ?? number.sid}</strong>
+                    <span>{number.voiceUrl ? "Webhook set" : "No webhook"}</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+
+            <div className="formGrid two">
+              <label className="field">
+                <span>Twilio phone number</span>
+                <input
+                  placeholder="+49301234567"
+                  value={existingTwilioNumber}
+                  onChange={(event) => setExistingTwilioNumber(event.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>Twilio number SID</span>
+                <input
+                  placeholder="PN..."
+                  value={existingTwilioSid}
+                  onChange={(event) => setExistingTwilioSid(event.target.value)}
+                />
+              </label>
+            </div>
+            <button
+              className="primaryButton"
+              type="button"
+              disabled={busy || (!existingTwilioNumber && !existingTwilioSid)}
+              onClick={connectExistingTwilioNumber}
+            >
+              <PhoneCall size={16} />
+              Connect existing Twilio number
+            </button>
+          </div>
+        ) : null}
+
+        {telephoneSetupMode === "forwarding" ? (
+          <div className="telephoneFlow">
+            <div className="formGrid two">
+              <label className="field">
+                <span>Existing business number</span>
+                <input
+                  placeholder="+49301234567"
+                  value={forwardingExistingNumber}
+                  onChange={(event) =>
+                    setForwardingExistingNumber(event.target.value)
+                  }
+                />
+              </label>
+              <label className="field">
+                <span>AI Twilio number</span>
+                <input
+                  placeholder="+49307654321"
+                  value={forwardingAiNumber}
+                  onChange={(event) => setForwardingAiNumber(event.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>Carrier or PBX</span>
+                <input
+                  placeholder="Telekom, Vodafone, 3CX..."
+                  value={forwardingCarrierName}
+                  onChange={(event) =>
+                    setForwardingCarrierName(event.target.value)
+                  }
+                />
+              </label>
+              <label className="toggle">
+                <input
+                  type="checkbox"
+                  checked={forwardingConfirmed}
+                  onChange={(event) =>
+                    setForwardingConfirmed(event.target.checked)
+                  }
+                />
+                <span>Forwarding is already active</span>
+              </label>
+            </div>
+            <button
+              className="primaryButton"
+              type="button"
+              disabled={
+                busy || !forwardingExistingNumber || !forwardingAiNumber
+              }
+              onClick={saveCarrierForwardingSetup}
+            >
+              <Save size={16} />
+              Save forwarding setup
+            </button>
+          </div>
+        ) : null}
+
+        {telephoneSetupMode === "sip_byoc" ? (
+          <div className="telephoneFlow">
+            <div className="formGrid two">
+              <label className="field">
+                <span>Carrier or PBX</span>
+                <input
+                  placeholder="Carrier, PBX, SIP provider"
+                  value={sipCarrierName}
+                  onChange={(event) => setSipCarrierName(event.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>SIP domain</span>
+                <input
+                  placeholder="voice.example.sip.twilio.com"
+                  value={sipDomain}
+                  onChange={(event) => setSipDomain(event.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>Twilio trunk SID</span>
+                <input
+                  placeholder="TK..."
+                  value={sipTrunkSid}
+                  onChange={(event) => setSipTrunkSid(event.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>Inbound SIP URI</span>
+                <input
+                  placeholder="sip:..."
+                  value={sipInboundUri}
+                  onChange={(event) => setSipInboundUri(event.target.value)}
+                />
+              </label>
+              <label className="toggle">
+                <input
+                  type="checkbox"
+                  checked={sipConfigured}
+                  onChange={(event) => setSipConfigured(event.target.checked)}
+                />
+                <span>SIP routing is already active</span>
+              </label>
+            </div>
+            <div className="rowActions">
+              <button
+                className="primaryButton"
+                type="button"
+                disabled={busy}
+                onClick={saveSipByocSetup}
+              >
+                <RadioTower size={16} />
+                Save SIP/BYOC setup
+              </button>
+              <a
+                className="secondaryButton linkButton"
+                href="https://www.twilio.com/docs/voice/bring-your-own-carrier-byoc"
+                rel="noreferrer"
+                target="_blank"
+              >
+                <ExternalLink size={15} />
+                BYOC guide
+              </a>
+            </div>
+          </div>
+        ) : null}
+
+        {activeInstructions.length ? (
+          <div className="instructionList">
+            {activeInstructions.map((instruction) => (
+              <article key={instruction}>
+                <CheckCircle2 size={15} />
+                <span>{instruction}</span>
+              </article>
+            ))}
+          </div>
+        ) : null}
+
+        <div className="providerRoadmap">
+          <article>
+            <span>Later</span>
+            <strong>Telnyx international porting</strong>
+            <p>
+              Add when we need embedded number ordering, porting, and SIP across
+              more countries.
+            </p>
+          </article>
+          <article>
+            <span>Later</span>
+            <strong>OpenAI Realtime SIP</strong>
+            <p>
+              Add when phone calls need lower-latency, more natural live
+              conversations.
+            </p>
+          </article>
+        </div>
+      </section>
     );
   }
 
@@ -5229,6 +5971,35 @@ export default function DashboardPage() {
         </div>
       </section>
     );
+  }
+
+  function telephoneSettingString(
+    connection: ChannelConnection | undefined,
+    key: string,
+  ) {
+    const value = connection?.settings?.[key];
+    return typeof value === "string" ? value : undefined;
+  }
+
+  function formatTelephoneMode(value: string) {
+    const labels: Record<string, string> = {
+      purchased_twilio: "Purchased Twilio number",
+      existing_twilio: "Existing Twilio number",
+      carrier_forwarding: "Carrier forwarding",
+      sip_byoc: "SIP/BYOC",
+      not_configured: "Not configured",
+    };
+    return labels[value] ?? value.replace(/_/g, " ");
+  }
+
+  function formatMonthlyNumberPrice(
+    amount: string | null | undefined,
+    currency: string | null | undefined,
+  ) {
+    if (!amount) {
+      return "Price check";
+    }
+    return `${amount} ${currency ?? ""}/mo`.trim();
   }
 
   function channelAccountLabel(channel: ChannelConnection["channel"]) {

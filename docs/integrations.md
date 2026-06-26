@@ -73,13 +73,35 @@ Current foundation:
 - First request prompts with TwiML `<Gather input="speech">`
 - Speech result is normalized, sent through the answer engine, stored, and returned with TwiML `<Say>`
 - Pressing `0` transfers to `TWILIO_TRANSFER_PHONE_NUMBER` when configured
+- Admin setup can search Twilio inventory, purchase a Twilio phone number, attach the assistant voice webhook, and persist the connection
+- Admin setup can connect an existing Twilio number by phone number or `PN...` SID
+- Admin setup can save carrier-forwarding and SIP/BYOC instructions when the customer keeps an existing number outside Twilio
 - Human handoff summaries, media streams, callback workflows, and deeper call analytics are TODOs behind the same runtime boundary
+
+Required env for number automation in `apps/api`:
+
+- `TWILIO_ACCOUNT_SID`
+- `TWILIO_AUTH_TOKEN`
+- `VOICE_PUBLIC_URL`
+
+German numbers can require Twilio Regulatory Compliance bundles. If purchase fails with a compliance error, attach an approved bundle in Twilio or complete the required business documentation first. German toll-free numbers require allocation by BNetzA before Twilio activation.
 
 Official docs checked:
 
 - [Twilio Voice webhooks](https://www.twilio.com/docs/usage/webhooks/voice-webhooks)
 - [Twilio TwiML for Programmable Voice](https://www.twilio.com/docs/voice/twiml)
 - [Twilio Gather](https://www.twilio.com/docs/voice/twiml/gather)
+- [Twilio Phone Numbers API](https://www.twilio.com/docs/phone-numbers)
+- [Twilio IncomingPhoneNumber API](https://www.twilio.com/docs/phone-numbers/api/incomingphonenumber-resource)
+- [Twilio AvailablePhoneNumber API](https://www.twilio.com/docs/phone-numbers/api/availablephonenumberlocal-resource)
+- [Twilio Phone Number Pricing API](https://www.twilio.com/docs/phone-numbers/pricing)
+- [Twilio Regulatory Compliance API](https://www.twilio.com/docs/phone-numbers/regulatory/api)
+- [Twilio BYOC](https://www.twilio.com/docs/voice/bring-your-own-carrier-byoc)
+
+Planned provider expansion:
+
+- Telnyx number ordering, international porting, and SIP trunking can be added as a second provider adapter when we need embedded international porting.
+- OpenAI Realtime SIP can be added when we need lower-latency, more natural live telephone conversations than the current Twilio Gather/Say loop.
 
 ## TODOs Before Production Credentials
 

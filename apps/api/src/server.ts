@@ -19,6 +19,7 @@ import Fastify, {
   type FastifyReply,
   type FastifyRequest,
 } from "fastify";
+import { Buffer } from "node:buffer";
 import net from "node:net";
 import tls from "node:tls";
 import { z } from "zod";
@@ -208,6 +209,71 @@ const ChannelConnectionSchema = z.object({
   settings: z.record(z.unknown()).optional(),
 });
 
+const E164PhoneNumberSchema = z
+  .string()
+  .trim()
+  .regex(/^\+[1-9]\d{6,14}$/, "Use E.164 format, for example +49301234567.");
+
+const TwilioNumberTypeSchema = z.enum(["local", "mobile", "toll-free"]);
+
+const TwilioNumberSearchQuerySchema = z.object({
+  country: z
+    .string()
+    .trim()
+    .length(2)
+    .default("DE")
+    .transform((value) => value.toUpperCase()),
+  numberType: TwilioNumberTypeSchema.default("local"),
+  contains: z.string().trim().min(1).max(32).optional(),
+  locality: z.string().trim().min(1).max(80).optional(),
+  region: z.string().trim().min(1).max(80).optional(),
+  postalCode: z.string().trim().min(1).max(24).optional(),
+  limit: z.coerce.number().int().min(1).max(50).default(10),
+});
+
+const PurchaseTwilioNumberSchema = z.object({
+  phoneNumber: E164PhoneNumberSchema,
+  numberType: TwilioNumberTypeSchema.default("local"),
+  friendlyName: z.string().trim().min(1).max(120).optional(),
+  bundleSid: z.string().trim().regex(/^BU[0-9a-fA-F]{32}$/).optional(),
+  addressSid: z.string().trim().regex(/^AD[0-9a-fA-F]{32}$/).optional(),
+});
+
+const ConnectExistingTwilioNumberSchema = z
+  .object({
+    phoneNumberSid: z
+      .string()
+      .trim()
+      .regex(/^PN[0-9a-fA-F]{32}$/)
+      .optional(),
+    phoneNumber: E164PhoneNumberSchema.optional(),
+    numberType: TwilioNumberTypeSchema.default("local"),
+  })
+  .refine((input) => input.phoneNumberSid || input.phoneNumber, {
+    message: "Provide a Twilio phone number SID or phone number.",
+  });
+
+const CarrierForwardingSchema = z.object({
+  existingNumber: E164PhoneNumberSchema,
+  aiNumber: E164PhoneNumberSchema,
+  carrierName: z.string().trim().min(1).max(120).optional(),
+  forwardingConfirmed: z.boolean().default(false),
+  notes: z.string().trim().max(1000).optional(),
+});
+
+const SipByocSetupSchema = z.object({
+  carrierName: z.string().trim().min(1).max(120).optional(),
+  sipDomain: z.string().trim().min(3).max(240).optional(),
+  trunkSid: z
+    .string()
+    .trim()
+    .regex(/^TK[0-9a-fA-F]{32}$/)
+    .optional(),
+  inboundSipUri: z.string().trim().min(3).max(240).optional(),
+  sipConfigured: z.boolean().default(false),
+  notes: z.string().trim().max(1000).optional(),
+});
+
 const ContactProfileSchema = z.object({
   displayName: z.string().min(1).max(160).nullable().optional(),
   email: z.string().email().max(240).nullable().optional(),
@@ -371,6 +437,7 @@ export type BuildServerOptions = {
   store: PlatformStore;
   adminToken: string;
   allowedOrigins?: string[];
+  voicePublicUrl?: string;
   adminUser?: {
     email: string;
     name: string;
@@ -392,6 +459,8 @@ export type BuildServerOptions = {
   metaGraphApiVersion?: string;
   whatsappAccessToken?: string;
   messengerPageAccessToken?: string;
+  twilioAccountSid?: string;
+  twilioAuthToken?: string;
 };
 
 type LeadNotificationPayload = {
@@ -557,6 +626,299 @@ export async function buildServer(
         channel,
       });
       return options.store.upsertChannelConnection(tenantId, body);
+    },
+  );
+
+  app.get(
+    "/admin/tenants/:tenantId/telephone/twilio/search",
+    { preHandler: requireAdmin(options.adminToken) },
+    async (request, reply) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      const tenant = await options.store.getTenant(tenantId);
+      if (!tenant) {
+        return reply.code(404).send({ error: "Tenant not found." });
+      }
+      const credentials = getTwilioCredentials(options);
+      if (!credentials) {
+        return reply
+          .code(503)
+          .send({ error: "Twilio credentials are not configured." });
+      }
+
+      const query = TwilioNumberSearchQuerySchema.parse(request.query);
+      try {
+        const pricing = await fetchTwilioNumberPricing(credentials, query);
+        const numbers = await searchTwilioAvailableNumbers(
+          credentials,
+          query,
+          pricing,
+        );
+        return {
+          country: query.country,
+          numberType: query.numberType,
+          credentialConfigured: true,
+          webhookUrl: buildTelephoneVoiceWebhookUrl(options, tenant),
+          pricing,
+          compliance: buildTelephoneComplianceNotice(
+            query.country,
+            query.numberType,
+          ),
+          numbers,
+        };
+      } catch (error) {
+        return sendTwilioError(reply, error);
+      }
+    },
+  );
+
+  app.get(
+    "/admin/tenants/:tenantId/telephone/twilio/numbers",
+    { preHandler: requireAdmin(options.adminToken) },
+    async (request, reply) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      const tenant = await options.store.getTenant(tenantId);
+      if (!tenant) {
+        return reply.code(404).send({ error: "Tenant not found." });
+      }
+      const credentials = getTwilioCredentials(options);
+      if (!credentials) {
+        return reply
+          .code(503)
+          .send({ error: "Twilio credentials are not configured." });
+      }
+
+      try {
+        const result = await twilioApiRequest<TwilioIncomingPhoneNumbersResult>(
+          credentials,
+          "/2010-04-01/Accounts/{AccountSid}/IncomingPhoneNumbers.json",
+          {
+            method: "GET",
+            query: { PageSize: "50" },
+          },
+        );
+        return {
+          credentialConfigured: true,
+          webhookUrl: buildTelephoneVoiceWebhookUrl(options, tenant),
+          numbers: (result.incoming_phone_numbers ?? []).map(
+            mapTwilioIncomingPhoneNumber,
+          ),
+        };
+      } catch (error) {
+        return sendTwilioError(reply, error);
+      }
+    },
+  );
+
+  app.post(
+    "/admin/tenants/:tenantId/telephone/twilio/purchase",
+    { preHandler: requireAdmin(options.adminToken) },
+    async (request, reply) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      const tenant = await options.store.getTenant(tenantId);
+      if (!tenant) {
+        return reply.code(404).send({ error: "Tenant not found." });
+      }
+      const credentials = getTwilioCredentials(options);
+      if (!credentials) {
+        return reply
+          .code(503)
+          .send({ error: "Twilio credentials are not configured." });
+      }
+
+      const body = PurchaseTwilioNumberSchema.parse(request.body);
+      const webhookUrl = buildTelephoneVoiceWebhookUrl(options, tenant);
+      try {
+        const purchased = await twilioApiRequest<TwilioIncomingPhoneNumber>(
+          credentials,
+          "/2010-04-01/Accounts/{AccountSid}/IncomingPhoneNumbers.json",
+          {
+            method: "POST",
+            form: {
+              PhoneNumber: body.phoneNumber,
+              VoiceUrl: webhookUrl,
+              VoiceMethod: "POST",
+              ...(body.friendlyName ? { FriendlyName: body.friendlyName } : {}),
+              ...(body.bundleSid ? { BundleSid: body.bundleSid } : {}),
+              ...(body.addressSid ? { AddressSid: body.addressSid } : {}),
+            },
+          },
+        );
+        const mappedNumber = mapTwilioIncomingPhoneNumber(purchased);
+        const connection = await options.store.upsertChannelConnection(
+          tenantId,
+          {
+            channel: "telephone",
+            provider: "twilio",
+            externalAccountId: mappedNumber.phoneNumber ?? body.phoneNumber,
+            status: "connected",
+            settings: {
+              mode: "purchased_twilio",
+              providerNumberSid: mappedNumber.sid,
+              phoneNumber: mappedNumber.phoneNumber ?? body.phoneNumber,
+              numberType: body.numberType,
+              voiceUrl: webhookUrl,
+              bundleSid: body.bundleSid ?? null,
+              addressSid: body.addressSid ?? null,
+              purchasedAt: new Date().toISOString(),
+            },
+          },
+        );
+        return reply.code(201).send({
+          connection,
+          number: mappedNumber,
+          webhookUrl,
+          compliance: buildTelephoneComplianceNotice(
+            countryFromE164Number(body.phoneNumber),
+            body.numberType,
+          ),
+        });
+      } catch (error) {
+        return sendTwilioError(reply, error);
+      }
+    },
+  );
+
+  app.post(
+    "/admin/tenants/:tenantId/telephone/twilio/connect-existing",
+    { preHandler: requireAdmin(options.adminToken) },
+    async (request, reply) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      const tenant = await options.store.getTenant(tenantId);
+      if (!tenant) {
+        return reply.code(404).send({ error: "Tenant not found." });
+      }
+      const credentials = getTwilioCredentials(options);
+      if (!credentials) {
+        return reply
+          .code(503)
+          .send({ error: "Twilio credentials are not configured." });
+      }
+
+      const body = ConnectExistingTwilioNumberSchema.parse(request.body);
+      const webhookUrl = buildTelephoneVoiceWebhookUrl(options, tenant);
+      try {
+        const numberSid =
+          body.phoneNumberSid ??
+          (await findTwilioIncomingNumberSid(credentials, body.phoneNumber));
+        if (!numberSid) {
+          return reply.code(404).send({
+            error: "Twilio number not found in this account.",
+          });
+        }
+        const updated = await twilioApiRequest<TwilioIncomingPhoneNumber>(
+          credentials,
+          `/2010-04-01/Accounts/{AccountSid}/IncomingPhoneNumbers/${numberSid}.json`,
+          {
+            method: "POST",
+            form: {
+              VoiceUrl: webhookUrl,
+              VoiceMethod: "POST",
+            },
+          },
+        );
+        const mappedNumber = mapTwilioIncomingPhoneNumber(updated);
+        const connection = await options.store.upsertChannelConnection(
+          tenantId,
+          {
+            channel: "telephone",
+            provider: "twilio",
+            externalAccountId:
+              mappedNumber.phoneNumber ?? body.phoneNumber ?? numberSid,
+            status: "connected",
+            settings: {
+              mode: "existing_twilio",
+              providerNumberSid: mappedNumber.sid ?? numberSid,
+              phoneNumber: mappedNumber.phoneNumber ?? body.phoneNumber ?? null,
+              numberType: body.numberType,
+              voiceUrl: webhookUrl,
+              connectedAt: new Date().toISOString(),
+            },
+          },
+        );
+        return {
+          connection,
+          number: mappedNumber,
+          webhookUrl,
+        };
+      } catch (error) {
+        return sendTwilioError(reply, error);
+      }
+    },
+  );
+
+  app.post(
+    "/admin/tenants/:tenantId/telephone/carrier-forwarding",
+    { preHandler: requireAdmin(options.adminToken) },
+    async (request, reply) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      const tenant = await options.store.getTenant(tenantId);
+      if (!tenant) {
+        return reply.code(404).send({ error: "Tenant not found." });
+      }
+      const body = CarrierForwardingSchema.parse(request.body);
+      const webhookUrl = buildTelephoneVoiceWebhookUrl(options, tenant);
+      const instructions = buildCarrierForwardingInstructions(body.aiNumber);
+      const connection = await options.store.upsertChannelConnection(tenantId, {
+        channel: "telephone",
+        provider: "twilio",
+        externalAccountId: body.existingNumber,
+        status: body.forwardingConfirmed ? "connected" : "pending",
+        settings: {
+          mode: "carrier_forwarding",
+          existingNumber: body.existingNumber,
+          aiNumber: body.aiNumber,
+          carrierName: body.carrierName ?? null,
+          forwardingConfirmed: body.forwardingConfirmed,
+          voiceUrl: webhookUrl,
+          instructions,
+          notes: body.notes ?? null,
+          updatedAt: new Date().toISOString(),
+        },
+      });
+      return {
+        connection,
+        webhookUrl,
+        instructions,
+      };
+    },
+  );
+
+  app.post(
+    "/admin/tenants/:tenantId/telephone/sip-byoc",
+    { preHandler: requireAdmin(options.adminToken) },
+    async (request, reply) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      const tenant = await options.store.getTenant(tenantId);
+      if (!tenant) {
+        return reply.code(404).send({ error: "Tenant not found." });
+      }
+      const body = SipByocSetupSchema.parse(request.body);
+      const webhookUrl = buildTelephoneVoiceWebhookUrl(options, tenant);
+      const instructions = buildSipByocInstructions(webhookUrl);
+      const connection = await options.store.upsertChannelConnection(tenantId, {
+        channel: "telephone",
+        provider: "twilio",
+        externalAccountId:
+          body.inboundSipUri ?? body.trunkSid ?? body.sipDomain ?? "SIP/BYOC",
+        status: body.sipConfigured ? "connected" : "pending",
+        settings: {
+          mode: "sip_byoc",
+          carrierName: body.carrierName ?? null,
+          sipDomain: body.sipDomain ?? null,
+          trunkSid: body.trunkSid ?? null,
+          inboundSipUri: body.inboundSipUri ?? null,
+          sipConfigured: body.sipConfigured,
+          voiceUrl: webhookUrl,
+          instructions,
+          notes: body.notes ?? null,
+          updatedAt: new Date().toISOString(),
+        },
+      });
+      return {
+        connection,
+        webhookUrl,
+        instructions,
+      };
     },
   );
 
@@ -1391,6 +1753,347 @@ function requireAdmin(adminToken: string) {
   };
 }
 
+type TwilioCredentials = {
+  accountSid: string;
+  authToken: string;
+};
+
+type TwilioAvailableNumber = {
+  phone_number?: string;
+  friendly_name?: string;
+  locality?: string | null;
+  region?: string | null;
+  iso_country?: string;
+  capabilities?: {
+    voice?: boolean;
+    SMS?: boolean;
+    sms?: boolean;
+    MMS?: boolean;
+    mms?: boolean;
+  };
+};
+
+type TwilioAvailableNumbersResult = {
+  available_phone_numbers?: TwilioAvailableNumber[];
+};
+
+type TwilioIncomingPhoneNumber = {
+  sid?: string;
+  phone_number?: string;
+  friendly_name?: string | null;
+  iso_country?: string | null;
+  capabilities?: TwilioAvailableNumber["capabilities"];
+  voice_url?: string | null;
+  voice_method?: string | null;
+};
+
+type TwilioIncomingPhoneNumbersResult = {
+  incoming_phone_numbers?: TwilioIncomingPhoneNumber[];
+};
+
+type TwilioPricingResult = {
+  country?: string;
+  iso_country?: string;
+  price_unit?: string;
+  phone_number_prices?: Array<{
+    number_type?: string;
+    base_price?: string;
+    current_price?: string;
+  }>;
+};
+
+type TwilioNumberSearchQuery = z.infer<typeof TwilioNumberSearchQuerySchema>;
+
+type TelephoneNumberPricing = {
+  currency: string | null;
+  monthlyPrice: string | null;
+  numberType: string;
+};
+
+class TwilioApiError extends Error {
+  constructor(
+    message: string,
+    readonly statusCode: number,
+    readonly detail?: unknown,
+  ) {
+    super(message);
+  }
+}
+
+function getTwilioCredentials(
+  options: BuildServerOptions,
+): TwilioCredentials | null {
+  if (!options.twilioAccountSid || !options.twilioAuthToken) {
+    return null;
+  }
+  return {
+    accountSid: options.twilioAccountSid,
+    authToken: options.twilioAuthToken,
+  };
+}
+
+async function twilioApiRequest<T>(
+  credentials: TwilioCredentials,
+  path: string,
+  options: {
+    method: "GET" | "POST";
+    query?: Record<string, string | number | boolean | undefined>;
+    form?: Record<string, string | number | boolean | null | undefined>;
+  },
+): Promise<T> {
+  const normalizedPath = path.replace("{AccountSid}", credentials.accountSid);
+  const url = new URL(
+    normalizedPath,
+    normalizedPath.startsWith("/v1/")
+      ? "https://pricing.twilio.com"
+      : "https://api.twilio.com",
+  );
+  for (const [key, value] of Object.entries(options.query ?? {})) {
+    if (value !== undefined) {
+      url.searchParams.set(key, String(value));
+    }
+  }
+
+  const requestInit: RequestInit = {
+    method: options.method,
+    headers: {
+      Authorization: `Basic ${Buffer.from(
+        `${credentials.accountSid}:${credentials.authToken}`,
+      ).toString("base64")}`,
+      ...(options.form
+        ? { "content-type": "application/x-www-form-urlencoded" }
+        : {}),
+    },
+  };
+  if (options.form) {
+    requestInit.body = new URLSearchParams(
+      Object.fromEntries(
+        Object.entries(options.form)
+          .filter(([, value]) => value !== undefined && value !== null)
+          .map(([key, value]) => [key, String(value)]),
+      ),
+    );
+  }
+
+  const response = await fetch(url, requestInit);
+
+  const contentType = response.headers.get("content-type") ?? "";
+  const payload = contentType.includes("application/json")
+    ? await response.json()
+    : await response.text();
+
+  if (!response.ok) {
+    const detail = isRecord(payload) ? payload : { message: String(payload) };
+    const message =
+      typeof detail.message === "string"
+        ? detail.message
+        : "Twilio request failed.";
+    throw new TwilioApiError(message, response.status, detail);
+  }
+
+  return payload as T;
+}
+
+async function sendTwilioError(reply: FastifyReply, error: unknown) {
+  if (error instanceof TwilioApiError) {
+    return reply.code(error.statusCode).send({
+      error: error.message,
+      detail: error.detail,
+    });
+  }
+  throw error;
+}
+
+async function searchTwilioAvailableNumbers(
+  credentials: TwilioCredentials,
+  query: TwilioNumberSearchQuery,
+  pricing: TelephoneNumberPricing,
+) {
+  const result = await twilioApiRequest<TwilioAvailableNumbersResult>(
+    credentials,
+    `/2010-04-01/Accounts/{AccountSid}/AvailablePhoneNumbers/${query.country}/${twilioInventoryType(
+      query.numberType,
+    )}.json`,
+    {
+      method: "GET",
+      query: {
+        VoiceEnabled: "true",
+        PageSize: query.limit,
+        ...(query.contains ? { Contains: query.contains } : {}),
+        ...(query.locality ? { InLocality: query.locality } : {}),
+        ...(query.region ? { InRegion: query.region } : {}),
+        ...(query.postalCode ? { InPostalCode: query.postalCode } : {}),
+      },
+    },
+  );
+
+  return (result.available_phone_numbers ?? []).map((number) => ({
+    phoneNumber: number.phone_number ?? "",
+    friendlyName: number.friendly_name ?? number.phone_number ?? "",
+    locality: number.locality ?? null,
+    region: number.region ?? null,
+    isoCountry: number.iso_country ?? query.country,
+    capabilities: normalizeTwilioCapabilities(number.capabilities),
+    monthlyPrice: pricing.monthlyPrice,
+    currency: pricing.currency,
+  }));
+}
+
+async function fetchTwilioNumberPricing(
+  credentials: TwilioCredentials,
+  query: Pick<TwilioNumberSearchQuery, "country" | "numberType">,
+): Promise<TelephoneNumberPricing> {
+  try {
+    const result = await twilioApiRequest<TwilioPricingResult>(
+      credentials,
+      `/v1/PhoneNumbers/Countries/${query.country}`,
+      {
+        method: "GET",
+      },
+    );
+    const targetType = twilioPricingNumberType(query.numberType);
+    const price = (result.phone_number_prices ?? []).find(
+      (item) => item.number_type?.toLowerCase() === targetType,
+    );
+    return {
+      currency: result.price_unit ?? null,
+      monthlyPrice: price?.current_price ?? price?.base_price ?? null,
+      numberType: query.numberType,
+    };
+  } catch {
+    return {
+      currency: null,
+      monthlyPrice: null,
+      numberType: query.numberType,
+    };
+  }
+}
+
+async function findTwilioIncomingNumberSid(
+  credentials: TwilioCredentials,
+  phoneNumber: string | undefined,
+) {
+  if (!phoneNumber) {
+    return null;
+  }
+  const result = await twilioApiRequest<TwilioIncomingPhoneNumbersResult>(
+    credentials,
+    "/2010-04-01/Accounts/{AccountSid}/IncomingPhoneNumbers.json",
+    {
+      method: "GET",
+      query: { PhoneNumber: phoneNumber, PageSize: "1" },
+    },
+  );
+  return result.incoming_phone_numbers?.[0]?.sid ?? null;
+}
+
+function mapTwilioIncomingPhoneNumber(number: TwilioIncomingPhoneNumber) {
+  return {
+    sid: number.sid ?? null,
+    phoneNumber: number.phone_number ?? null,
+    friendlyName: number.friendly_name ?? null,
+    isoCountry: number.iso_country ?? null,
+    capabilities: normalizeTwilioCapabilities(number.capabilities),
+    voiceUrl: number.voice_url ?? null,
+    voiceMethod: number.voice_method ?? null,
+  };
+}
+
+function normalizeTwilioCapabilities(
+  capabilities: TwilioAvailableNumber["capabilities"] | undefined,
+) {
+  return {
+    voice: Boolean(capabilities?.voice),
+    sms: Boolean(capabilities?.sms ?? capabilities?.SMS),
+    mms: Boolean(capabilities?.mms ?? capabilities?.MMS),
+  };
+}
+
+function twilioInventoryType(numberType: z.infer<typeof TwilioNumberTypeSchema>) {
+  if (numberType === "mobile") {
+    return "Mobile";
+  }
+  if (numberType === "toll-free") {
+    return "TollFree";
+  }
+  return "Local";
+}
+
+function twilioPricingNumberType(
+  numberType: z.infer<typeof TwilioNumberTypeSchema>,
+) {
+  if (numberType === "toll-free") {
+    return "toll free";
+  }
+  return numberType;
+}
+
+function buildTelephoneVoiceWebhookUrl(
+  options: BuildServerOptions,
+  tenant: StoreTenant,
+) {
+  const voiceBase =
+    options.voicePublicUrl ??
+    process.env.VOICE_PUBLIC_URL ??
+    "https://assaddar-voice-production.up.railway.app";
+  return `${voiceBase}/twilio/voice?assistantId=${encodeURIComponent(
+    tenant.publicId,
+  )}`;
+}
+
+function buildTelephoneComplianceNotice(
+  country: string,
+  numberType: z.infer<typeof TwilioNumberTypeSchema>,
+) {
+  if (country === "DE" && numberType === "toll-free") {
+    return {
+      level: "manual_review",
+      title: "German toll-free numbers need regulator allocation.",
+      detail:
+        "Apply for the number with BNetzA first, then activate it with Twilio using the allocation document.",
+    };
+  }
+  if (country === "DE") {
+    return {
+      level: "review_possible",
+      title: "German numbers can require business compliance.",
+      detail:
+        "If Twilio blocks purchase, create or attach an approved Regulatory Bundle with German business details.",
+    };
+  }
+  return {
+    level: "country_specific",
+    title: "Check local number rules.",
+    detail:
+      "Number availability and required documentation depend on country, number type, and customer profile.",
+  };
+}
+
+function countryFromE164Number(phoneNumber: string) {
+  if (phoneNumber.startsWith("+49")) {
+    return "DE";
+  }
+  return "UNKNOWN";
+}
+
+function buildCarrierForwardingInstructions(aiNumber: string) {
+  return [
+    `Open the current carrier or PBX settings for the existing business number.`,
+    `Create unconditional call forwarding to ${aiNumber}.`,
+    "Place a test call from an external phone and confirm the AI answers.",
+    "If caller ID or call recording rules matter, verify them with the carrier before publishing.",
+  ];
+}
+
+function buildSipByocInstructions(webhookUrl: string) {
+  return [
+    "Create or reuse a Twilio SIP Domain, Elastic SIP Trunk, or BYOC trunk.",
+    "Route inbound PSTN traffic from the carrier or PBX into Twilio.",
+    `Configure the Twilio voice handler to use ${webhookUrl}.`,
+    "Place a test call, confirm speech recognition, and verify fallback to a human transfer.",
+  ];
+}
+
 type ChannelDashboardItem = {
   channel: Channel;
   provider: string;
@@ -1413,6 +2116,7 @@ function buildChannelConnectionDashboard(input: {
     process.env.API_PUBLIC_URL ??
     "https://assaddar-api-production.up.railway.app";
   const voiceBase =
+    input.options.voicePublicUrl ??
     process.env.VOICE_PUBLIC_URL ??
     "https://assaddar-voice-production.up.railway.app";
   const assistantId = input.tenant?.publicId;
@@ -1475,7 +2179,9 @@ function buildChannelConnectionDashboard(input: {
         : undefined,
     }),
     item("telephone", "twilio", "Telephone", {
-      credentialConfigured: true,
+      credentialConfigured: Boolean(
+        input.options.twilioAccountSid && input.options.twilioAuthToken,
+      ),
       webhookUrl: assistantId
         ? `${voiceBase}/twilio/voice?assistantId=${assistantId}`
         : `${voiceBase}/twilio/voice`,
