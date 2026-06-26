@@ -20,14 +20,26 @@ import Fastify, {
   type FastifyRequest,
 } from "fastify";
 import { Buffer } from "node:buffer";
+import { createHash, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
 import net from "node:net";
 import tls from "node:tls";
+import { promisify } from "node:util";
 import { z } from "zod";
 import { openApiDocument } from "./openapi";
+
+const scryptAsync = promisify(scrypt);
 
 const ParamsTenantSchema = z.object({
   tenantId: z.string().uuid(),
 });
+
+const RoleNameSchema = z.enum([
+  "platform_owner",
+  "tenant_owner",
+  "tenant_admin",
+  "operator",
+  "viewer",
+]);
 
 const ParamsKnowledgeSchema = ParamsTenantSchema.extend({
   knowledgeId: z.string().uuid(),
@@ -314,6 +326,29 @@ const InstallCheckSchema = z.object({
   widgetUrl: z.string().url().max(500).optional(),
 });
 
+const LoginSchema = z.object({
+  email: z.string().email().max(240),
+  password: z.string().min(8).max(200),
+});
+
+const CreateTenantUserSchema = z.object({
+  email: z.string().email().max(240),
+  name: z.string().min(1).max(160),
+  role: RoleNameSchema.default("operator"),
+  password: z.string().min(8).max(200).optional(),
+});
+
+const CreateTenantInviteSchema = z.object({
+  email: z.string().email().max(240),
+  role: RoleNameSchema.default("operator"),
+});
+
+const AcceptTenantInviteSchema = z.object({
+  token: z.string().min(24).max(240),
+  name: z.string().min(1).max(160),
+  password: z.string().min(8).max(200),
+});
+
 type CreateTenantInput = z.infer<typeof CreateTenantSchema>;
 type UpdateTenantInput = z.infer<typeof UpdateTenantSchema>;
 type AddFaqInput = z.infer<typeof AddFaqSchema>;
@@ -322,6 +357,7 @@ type ChannelConnectionInput = z.infer<typeof ChannelConnectionSchema>;
 type ContactProfileInput = z.infer<typeof ContactProfileSchema>;
 type WhatsappTemplateInput = z.infer<typeof WhatsappTemplateSchema>;
 type WidgetThemeInput = z.infer<typeof WidgetThemeSchema>;
+type RoleName = z.infer<typeof RoleNameSchema>;
 type AutomationSettings = {
   ownerLeadEmailEnabled: boolean;
   visitorConfirmationEmailEnabled: boolean;
@@ -336,8 +372,37 @@ type StoreTenant = {
   id: string;
   publicId: string;
   name: string;
+  slug?: string;
   defaultLocale: string;
   theme?: WidgetThemeInput | null;
+};
+
+type StoreAuthUser = {
+  id: string;
+  email: string;
+  name: string;
+  status: string;
+  passwordHash?: string | null;
+};
+
+type StoreTenantMembership = {
+  tenantId: string;
+  tenantName: string;
+  tenantSlug: string;
+  role: RoleName;
+  status: string;
+};
+
+type StoreAuthSession = {
+  sessionId: string;
+  expiresAt: Date;
+  user: {
+    id: string;
+    email: string;
+    name: string;
+    status: string;
+  };
+  memberships: StoreTenantMembership[];
 };
 
 export type PlatformStore = AnswerDataStore &
@@ -345,9 +410,50 @@ export type PlatformStore = AnswerDataStore &
     createTenant(input: CreateTenantInput): Promise<unknown>;
     updateTenant(tenantId: string, input: UpdateTenantInput): Promise<unknown>;
     listTenants(): Promise<unknown[]>;
+    listTenantsForUser(userId: string): Promise<unknown[]>;
     getTenant(tenantId: string): Promise<StoreTenant | null>;
     getTenantByPublicId(publicId: string): Promise<StoreTenant | null>;
     getWidgetConfig(publicId: string): Promise<unknown | null>;
+    findUserByEmailForAuth(email: string): Promise<StoreAuthUser | null>;
+    createUserSession(input: {
+      userId: string;
+      tokenHash: string;
+      expiresAt: Date;
+      userAgent?: string | null;
+      ipAddress?: string | null;
+    }): Promise<unknown>;
+    getAuthSession(tokenHash: string): Promise<StoreAuthSession | null>;
+    deleteUserSession(tokenHash: string): Promise<void>;
+    getTenantMembership(
+      userId: string,
+      tenantId: string,
+    ): Promise<StoreTenantMembership | null>;
+    listTenantUsers(tenantId: string): Promise<unknown[]>;
+    upsertTenantUser(
+      tenantId: string,
+      input: {
+        email: string;
+        name: string;
+        role: RoleName;
+        passwordHash?: string | null;
+      },
+    ): Promise<unknown>;
+    createTenantInvite(
+      tenantId: string,
+      input: {
+        email: string;
+        role: RoleName;
+        tokenHash: string;
+        expiresAt: Date;
+        invitedByUserId?: string | null;
+      },
+    ): Promise<unknown>;
+    listTenantInvites(tenantId: string): Promise<unknown[]>;
+    acceptTenantInvite(input: {
+      tokenHash: string;
+      name: string;
+      passwordHash: string;
+    }): Promise<unknown | null>;
     addFaq(tenantId: string, input: AddFaqInput): Promise<unknown>;
     updateFaq(
       tenantId: string,
@@ -506,6 +612,7 @@ export async function buildServer(
 
   const allowedOrigins = options.allowedOrigins ?? [];
   await app.register(cors, {
+    credentials: true,
     origin(origin, callback) {
       if (
         !origin ||
@@ -559,31 +666,104 @@ export async function buildServer(
 
   app.get("/openapi.json", async () => openApiDocument);
 
+  app.post("/auth/login", async (request, reply) => {
+    const body = LoginSchema.parse(request.body);
+    const user = await options.store.findUserByEmailForAuth(body.email);
+    if (
+      !user ||
+      user.status !== "active" ||
+      !user.passwordHash ||
+      !(await verifyPassword(body.password, user.passwordHash))
+    ) {
+      return reply.code(401).send({ error: "Invalid email or password." });
+    }
+
+    const token = createSessionToken();
+    const expiresAt = new Date(Date.now() + sessionDurationMs());
+    await options.store.createUserSession({
+      userId: user.id,
+      tokenHash: hashSecret(token),
+      expiresAt,
+      userAgent: request.headers["user-agent"] ?? null,
+      ipAddress: request.ip,
+    });
+    setSessionCookie(reply, token, expiresAt);
+
+    const session = await options.store.getAuthSession(hashSecret(token));
+    if (!session) {
+      return reply.code(500).send({ error: "Failed to create session." });
+    }
+    return buildUserSessionPayload(session);
+  });
+
+  app.post("/auth/logout", async (request, reply) => {
+    const token = getSessionToken(request);
+    if (token) {
+      await options.store.deleteUserSession(hashSecret(token));
+    }
+    clearSessionCookie(reply);
+    return { authenticated: false };
+  });
+
+  app.get(
+    "/auth/session",
+    { preHandler: requireAuth(options) },
+    async (request) => buildSessionPayload(request),
+  );
+
+  app.post("/auth/invites/accept", async (request, reply) => {
+    const body = AcceptTenantInviteSchema.parse(request.body);
+    const user = await options.store.acceptTenantInvite({
+      tokenHash: hashSecret(body.token),
+      name: body.name,
+      passwordHash: await hashPassword(body.password),
+    });
+    const savedUser = isRecord(user)
+      ? await options.store.findUserByEmailForAuth(String(user.email ?? ""))
+      : null;
+    if (!savedUser) {
+      return reply.code(404).send({ error: "Invite is invalid or expired." });
+    }
+
+    const token = createSessionToken();
+    const expiresAt = new Date(Date.now() + sessionDurationMs());
+    await options.store.createUserSession({
+      userId: savedUser.id,
+      tokenHash: hashSecret(token),
+      expiresAt,
+      userAgent: request.headers["user-agent"] ?? null,
+      ipAddress: request.ip,
+    });
+    setSessionCookie(reply, token, expiresAt);
+
+    const session = await options.store.getAuthSession(hashSecret(token));
+    if (!session) {
+      return reply.code(500).send({ error: "Failed to create session." });
+    }
+    return buildUserSessionPayload(session);
+  });
+
   app.get(
     "/admin/session",
-    { preHandler: requireAdmin(options.adminToken) },
-    async () => ({
-      authenticated: true,
-      user: options.adminUser ?? {
-        email: "owner@assad-dar.de",
-        name: "Assad Dar",
-        role: "owner",
-      },
-      permissions: getPermissions(options.adminUser?.role ?? "owner"),
-    }),
+    { preHandler: requireAuth(options) },
+    async (request) => buildSessionPayload(request),
   );
 
   app.get(
     "/admin/tenants",
-    { preHandler: requireAdmin(options.adminToken) },
-    async () => {
-      return options.store.listTenants();
+    { preHandler: requireAuth(options) },
+    async (request) => {
+      const auth = getRequestAuth(request);
+      if (auth.kind === "admin" || isPlatformOwner(auth)) {
+        return options.store.listTenants();
+      }
+      return options.store.listTenantsForUser(auth.user.id);
     },
   );
 
   app.post(
     "/admin/tenants",
-    { preHandler: requireAdmin(options.adminToken) },
+    { preHandler: requirePlatformOwner(options) },
     async (request, reply) => {
       const body = CreateTenantSchema.parse(request.body);
       const tenant = await options.store.createTenant(body);
@@ -593,7 +773,7 @@ export async function buildServer(
 
   app.patch(
     "/admin/tenants/:tenantId",
-    { preHandler: requireAdmin(options.adminToken) },
+    { preHandler: requireTenantAccess(options) },
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const body = UpdateTenantSchema.parse(request.body);
@@ -602,8 +782,68 @@ export async function buildServer(
   );
 
   app.get(
+    "/admin/tenants/:tenantId/users",
+    { preHandler: requireTenantAccess(options) },
+    async (request) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      return options.store.listTenantUsers(tenantId);
+    },
+  );
+
+  app.post(
+    "/admin/tenants/:tenantId/users",
+    { preHandler: requireTenantAccess(options, "tenant_admin") },
+    async (request, reply) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      const body = CreateTenantUserSchema.parse(request.body);
+      const user = await options.store.upsertTenantUser(tenantId, {
+        email: body.email,
+        name: body.name,
+        role: body.role,
+        ...(body.password
+          ? { passwordHash: await hashPassword(body.password) }
+          : {}),
+      });
+      return reply.code(201).send(user);
+    },
+  );
+
+  app.get(
+    "/admin/tenants/:tenantId/invites",
+    { preHandler: requireTenantAccess(options, "tenant_admin") },
+    async (request) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      return options.store.listTenantInvites(tenantId);
+    },
+  );
+
+  app.post(
+    "/admin/tenants/:tenantId/invites",
+    { preHandler: requireTenantAccess(options, "tenant_admin") },
+    async (request, reply) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      const body = CreateTenantInviteSchema.parse(request.body);
+      const token = createSessionToken();
+      const invite = await options.store.createTenantInvite(tenantId, {
+        email: body.email,
+        role: body.role,
+        tokenHash: hashSecret(token),
+        expiresAt: new Date(Date.now() + inviteDurationMs()),
+        invitedByUserId: getRequestAuth(request).kind === "user"
+          ? getRequestAuth(request).user.id
+          : null,
+      });
+      return reply.code(201).send({
+        invite,
+        token,
+        acceptUrl: buildInviteAcceptUrl(options, token),
+      });
+    },
+  );
+
+  app.get(
     "/admin/tenants/:tenantId/channel-connections",
-    { preHandler: requireAdmin(options.adminToken) },
+    { preHandler: requireTenantAccess(options) },
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const tenant = await options.store.getTenant(tenantId);
@@ -618,7 +858,7 @@ export async function buildServer(
 
   app.put(
     "/admin/tenants/:tenantId/channel-connections/:channel",
-    { preHandler: requireAdmin(options.adminToken) },
+    { preHandler: requireTenantAccess(options) },
     async (request) => {
       const { tenantId, channel } = ParamsChannelSchema.parse(request.params);
       const body = ChannelConnectionSchema.parse({
@@ -631,7 +871,7 @@ export async function buildServer(
 
   app.get(
     "/admin/tenants/:tenantId/telephone/twilio/search",
-    { preHandler: requireAdmin(options.adminToken) },
+    { preHandler: requireTenantAccess(options) },
     async (request, reply) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const tenant = await options.store.getTenant(tenantId);
@@ -673,7 +913,7 @@ export async function buildServer(
 
   app.get(
     "/admin/tenants/:tenantId/telephone/twilio/numbers",
-    { preHandler: requireAdmin(options.adminToken) },
+    { preHandler: requireTenantAccess(options) },
     async (request, reply) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const tenant = await options.store.getTenant(tenantId);
@@ -711,7 +951,7 @@ export async function buildServer(
 
   app.post(
     "/admin/tenants/:tenantId/telephone/twilio/purchase",
-    { preHandler: requireAdmin(options.adminToken) },
+    { preHandler: requireTenantAccess(options) },
     async (request, reply) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const tenant = await options.store.getTenant(tenantId);
@@ -780,7 +1020,7 @@ export async function buildServer(
 
   app.post(
     "/admin/tenants/:tenantId/telephone/twilio/connect-existing",
-    { preHandler: requireAdmin(options.adminToken) },
+    { preHandler: requireTenantAccess(options) },
     async (request, reply) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const tenant = await options.store.getTenant(tenantId);
@@ -848,7 +1088,7 @@ export async function buildServer(
 
   app.post(
     "/admin/tenants/:tenantId/telephone/carrier-forwarding",
-    { preHandler: requireAdmin(options.adminToken) },
+    { preHandler: requireTenantAccess(options) },
     async (request, reply) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const tenant = await options.store.getTenant(tenantId);
@@ -885,7 +1125,7 @@ export async function buildServer(
 
   app.post(
     "/admin/tenants/:tenantId/telephone/sip-byoc",
-    { preHandler: requireAdmin(options.adminToken) },
+    { preHandler: requireTenantAccess(options) },
     async (request, reply) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const tenant = await options.store.getTenant(tenantId);
@@ -924,7 +1164,7 @@ export async function buildServer(
 
   app.post(
     "/admin/tenants/:tenantId/knowledge/faqs",
-    { preHandler: requireAdmin(options.adminToken) },
+    { preHandler: requireTenantAccess(options) },
     async (request, reply) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const body = AddFaqSchema.parse(request.body);
@@ -935,7 +1175,7 @@ export async function buildServer(
 
   app.get(
     "/admin/tenants/:tenantId/knowledge",
-    { preHandler: requireAdmin(options.adminToken) },
+    { preHandler: requireTenantAccess(options) },
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       return options.store.listKnowledge(tenantId);
@@ -944,7 +1184,7 @@ export async function buildServer(
 
   app.post(
     "/admin/tenants/:tenantId/knowledge/import-website",
-    { preHandler: requireAdmin(options.adminToken) },
+    { preHandler: requireTenantAccess(options) },
     async (request, reply) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const body = WebsiteImportSchema.parse(request.body);
@@ -975,7 +1215,7 @@ export async function buildServer(
 
   app.put(
     "/admin/tenants/:tenantId/knowledge/:knowledgeId",
-    { preHandler: requireAdmin(options.adminToken) },
+    { preHandler: requireTenantAccess(options) },
     async (request) => {
       const { tenantId, knowledgeId } = ParamsKnowledgeSchema.parse(
         request.params,
@@ -987,7 +1227,7 @@ export async function buildServer(
 
   app.delete(
     "/admin/tenants/:tenantId/knowledge/:knowledgeId",
-    { preHandler: requireAdmin(options.adminToken) },
+    { preHandler: requireTenantAccess(options) },
     async (request, reply) => {
       const { tenantId, knowledgeId } = ParamsKnowledgeSchema.parse(
         request.params,
@@ -999,7 +1239,7 @@ export async function buildServer(
 
   app.get(
     "/admin/tenants/:tenantId/analytics",
-    { preHandler: requireAdmin(options.adminToken) },
+    { preHandler: requireTenantAccess(options) },
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       return options.store.getTenantAnalytics(tenantId);
@@ -1008,7 +1248,7 @@ export async function buildServer(
 
   app.get(
     "/admin/tenants/:tenantId/conversations",
-    { preHandler: requireAdmin(options.adminToken) },
+    { preHandler: requireTenantAccess(options) },
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       return options.store.listConversations(tenantId);
@@ -1017,7 +1257,7 @@ export async function buildServer(
 
   app.get(
     "/admin/tenants/:tenantId/inbox",
-    { preHandler: requireAdmin(options.adminToken) },
+    { preHandler: requireTenantAccess(options) },
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       return options.store.listUnifiedInbox(tenantId);
@@ -1026,7 +1266,7 @@ export async function buildServer(
 
   app.get(
     "/admin/tenants/:tenantId/contacts",
-    { preHandler: requireAdmin(options.adminToken) },
+    { preHandler: requireTenantAccess(options) },
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       return options.store.listContacts(tenantId);
@@ -1035,7 +1275,7 @@ export async function buildServer(
 
   app.get(
     "/admin/tenants/:tenantId/conversations/:conversationId/messages",
-    { preHandler: requireAdmin(options.adminToken) },
+    { preHandler: requireTenantAccess(options) },
     async (request) => {
       const { tenantId, conversationId } = ParamsConversationSchema.parse(
         request.params,
@@ -1046,7 +1286,7 @@ export async function buildServer(
 
   app.get(
     "/admin/tenants/:tenantId/handoffs",
-    { preHandler: requireAdmin(options.adminToken) },
+    { preHandler: requireTenantAccess(options) },
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       return options.store.listHandoffs(tenantId);
@@ -1055,7 +1295,7 @@ export async function buildServer(
 
   app.get(
     "/admin/tenants/:tenantId/unanswered",
-    { preHandler: requireAdmin(options.adminToken) },
+    { preHandler: requireTenantAccess(options) },
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const handoffs = await options.store.listHandoffs(tenantId);
@@ -1065,7 +1305,7 @@ export async function buildServer(
 
   app.get(
     "/admin/tenants/:tenantId/workflows/suggestions",
-    { preHandler: requireAdmin(options.adminToken) },
+    { preHandler: requireTenantAccess(options) },
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const [analytics, handoffs, contacts, templates, compliance] =
@@ -1088,7 +1328,7 @@ export async function buildServer(
 
   app.get(
     "/admin/tenants/:tenantId/whatsapp/templates",
-    { preHandler: requireAdmin(options.adminToken) },
+    { preHandler: requireTenantAccess(options) },
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       return options.store.listWhatsappTemplates(tenantId);
@@ -1097,7 +1337,7 @@ export async function buildServer(
 
   app.post(
     "/admin/tenants/:tenantId/whatsapp/templates",
-    { preHandler: requireAdmin(options.adminToken) },
+    { preHandler: requireTenantAccess(options) },
     async (request, reply) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const body = WhatsappTemplateSchema.parse(request.body);
@@ -1111,7 +1351,7 @@ export async function buildServer(
 
   app.get(
     "/admin/tenants/:tenantId/whatsapp/compliance",
-    { preHandler: requireAdmin(options.adminToken) },
+    { preHandler: requireTenantAccess(options) },
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       return options.store.getWhatsappCompliance(tenantId);
@@ -1120,7 +1360,7 @@ export async function buildServer(
 
   app.post(
     "/admin/tenants/:tenantId/weekly-report",
-    { preHandler: requireAdmin(options.adminToken) },
+    { preHandler: requireTenantAccess(options) },
     async (request, reply) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const tenant = await options.store.getTenant(tenantId);
@@ -1168,7 +1408,7 @@ export async function buildServer(
 
   app.patch(
     "/admin/tenants/:tenantId/handoffs/:handoffId",
-    { preHandler: requireAdmin(options.adminToken) },
+    { preHandler: requireTenantAccess(options) },
     async (request) => {
       const { tenantId, handoffId } = ParamsHandoffSchema.parse(request.params);
       const body = UpdateHandoffSchema.parse(request.body);
@@ -1178,7 +1418,7 @@ export async function buildServer(
 
   app.post(
     "/admin/tenants/:tenantId/test-assistant",
-    { preHandler: requireAdmin(options.adminToken) },
+    { preHandler: requireTenantAccess(options) },
     async (request, reply) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const body = TestAssistantSchema.parse(request.body);
@@ -1240,7 +1480,7 @@ export async function buildServer(
 
   app.get(
     "/admin/tenants/:tenantId/export",
-    { preHandler: requireAdmin(options.adminToken) },
+    { preHandler: requireTenantAccess(options) },
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       return options.store.exportTenantData(tenantId);
@@ -1249,7 +1489,7 @@ export async function buildServer(
 
   app.delete(
     "/admin/tenants/:tenantId",
-    { preHandler: requireAdmin(options.adminToken) },
+    { preHandler: requireTenantAccess(options) },
     async (request, reply) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       await options.store.deleteTenantData(tenantId);
@@ -1259,7 +1499,7 @@ export async function buildServer(
 
   app.post(
     "/admin/tenants/:tenantId/install-check",
-    { preHandler: requireAdmin(options.adminToken) },
+    { preHandler: requireTenantAccess(options) },
     async (request, reply) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const body = InstallCheckSchema.parse(request.body);
@@ -1744,13 +1984,303 @@ export async function buildServer(
   return app;
 }
 
-function requireAdmin(adminToken: string) {
+type LegacyAdminRole = "owner" | "admin" | "operator" | "viewer";
+
+type RequestAuth =
+  | {
+      kind: "admin";
+      user: {
+        id: "admin-token";
+        email: string;
+        name: string;
+        role: LegacyAdminRole;
+      };
+    }
+  | {
+      kind: "user";
+      sessionId: string;
+      expiresAt: Date;
+      user: {
+        id: string;
+        email: string;
+        name: string;
+        status: string;
+      };
+      memberships: StoreTenantMembership[];
+    };
+
+const requestAuthContext = new WeakMap<FastifyRequest, RequestAuth>();
+const sessionCookieName = "assaddar_session";
+
+function requireAuth(options: BuildServerOptions) {
   return async (request: FastifyRequest, reply: FastifyReply) => {
-    const token = request.headers["x-admin-token"];
-    if (token !== adminToken) {
+    const auth = await authenticateRequest(request, options);
+    if (!auth) {
       return reply.code(401).send({ error: "Unauthorized." });
     }
+    requestAuthContext.set(request, auth);
   };
+}
+
+function requirePlatformOwner(options: BuildServerOptions) {
+  return async (request: FastifyRequest, reply: FastifyReply) => {
+    const auth = await authenticateRequest(request, options);
+    if (!auth || !isPlatformOwner(auth)) {
+      return reply.code(403).send({ error: "Forbidden." });
+    }
+    requestAuthContext.set(request, auth);
+  };
+}
+
+function requireTenantAccess(
+  options: BuildServerOptions,
+  minimumRole: RoleName = "viewer",
+) {
+  return async (request: FastifyRequest, reply: FastifyReply) => {
+    const auth = await authenticateRequest(request, options);
+    if (!auth) {
+      return reply.code(401).send({ error: "Unauthorized." });
+    }
+    if (auth.kind === "admin" || isPlatformOwner(auth)) {
+      requestAuthContext.set(request, auth);
+      return;
+    }
+
+    const { tenantId } = ParamsTenantSchema.parse(request.params);
+    const membership =
+      auth.memberships.find((item) => item.tenantId === tenantId) ??
+      (await options.store.getTenantMembership(auth.user.id, tenantId));
+    if (!membership || !roleAtLeast(membership.role, minimumRole)) {
+      return reply.code(403).send({ error: "Forbidden." });
+    }
+
+    requestAuthContext.set(request, {
+      ...auth,
+      memberships: upsertAuthMembership(auth.memberships, membership),
+    });
+  };
+}
+
+async function authenticateRequest(
+  request: FastifyRequest,
+  options: BuildServerOptions,
+): Promise<RequestAuth | null> {
+  const adminToken = request.headers["x-admin-token"];
+  if (adminToken === options.adminToken) {
+    return {
+      kind: "admin",
+      user: {
+        id: "admin-token",
+        email: options.adminUser?.email ?? "owner@assad-dar.de",
+        name: options.adminUser?.name ?? "Assad Dar",
+        role: options.adminUser?.role ?? "owner",
+      },
+    };
+  }
+
+  const sessionToken = getSessionToken(request);
+  if (!sessionToken) {
+    return null;
+  }
+  const session = await options.store.getAuthSession(hashSecret(sessionToken));
+  if (!session) {
+    return null;
+  }
+  return {
+    kind: "user",
+    sessionId: session.sessionId,
+    expiresAt: session.expiresAt,
+    user: session.user,
+    memberships: session.memberships,
+  };
+}
+
+function getRequestAuth(request: FastifyRequest) {
+  const auth = requestAuthContext.get(request);
+  if (!auth) {
+    throw new Error("Request auth context is missing.");
+  }
+  return auth;
+}
+
+function buildSessionPayload(request: FastifyRequest) {
+  const auth = getRequestAuth(request);
+  if (auth.kind === "admin") {
+    return {
+      authenticated: true,
+      authType: "admin_token",
+      user: {
+        email: auth.user.email,
+        name: auth.user.name,
+        role: auth.user.role,
+      },
+      memberships: [],
+      permissions: getPermissions(auth.user.role),
+    };
+  }
+
+  return buildUserSessionPayload({
+    sessionId: auth.sessionId,
+    expiresAt: auth.expiresAt,
+    user: auth.user,
+    memberships: auth.memberships,
+  });
+}
+
+function buildUserSessionPayload(session: StoreAuthSession) {
+  const highestRole = highestUserRole(session.memberships);
+  return {
+    authenticated: true,
+    authType: "user_session",
+    user: {
+      id: session.user.id,
+      email: session.user.email,
+      name: session.user.name,
+      role: highestRole,
+    },
+    memberships: session.memberships,
+    expiresAt: session.expiresAt.toISOString(),
+    permissions: getPermissions(highestRole),
+  };
+}
+
+async function hashPassword(password: string) {
+  const salt = randomBytes(16).toString("base64url");
+  const hash = (await scryptAsync(password, salt, 64)) as Buffer;
+  return `scrypt$${salt}$${hash.toString("base64url")}`;
+}
+
+async function verifyPassword(password: string, storedHash: string) {
+  const [algorithm, salt, expectedHash] = storedHash.split("$");
+  if (algorithm !== "scrypt" || !salt || !expectedHash) {
+    return false;
+  }
+  const candidate = (await scryptAsync(password, salt, 64)) as Buffer;
+  const expected = Buffer.from(expectedHash, "base64url");
+  return (
+    candidate.length === expected.length && timingSafeEqual(candidate, expected)
+  );
+}
+
+function createSessionToken() {
+  return randomBytes(32).toString("base64url");
+}
+
+function hashSecret(value: string) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function sessionDurationMs() {
+  return 1000 * 60 * 60 * 24 * 30;
+}
+
+function inviteDurationMs() {
+  return 1000 * 60 * 60 * 24 * 7;
+}
+
+function getSessionToken(request: FastifyRequest) {
+  const cookies = parseCookieHeader(request.headers.cookie);
+  return cookies[sessionCookieName];
+}
+
+function parseCookieHeader(header: string | undefined) {
+  const cookies: Record<string, string> = {};
+  for (const item of header?.split(";") ?? []) {
+    const [rawKey, ...rawValue] = item.trim().split("=");
+    if (!rawKey || !rawValue.length) {
+      continue;
+    }
+    cookies[rawKey] = decodeURIComponent(rawValue.join("="));
+  }
+  return cookies;
+}
+
+function setSessionCookie(
+  reply: FastifyReply,
+  token: string,
+  expiresAt: Date,
+) {
+  reply.header(
+    "set-cookie",
+    buildCookieHeader(sessionCookieName, token, {
+      expiresAt,
+      maxAgeSeconds: Math.floor((expiresAt.getTime() - Date.now()) / 1000),
+    }),
+  );
+}
+
+function clearSessionCookie(reply: FastifyReply) {
+  reply.header(
+    "set-cookie",
+    buildCookieHeader(sessionCookieName, "", {
+      expiresAt: new Date(0),
+      maxAgeSeconds: 0,
+    }),
+  );
+}
+
+function buildCookieHeader(
+  name: string,
+  value: string,
+  options: { expiresAt: Date; maxAgeSeconds: number },
+) {
+  const secure = process.env.NODE_ENV === "production";
+  return [
+    `${name}=${encodeURIComponent(value)}`,
+    "Path=/",
+    "HttpOnly",
+    `SameSite=${secure ? "None" : "Lax"}`,
+    `Max-Age=${Math.max(0, options.maxAgeSeconds)}`,
+    `Expires=${options.expiresAt.toUTCString()}`,
+    secure ? "Secure" : "",
+  ]
+    .filter(Boolean)
+    .join("; ");
+}
+
+function buildInviteAcceptUrl(options: BuildServerOptions, token: string) {
+  const adminBase = options.adminPublicUrl ?? defaultAdminPublicUrl;
+  return `${adminBase}/?invite=${encodeURIComponent(token)}`;
+}
+
+function isPlatformOwner(auth: RequestAuth) {
+  if (auth.kind === "admin") {
+    return true;
+  }
+  return auth.memberships.some((item) => item.role === "platform_owner");
+}
+
+function upsertAuthMembership(
+  memberships: StoreTenantMembership[],
+  membership: StoreTenantMembership,
+) {
+  return [
+    membership,
+    ...memberships.filter((item) => item.tenantId !== membership.tenantId),
+  ];
+}
+
+function roleAtLeast(role: RoleName, minimumRole: RoleName) {
+  return roleRank(role) >= roleRank(minimumRole);
+}
+
+function roleRank(role: RoleName) {
+  const ranks: Record<RoleName, number> = {
+    viewer: 10,
+    operator: 20,
+    tenant_admin: 30,
+    tenant_owner: 40,
+    platform_owner: 50,
+  };
+  return ranks[role];
+}
+
+function highestUserRole(memberships: StoreTenantMembership[]) {
+  return memberships.reduce<RoleName>(
+    (best, membership) =>
+      roleAtLeast(membership.role, best) ? membership.role : best,
+    "viewer",
+  );
 }
 
 type TwilioCredentials = {
@@ -2371,18 +2901,47 @@ function extractMetaProviderAccountId(
   return typeof entry.id === "string" ? entry.id : undefined;
 }
 
-function getPermissions(role: "owner" | "admin" | "operator" | "viewer") {
-  const permissions = {
+function getPermissions(role: LegacyAdminRole | RoleName) {
+  const permissions: Record<LegacyAdminRole | RoleName, string[]> = {
     owner: [
       "tenants:write",
+      "users:write",
       "knowledge:write",
       "leads:write",
       "settings:write",
       "exports:read",
     ],
-    admin: ["knowledge:write", "leads:write", "settings:write", "exports:read"],
+    admin: [
+      "users:write",
+      "knowledge:write",
+      "leads:write",
+      "settings:write",
+      "exports:read",
+    ],
     operator: ["knowledge:write", "leads:write"],
     viewer: ["exports:read"],
+    platform_owner: [
+      "tenants:write",
+      "users:write",
+      "knowledge:write",
+      "leads:write",
+      "settings:write",
+      "exports:read",
+    ],
+    tenant_owner: [
+      "users:write",
+      "knowledge:write",
+      "leads:write",
+      "settings:write",
+      "exports:read",
+    ],
+    tenant_admin: [
+      "users:write",
+      "knowledge:write",
+      "leads:write",
+      "settings:write",
+      "exports:read",
+    ],
   };
   return permissions[role];
 }

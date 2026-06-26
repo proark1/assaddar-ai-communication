@@ -32,7 +32,7 @@ flowchart LR
 ## Packages
 
 - `packages/core`: Channel-independent answer engine, tenant policy enforcement, intent classification, retrieval ranking, refusal/handoff behavior, and trace output.
-- `packages/db`: Drizzle schema, Supabase/Postgres migration SQL, tenant-scope helpers, repository methods, seed data, audit logging, export/delete helpers.
+- `packages/db`: Drizzle schema, Railway/Postgres migration SQL, tenant-scope helpers, repository methods, seed data, audit logging, export/delete helpers.
 - `packages/channels`: Adapter interfaces and provider skeletons for Website, WhatsApp, Instagram, Messenger, TikTok, and Telephone.
 
 ## Tenant Isolation
@@ -69,4 +69,4 @@ Failures return a refusal or handoff recommendation. The MVP intentionally avoid
 
 ## Provider Abstraction
 
-Supabase is used as managed Postgres through `DATABASE_URL`; the data layer remains portable to any PostgreSQL-compatible host with `pgvector`. OpenAI, Meta, TikTok, Twilio, object storage, and encryption providers are behind environment variables or adapter interfaces. The local MVP can run without those external credentials.
+Railway Postgres is used through `DATABASE_URL`; the data layer remains portable to any PostgreSQL-compatible host with `pgvector`. OpenAI, Meta, TikTok, Twilio, object storage, and encryption providers are behind environment variables or adapter interfaces. The local MVP can run without those external credentials.

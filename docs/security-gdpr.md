@@ -6,16 +6,16 @@
 - Repository methods require tenant scope for tenant data access.
 - Public assistant IDs do not expose internal tenant UUIDs.
 - Migration SQL enables row-level security on tenant-scoped tables.
-- Production deployments should use a non-owner application database role and set `app.current_tenant_id` per request/transaction. Supabase RLS is defense in depth; the API must still enforce tenant scope before querying.
+- Production deployments should use a non-owner Railway Postgres application role and set `app.current_tenant_id` per request/transaction when RLS is enabled. Database RLS is defense in depth; the API must still enforce tenant scope before querying.
 
 ## Secrets
 
 - Real secrets belong in a secret manager, not `.env` files committed to Git.
-- Supabase `DATABASE_URL` must stay server-side only.
-- Do not expose Supabase service-role keys in frontend environment variables.
+- Railway/Postgres `DATABASE_URL` must stay server-side only.
 - Channel access tokens are modeled as encrypted database values.
 - API keys should be stored as hashes, not plaintext.
-- `ADMIN_API_TOKEN` is a local MVP admin control, not a complete production auth system.
+- `ADMIN_API_TOKEN` is retained as an internal/root fallback. Normal project access uses Railway Postgres-backed users, memberships, and HttpOnly session cookies.
+- User passwords are stored as salted `scrypt` hashes. Session and invite tokens are stored only as SHA-256 hashes.
 
 ## AI Data Handling
 

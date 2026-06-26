@@ -104,6 +104,8 @@ export const users = pgTable(
     email: text("email").notNull(),
     name: text("name").notNull(),
     status: text("status").notNull().default("active"),
+    passwordHash: text("password_hash"),
+    emailVerifiedAt: timestamp("email_verified_at", { withTimezone: true }),
     ...timestamps,
   },
   (table) => [uniqueIndex("users_email_idx").on(table.email)],
@@ -135,6 +137,56 @@ export const memberships = pgTable(
   (table) => [
     uniqueIndex("memberships_tenant_user_idx").on(table.tenantId, table.userId),
     index("memberships_tenant_idx").on(table.tenantId),
+  ],
+);
+
+export const userSessions = pgTable(
+  "user_sessions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    tokenHash: text("token_hash").notNull(),
+    userAgent: text("user_agent"),
+    ipAddress: text("ip_address"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("user_sessions_token_hash_idx").on(table.tokenHash),
+    index("user_sessions_user_idx").on(table.userId),
+    index("user_sessions_expires_idx").on(table.expiresAt),
+  ],
+);
+
+export const tenantInvites = pgTable(
+  "tenant_invites",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    email: text("email").notNull(),
+    roleName: text("role_name").notNull(),
+    tokenHash: text("token_hash").notNull(),
+    invitedByUserId: uuid("invited_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    status: text("status").notNull().default("pending"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("tenant_invites_token_hash_idx").on(table.tokenHash),
+    index("tenant_invites_tenant_idx").on(table.tenantId),
+    index("tenant_invites_email_idx").on(table.email),
   ],
 );
 

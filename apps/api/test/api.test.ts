@@ -77,6 +77,43 @@ class MemoryPlatformStore
     settings: Record<string, unknown>;
     updatedAt: Date;
   }> = [];
+  users: Array<{
+    id: string;
+    email: string;
+    name: string;
+    status: string;
+    passwordHash?: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+  }> = [];
+  memberships: Array<{
+    id: string;
+    tenantId: string;
+    userId: string;
+    role: "platform_owner" | "tenant_owner" | "tenant_admin" | "operator" | "viewer";
+    status: string;
+    createdAt: Date;
+    updatedAt: Date;
+  }> = [];
+  sessions: Array<{
+    id: string;
+    userId: string;
+    tokenHash: string;
+    expiresAt: Date;
+    createdAt: Date;
+    lastSeenAt: Date;
+  }> = [];
+  invites: Array<{
+    id: string;
+    tenantId: string;
+    email: string;
+    roleName: "platform_owner" | "tenant_owner" | "tenant_admin" | "operator" | "viewer";
+    tokenHash: string;
+    status: string;
+    expiresAt: Date;
+    createdAt: Date;
+    updatedAt: Date;
+  }> = [];
   handoffs: Array<
     HandoffInput & {
       id: string;
@@ -167,6 +204,225 @@ class MemoryPlatformStore
         maxMessageLength: tenant.maxMessageLength ?? 1200,
       },
     };
+  }
+
+  async listTenantsForUser(userId: string) {
+    const tenantIds = new Set(
+      this.memberships
+        .filter((item) => item.userId === userId && item.status === "active")
+        .map((item) => item.tenantId),
+    );
+    return this.tenants.filter((tenant) => tenantIds.has(tenant.id));
+  }
+
+  async findUserByEmailForAuth(email: string) {
+    return (
+      this.users.find(
+        (user) => user.email.toLowerCase() === email.toLowerCase(),
+      ) ?? null
+    );
+  }
+
+  async createUserSession(input: {
+    userId: string;
+    tokenHash: string;
+    expiresAt: Date;
+  }) {
+    const session = {
+      id: crypto.randomUUID(),
+      userId: input.userId,
+      tokenHash: input.tokenHash,
+      expiresAt: input.expiresAt,
+      createdAt: new Date(),
+      lastSeenAt: new Date(),
+    };
+    this.sessions.push(session);
+    return session;
+  }
+
+  async getAuthSession(tokenHash: string) {
+    const session = this.sessions.find((item) => item.tokenHash === tokenHash);
+    if (!session || session.expiresAt.getTime() <= Date.now()) {
+      return null;
+    }
+    const user = this.users.find((item) => item.id === session.userId);
+    if (!user || user.status !== "active") {
+      return null;
+    }
+    return {
+      sessionId: session.id,
+      expiresAt: session.expiresAt,
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        status: user.status,
+      },
+      memberships: this.memberships
+        .filter(
+          (item) => item.userId === user.id && item.status === "active",
+        )
+        .map((item) => {
+          const tenant = this.tenants.find(
+            (candidate) => candidate.id === item.tenantId,
+          );
+          return {
+            tenantId: item.tenantId,
+            tenantName: tenant?.name ?? "Tenant",
+            tenantSlug: tenant?.slug ?? "tenant",
+            role: item.role,
+            status: item.status,
+          };
+        }),
+    };
+  }
+
+  async deleteUserSession(tokenHash: string) {
+    this.sessions = this.sessions.filter(
+      (session) => session.tokenHash !== tokenHash,
+    );
+  }
+
+  async getTenantMembership(userId: string, tenantId: string) {
+    const membership = this.memberships.find(
+      (item) =>
+        item.userId === userId &&
+        item.tenantId === tenantId &&
+        item.status === "active",
+    );
+    if (!membership) {
+      return null;
+    }
+    const tenant = this.tenants.find((item) => item.id === tenantId);
+    return {
+      tenantId,
+      tenantName: tenant?.name ?? "Tenant",
+      tenantSlug: tenant?.slug ?? "tenant",
+      role: membership.role,
+      status: membership.status,
+    };
+  }
+
+  async listTenantUsers(tenantId: string) {
+    return this.memberships
+      .filter((membership) => membership.tenantId === tenantId)
+      .map((membership) => {
+        const user = this.users.find((item) => item.id === membership.userId);
+        return {
+          id: user?.id ?? membership.userId,
+          email: user?.email ?? "missing@example.com",
+          name: user?.name ?? "Missing user",
+          status: user?.status ?? "disabled",
+          role: membership.role,
+          membershipStatus: membership.status,
+        };
+      });
+  }
+
+  async upsertTenantUser(
+    tenantId: string,
+    input: {
+      email: string;
+      name: string;
+      role: "platform_owner" | "tenant_owner" | "tenant_admin" | "operator" | "viewer";
+      passwordHash?: string | null;
+    },
+  ) {
+    const email = input.email.toLowerCase();
+    let user = this.users.find((item) => item.email === email);
+    if (!user) {
+      user = {
+        id: crypto.randomUUID(),
+        email,
+        name: input.name,
+        status: "active",
+        passwordHash: input.passwordHash ?? null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      this.users.push(user);
+    } else {
+      user.name = input.name || user.name;
+      if (input.passwordHash) {
+        user.passwordHash = input.passwordHash;
+      }
+      user.updatedAt = new Date();
+    }
+
+    let membership = this.memberships.find(
+      (item) => item.tenantId === tenantId && item.userId === user.id,
+    );
+    if (!membership) {
+      membership = {
+        id: crypto.randomUUID(),
+        tenantId,
+        userId: user.id,
+        role: input.role,
+        status: "active",
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      this.memberships.push(membership);
+    } else {
+      membership.role = input.role;
+      membership.status = "active";
+      membership.updatedAt = new Date();
+    }
+
+    return { ...user, role: input.role };
+  }
+
+  async createTenantInvite(
+    tenantId: string,
+    input: {
+      email: string;
+      role: "platform_owner" | "tenant_owner" | "tenant_admin" | "operator" | "viewer";
+      tokenHash: string;
+      expiresAt: Date;
+    },
+  ) {
+    const invite = {
+      id: crypto.randomUUID(),
+      tenantId,
+      email: input.email.toLowerCase(),
+      roleName: input.role,
+      tokenHash: input.tokenHash,
+      status: "pending",
+      expiresAt: input.expiresAt,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    this.invites.push(invite);
+    return invite;
+  }
+
+  async listTenantInvites(tenantId: string) {
+    return this.invites.filter((invite) => invite.tenantId === tenantId);
+  }
+
+  async acceptTenantInvite(input: {
+    tokenHash: string;
+    name: string;
+    passwordHash: string;
+  }) {
+    const invite = this.invites.find(
+      (item) => item.tokenHash === input.tokenHash,
+    );
+    if (
+      !invite ||
+      invite.status !== "pending" ||
+      invite.expiresAt.getTime() <= Date.now()
+    ) {
+      return null;
+    }
+    invite.status = "accepted";
+    invite.updatedAt = new Date();
+    return this.upsertTenantUser(invite.tenantId, {
+      email: invite.email,
+      name: input.name,
+      role: invite.roleName,
+      passwordHash: input.passwordHash,
+    });
   }
 
   async listChannelConnections(tenantId: string) {
@@ -751,6 +1007,126 @@ describe("API", () => {
     ).toMatchObject({
       user: { role: "operator" },
       permissions: ["knowledge:write", "leads:write"],
+    });
+    await app.close();
+  });
+
+  it("lets project users log in and access only their assigned tenant", async () => {
+    const store = new MemoryPlatformStore();
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+    });
+    const assignedTenant = await store.createTenant({
+      name: "Assigned",
+      slug: "assigned",
+    });
+    const otherTenant = await store.createTenant({
+      name: "Other",
+      slug: "other",
+    });
+
+    const createUserResponse = await app.inject({
+      method: "POST",
+      url: `/admin/tenants/${assignedTenant.id}/users`,
+      headers: { "x-admin-token": "test-token" },
+      payload: {
+        email: "owner@example.com",
+        name: "Project Owner",
+        role: "tenant_owner",
+        password: "secure-password",
+      },
+    });
+    expect(createUserResponse.statusCode).toBe(201);
+
+    const loginResponse = await app.inject({
+      method: "POST",
+      url: "/auth/login",
+      payload: {
+        email: "owner@example.com",
+        password: "secure-password",
+      },
+    });
+    expect(loginResponse.statusCode).toBe(200);
+    expect(loginResponse.json()).toMatchObject({
+      authType: "user_session",
+      user: {
+        email: "owner@example.com",
+        role: "tenant_owner",
+      },
+    });
+    const cookie = loginResponse.headers["set-cookie"];
+    expect(cookie).toBeTruthy();
+
+    const tenantsResponse = await app.inject({
+      method: "GET",
+      url: "/admin/tenants",
+      headers: { cookie: String(cookie) },
+    });
+    expect(tenantsResponse.statusCode).toBe(200);
+    expect(tenantsResponse.json<Array<{ id: string }>>()).toEqual([
+      expect.objectContaining({ id: assignedTenant.id }),
+    ]);
+
+    const allowedResponse = await app.inject({
+      method: "GET",
+      url: `/admin/tenants/${assignedTenant.id}/knowledge`,
+      headers: { cookie: String(cookie) },
+    });
+    expect(allowedResponse.statusCode).toBe(200);
+
+    const blockedResponse = await app.inject({
+      method: "GET",
+      url: `/admin/tenants/${otherTenant.id}/knowledge`,
+      headers: { cookie: String(cookie) },
+    });
+    expect(blockedResponse.statusCode).toBe(403);
+    await app.close();
+  });
+
+  it("creates and accepts project invite links", async () => {
+    const store = new MemoryPlatformStore();
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+      adminPublicUrl: "https://admin.example.com",
+    });
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+
+    const inviteResponse = await app.inject({
+      method: "POST",
+      url: `/admin/tenants/${tenant.id}/invites`,
+      headers: { "x-admin-token": "test-token" },
+      payload: {
+        email: "operator@example.com",
+        role: "operator",
+      },
+    });
+    expect(inviteResponse.statusCode).toBe(201);
+    const invite = inviteResponse.json<{ token: string; acceptUrl: string }>();
+    expect(invite.acceptUrl).toContain(encodeURIComponent(invite.token));
+
+    const acceptResponse = await app.inject({
+      method: "POST",
+      url: "/auth/invites/accept",
+      payload: {
+        token: invite.token,
+        name: "Operator User",
+        password: "secure-password",
+      },
+    });
+    expect(acceptResponse.statusCode).toBe(200);
+    expect(acceptResponse.json()).toMatchObject({
+      authType: "user_session",
+      user: {
+        email: "operator@example.com",
+        role: "operator",
+      },
     });
     await app.close();
   });

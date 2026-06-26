@@ -26,14 +26,72 @@ import {
   knowledgeSources,
   messageDeliveries,
   messages,
+  memberships,
+  roles,
+  tenantInvites,
   tenants,
   usageEvents,
+  users,
+  userSessions,
   whatsappTemplates,
   type WidgetTheme,
 } from "./schema";
 import { assertTenantId } from "./tenant-scope";
 
 export type TenantSummary = typeof tenants.$inferSelect;
+
+export type RoleName =
+  | "platform_owner"
+  | "tenant_owner"
+  | "tenant_admin"
+  | "operator"
+  | "viewer";
+
+export type AuthUserRecord = Pick<
+  typeof users.$inferSelect,
+  "id" | "email" | "name" | "status" | "passwordHash"
+>;
+
+export type TenantMembershipSummary = {
+  tenantId: string;
+  tenantName: string;
+  tenantSlug: string;
+  role: RoleName;
+  status: string;
+};
+
+export type AuthSessionRecord = {
+  sessionId: string;
+  expiresAt: Date;
+  user: {
+    id: string;
+    email: string;
+    name: string;
+    status: string;
+  };
+  memberships: TenantMembershipSummary[];
+};
+
+export type UpsertTenantUserInput = {
+  email: string;
+  name: string;
+  role: RoleName;
+  passwordHash?: string | null | undefined;
+};
+
+export type CreateTenantInviteInput = {
+  email: string;
+  role: RoleName;
+  tokenHash: string;
+  expiresAt: Date;
+  invitedByUserId?: string | null | undefined;
+};
+
+export type AcceptTenantInviteInput = {
+  tokenHash: string;
+  name: string;
+  passwordHash: string;
+};
 
 export type CreateTenantInput = {
   name: string;
@@ -331,6 +389,344 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
         maxMessageLength: tenant.maxMessageLength,
       },
     };
+  }
+
+  async findUserByEmailForAuth(email: string): Promise<AuthUserRecord | null> {
+    const normalizedEmail = normalizeEmail(email);
+    if (!normalizedEmail) {
+      return null;
+    }
+    const [user] = await this.db
+      .select({
+        id: users.id,
+        email: users.email,
+        name: users.name,
+        status: users.status,
+        passwordHash: users.passwordHash,
+      })
+      .from(users)
+      .where(eq(users.email, normalizedEmail))
+      .limit(1);
+    return user ?? null;
+  }
+
+  async createUserSession(input: {
+    userId: string;
+    tokenHash: string;
+    expiresAt: Date;
+    userAgent?: string | null | undefined;
+    ipAddress?: string | null | undefined;
+  }) {
+    const [session] = await this.db
+      .insert(userSessions)
+      .values({
+        userId: input.userId,
+        tokenHash: input.tokenHash,
+        expiresAt: input.expiresAt,
+        userAgent: input.userAgent ?? null,
+        ipAddress: input.ipAddress ?? null,
+      })
+      .returning();
+
+    if (!session) {
+      throw new Error("Failed to create user session.");
+    }
+
+    return session;
+  }
+
+  async getAuthSession(tokenHash: string): Promise<AuthSessionRecord | null> {
+    const [row] = await this.db
+      .select({
+        sessionId: userSessions.id,
+        expiresAt: userSessions.expiresAt,
+        userId: users.id,
+        email: users.email,
+        name: users.name,
+        status: users.status,
+      })
+      .from(userSessions)
+      .innerJoin(users, eq(users.id, userSessions.userId))
+      .where(eq(userSessions.tokenHash, tokenHash))
+      .limit(1);
+
+    if (!row || row.status !== "active") {
+      return null;
+    }
+
+    if (row.expiresAt.getTime() <= Date.now()) {
+      await this.deleteUserSession(tokenHash);
+      return null;
+    }
+
+    await this.db
+      .update(userSessions)
+      .set({ lastSeenAt: sql`now()` })
+      .where(eq(userSessions.tokenHash, tokenHash));
+
+    return {
+      sessionId: row.sessionId,
+      expiresAt: row.expiresAt,
+      user: {
+        id: row.userId,
+        email: row.email,
+        name: row.name,
+        status: row.status,
+      },
+      memberships: await this.listUserMemberships(row.userId),
+    };
+  }
+
+  async deleteUserSession(tokenHash: string) {
+    await this.db
+      .delete(userSessions)
+      .where(eq(userSessions.tokenHash, tokenHash));
+  }
+
+  async listTenantsForUser(userId: string) {
+    const rows = await this.db
+      .select({ tenant: tenants })
+      .from(memberships)
+      .innerJoin(tenants, eq(tenants.id, memberships.tenantId))
+      .innerJoin(roles, eq(roles.id, memberships.roleId))
+      .where(
+        and(
+          eq(memberships.userId, userId),
+          eq(memberships.status, "active"),
+          eq(tenants.status, "active"),
+        ),
+      )
+      .orderBy(desc(tenants.createdAt));
+
+    return rows.map((row) => row.tenant);
+  }
+
+  async listUserMemberships(
+    userId: string,
+  ): Promise<TenantMembershipSummary[]> {
+    const rows = await this.db
+      .select({
+        tenantId: tenants.id,
+        tenantName: tenants.name,
+        tenantSlug: tenants.slug,
+        role: roles.name,
+        status: memberships.status,
+      })
+      .from(memberships)
+      .innerJoin(tenants, eq(tenants.id, memberships.tenantId))
+      .innerJoin(roles, eq(roles.id, memberships.roleId))
+      .where(
+        and(
+          eq(memberships.userId, userId),
+          eq(memberships.status, "active"),
+          eq(tenants.status, "active"),
+        ),
+      )
+      .orderBy(desc(tenants.createdAt));
+
+    return rows.map((row) => ({
+      ...row,
+      role: normalizeRoleName(row.role),
+    }));
+  }
+
+  async getTenantMembership(userId: string, tenantId: string) {
+    assertTenantId(tenantId);
+    const [membership] = await this.db
+      .select({
+        tenantId: memberships.tenantId,
+        tenantName: tenants.name,
+        tenantSlug: tenants.slug,
+        role: roles.name,
+        status: memberships.status,
+      })
+      .from(memberships)
+      .innerJoin(tenants, eq(tenants.id, memberships.tenantId))
+      .innerJoin(roles, eq(roles.id, memberships.roleId))
+      .where(
+        and(
+          eq(memberships.userId, userId),
+          eq(memberships.tenantId, tenantId),
+          eq(memberships.status, "active"),
+          eq(tenants.status, "active"),
+        ),
+      )
+      .limit(1);
+
+    return membership
+      ? {
+          ...membership,
+          role: normalizeRoleName(membership.role),
+        }
+      : null;
+  }
+
+  async listTenantUsers(tenantId: string) {
+    assertTenantId(tenantId);
+    return this.db
+      .select({
+        id: users.id,
+        email: users.email,
+        name: users.name,
+        status: users.status,
+        role: roles.name,
+        membershipStatus: memberships.status,
+        createdAt: users.createdAt,
+        updatedAt: users.updatedAt,
+      })
+      .from(memberships)
+      .innerJoin(users, eq(users.id, memberships.userId))
+      .innerJoin(roles, eq(roles.id, memberships.roleId))
+      .where(eq(memberships.tenantId, tenantId))
+      .orderBy(users.email);
+  }
+
+  async upsertTenantUser(tenantId: string, input: UpsertTenantUserInput) {
+    assertTenantId(tenantId);
+    const email = normalizeEmail(input.email);
+    if (!email) {
+      throw new Error("Valid email is required.");
+    }
+    const roleId = await this.getOrCreateRole(input.role);
+    const existing = await this.findUserByEmailForAuth(email);
+
+    const [user] = existing
+      ? await this.db
+          .update(users)
+          .set({
+            name: input.name.trim() || existing.name,
+            ...(input.passwordHash
+              ? {
+                  passwordHash: input.passwordHash,
+                  emailVerifiedAt: sql`coalesce(${users.emailVerifiedAt}, now())`,
+                }
+              : {}),
+            updatedAt: sql`now()`,
+          })
+          .where(eq(users.id, existing.id))
+          .returning()
+      : await this.db
+          .insert(users)
+          .values({
+            email,
+            name: input.name.trim() || email,
+            passwordHash: input.passwordHash ?? null,
+            emailVerifiedAt: input.passwordHash ? sql`now()` : null,
+          })
+          .returning();
+
+    if (!user) {
+      throw new Error("Failed to save user.");
+    }
+
+    const [membership] = await this.db
+      .insert(memberships)
+      .values({
+        tenantId,
+        userId: user.id,
+        roleId,
+        status: "active",
+      })
+      .onConflictDoUpdate({
+        target: [memberships.tenantId, memberships.userId],
+        set: {
+          roleId,
+          status: "active",
+          updatedAt: sql`now()`,
+        },
+      })
+      .returning();
+
+    await this.audit(tenantId, "tenant_user.upserted", "user", user.id, {
+      email: user.email,
+      role: input.role,
+    });
+
+    return {
+      ...user,
+      role: input.role,
+      membershipId: membership?.id ?? null,
+    };
+  }
+
+  async createTenantInvite(
+    tenantId: string,
+    input: CreateTenantInviteInput,
+  ) {
+    assertTenantId(tenantId);
+    const email = normalizeEmail(input.email);
+    if (!email) {
+      throw new Error("Valid email is required.");
+    }
+    await this.getOrCreateRole(input.role);
+    const [invite] = await this.db
+      .insert(tenantInvites)
+      .values({
+        tenantId,
+        email,
+        roleName: input.role,
+        tokenHash: input.tokenHash,
+        invitedByUserId: input.invitedByUserId ?? null,
+        expiresAt: input.expiresAt,
+      })
+      .returning();
+
+    if (!invite) {
+      throw new Error("Failed to create invite.");
+    }
+
+    await this.audit(tenantId, "tenant_invite.created", "tenant_invite", invite.id, {
+      email,
+      role: input.role,
+    });
+
+    return invite;
+  }
+
+  async listTenantInvites(tenantId: string) {
+    assertTenantId(tenantId);
+    return this.db
+      .select()
+      .from(tenantInvites)
+      .where(eq(tenantInvites.tenantId, tenantId))
+      .orderBy(desc(tenantInvites.createdAt));
+  }
+
+  async acceptTenantInvite(input: AcceptTenantInviteInput) {
+    const [invite] = await this.db
+      .select()
+      .from(tenantInvites)
+      .where(eq(tenantInvites.tokenHash, input.tokenHash))
+      .limit(1);
+
+    if (!invite || invite.status !== "pending") {
+      return null;
+    }
+    if (invite.expiresAt.getTime() <= Date.now()) {
+      await this.db
+        .update(tenantInvites)
+        .set({ status: "expired", updatedAt: sql`now()` })
+        .where(eq(tenantInvites.id, invite.id));
+      return null;
+    }
+
+    const user = await this.upsertTenantUser(invite.tenantId, {
+      email: invite.email,
+      name: input.name,
+      role: normalizeRoleName(invite.roleName),
+      passwordHash: input.passwordHash,
+    });
+
+    await this.db
+      .update(tenantInvites)
+      .set({
+        status: "accepted",
+        acceptedAt: sql`now()`,
+        updatedAt: sql`now()`,
+      })
+      .where(eq(tenantInvites.id, invite.id));
+
+    return user;
   }
 
   async addFaq(tenantId: string, input: AddFaqInput) {
@@ -1591,6 +1987,29 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     });
   }
 
+  private async getOrCreateRole(name: RoleName) {
+    const [role] = await this.db
+      .insert(roles)
+      .values({
+        name,
+        description: roleDescription(name),
+      })
+      .onConflictDoUpdate({
+        target: roles.name,
+        set: {
+          description: roleDescription(name),
+          updatedAt: sql`now()`,
+        },
+      })
+      .returning();
+
+    if (!role) {
+      throw new Error("Failed to load role.");
+    }
+
+    return role.id;
+  }
+
   private async audit(
     tenantId: string,
     action: string,
@@ -1607,6 +2026,30 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       metadata,
     });
   }
+}
+
+function normalizeRoleName(value: string): RoleName {
+  if (
+    value === "platform_owner" ||
+    value === "tenant_owner" ||
+    value === "tenant_admin" ||
+    value === "operator" ||
+    value === "viewer"
+  ) {
+    return value;
+  }
+  return "viewer";
+}
+
+function roleDescription(name: RoleName) {
+  const descriptions: Record<RoleName, string> = {
+    platform_owner: "Can manage all tenants and platform settings.",
+    tenant_owner: "Can manage the tenant, users, channels, knowledge, and leads.",
+    tenant_admin: "Can configure tenant settings, channels, knowledge, and leads.",
+    operator: "Can manage leads, conversations, and handoffs.",
+    viewer: "Can view tenant data without changing settings.",
+  };
+  return descriptions[name];
 }
 
 function normalizeContactInput(input?: ContactProfileInput) {

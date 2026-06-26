@@ -40,6 +40,8 @@ WHATSAPP_ACCESS_TOKEN=<only when WhatsApp sending is enabled>
 MESSENGER_PAGE_ACCESS_TOKEN=<only when Messenger/Instagram sending is enabled>
 ```
 
+`ADMIN_API_TOKEN` remains the root/bootstrap fallback. Normal project users log in through `/auth/login`; sessions are stored in Railway Postgres and sent as HttpOnly cookies by the API. Keep the admin domain in `WIDGET_ALLOWED_ORIGINS` because the API enables credentialed CORS for the admin app.
+
 Optional lead notifications:
 
 ```text

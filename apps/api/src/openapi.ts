@@ -10,6 +10,26 @@ export const openApiDocument = {
         summary: "Health check",
       },
     },
+    "/auth/login": {
+      post: {
+        summary: "Create a Railway Postgres-backed user session",
+      },
+    },
+    "/auth/logout": {
+      post: {
+        summary: "Delete the current user session",
+      },
+    },
+    "/auth/session": {
+      get: {
+        summary: "Fetch the current admin or project-user session",
+      },
+    },
+    "/auth/invites/accept": {
+      post: {
+        summary: "Accept a tenant invite and create a password login",
+      },
+    },
     "/admin/tenants": {
       get: {
         summary: "List tenants",
@@ -69,6 +89,22 @@ export const openApiDocument = {
     "/admin/tenants/{tenantId}/channel-connections/{channel}": {
       put: {
         summary: "Create or update a tenant channel connection",
+      },
+    },
+    "/admin/tenants/{tenantId}/users": {
+      get: {
+        summary: "List tenant users and roles",
+      },
+      post: {
+        summary: "Create or update a tenant user login",
+      },
+    },
+    "/admin/tenants/{tenantId}/invites": {
+      get: {
+        summary: "List tenant invite links",
+      },
+      post: {
+        summary: "Create a tenant invite link",
       },
     },
     "/admin/tenants/{tenantId}/telephone/twilio/search": {

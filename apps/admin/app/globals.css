@@ -1621,6 +1621,10 @@ textarea {
   gap: 12px;
 }
 
+.authModeSwitch {
+  margin-top: 2px;
+}
+
 .authStatus {
   max-width: 100%;
   white-space: normal;
@@ -3004,6 +3008,66 @@ textarea {
 .templateGrid {
   display: grid;
   gap: 12px;
+}
+
+.authManagementForm,
+.userList,
+.inviteList {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.userList article,
+.inviteList article {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  padding: 10px;
+}
+
+.userList div,
+.inviteList article {
+  min-width: 0;
+}
+
+.userList strong,
+.userList span,
+.inviteList strong,
+.inviteList span {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.userList strong,
+.inviteList strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.userList span,
+.inviteList span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.userList small {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--slate-bg);
+  color: var(--text-soft);
+  padding: 3px 7px;
+  font-size: 11px;
+  font-weight: 900;
 }
 
 .contactGrid {

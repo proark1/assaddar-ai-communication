@@ -256,12 +256,52 @@ type WebsiteImportResult = {
 
 type AdminSession = {
   authenticated: boolean;
+  authType?: "admin_token" | "user_session";
   user: {
+    id?: string;
     email: string;
     name: string;
-    role: "owner" | "admin" | "operator" | "viewer";
+    role:
+      | "owner"
+      | "admin"
+      | "platform_owner"
+      | "tenant_owner"
+      | "tenant_admin"
+      | "operator"
+      | "viewer";
   };
+  memberships?: Array<{
+    tenantId: string;
+    tenantName: string;
+    tenantSlug: string;
+    role: "platform_owner" | "tenant_owner" | "tenant_admin" | "operator" | "viewer";
+    status: string;
+  }>;
   permissions: string[];
+};
+
+type TenantRole =
+  | "tenant_owner"
+  | "tenant_admin"
+  | "operator"
+  | "viewer";
+
+type TenantUser = {
+  id: string;
+  email: string;
+  name: string;
+  status: string;
+  role: string;
+  membershipStatus?: string;
+};
+
+type TenantInvite = {
+  id: string;
+  email: string;
+  roleName: string;
+  status: string;
+  expiresAt: string;
+  createdAt: string;
 };
 
 type UnansweredQuestion = {
@@ -665,7 +705,7 @@ function readableError(error: unknown) {
     return "API unreachable. Check the API base or deploy status.";
   }
   if (/unauthorized|401|invalid token/i.test(raw)) {
-    return "Admin token rejected. Check the token and connect again.";
+    return "Login rejected. Check the email, password, or admin token.";
   }
   if (/origin not allowed|cors/i.test(raw)) {
     return "Browser origin is not allowed by the API.";
@@ -1151,6 +1191,7 @@ type AdminDeepLink = {
   tab?: TabKey;
   handoffId?: string;
   conversationId?: string;
+  inviteToken?: string;
 };
 
 function readAdminDeepLink(): AdminDeepLink {
@@ -1164,6 +1205,7 @@ function readAdminDeepLink(): AdminDeepLink {
   const tenantId = params.get("tenantId");
   const handoffId = params.get("handoffId");
   const conversationId = params.get("conversationId");
+  const inviteToken = params.get("invite");
   if (tenantId) {
     deepLink.tenantId = tenantId;
   }
@@ -1176,6 +1218,9 @@ function readAdminDeepLink(): AdminDeepLink {
   }
   if (conversationId) {
     deepLink.conversationId = conversationId;
+  }
+  if (inviteToken) {
+    deepLink.inviteToken = inviteToken;
   }
   return deepLink;
 }
@@ -1203,6 +1248,11 @@ export default function DashboardPage() {
   const [apiBase, setApiBase] = useState(defaultApiBase);
   const [adminToken, setAdminToken] = useState("");
   const [adminSession, setAdminSession] = useState<AdminSession | null>(null);
+  const [loginEmail, setLoginEmail] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [authMode, setAuthMode] = useState<"login" | "admin_token">("login");
+  const [inviteName, setInviteName] = useState("");
+  const [invitePassword, setInvitePassword] = useState("");
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [selectedTenantId, setSelectedTenantId] = useState("");
   const [tenantName, setTenantName] = useState("");
@@ -1233,6 +1283,15 @@ export default function DashboardPage() {
     useState<WhatsappCompliance | null>(null);
   const [workflowSuggestions, setWorkflowSuggestions] =
     useState<WorkflowSuggestionsResult | null>(null);
+  const [tenantUsers, setTenantUsers] = useState<TenantUser[]>([]);
+  const [tenantInvites, setTenantInvites] = useState<TenantInvite[]>([]);
+  const [newUserEmail, setNewUserEmail] = useState("");
+  const [newUserName, setNewUserName] = useState("");
+  const [newUserPassword, setNewUserPassword] = useState("");
+  const [newUserRole, setNewUserRole] = useState<TenantRole>("operator");
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteRole, setInviteRole] = useState<TenantRole>("operator");
+  const [lastInviteUrl, setLastInviteUrl] = useState("");
   const [channelAccountDrafts, setChannelAccountDrafts] = useState<
     Record<string, string>
   >({});
@@ -1657,8 +1716,8 @@ export default function DashboardPage() {
   const setupSteps = [
     {
       label: "Login",
-      done: Boolean(adminToken),
-      action: "Paste token",
+      done: Boolean(adminToken || adminSession),
+      action: "Sign in",
       tab: "settings" as TabKey,
     },
     {
@@ -1878,9 +1937,10 @@ export default function DashboardPage() {
   async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     const response = await fetch(`${normalizedApiBase}${path}`, {
       ...init,
+      credentials: "include",
       headers: {
         "content-type": "application/json",
-        "x-admin-token": adminToken,
+        ...(adminToken ? { "x-admin-token": adminToken } : {}),
         ...(init?.headers ?? {}),
       },
     });
@@ -1898,11 +1958,6 @@ export default function DashboardPage() {
   }
 
   async function refreshTenants() {
-    if (!adminToken) {
-      setStatus("Admin token required");
-      return;
-    }
-
     setBusy(true);
     try {
       const session = await apiFetch<AdminSession>("/admin/session");
@@ -1932,6 +1987,149 @@ export default function DashboardPage() {
     }
   }
 
+  async function loginWithPassword(event: FormEvent) {
+    event.preventDefault();
+    if (!loginEmail || !loginPassword) {
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const session = await apiFetch<AdminSession>("/auth/login", {
+        method: "POST",
+        body: JSON.stringify({
+          email: loginEmail,
+          password: loginPassword,
+        }),
+      });
+      setAdminToken("");
+      window.localStorage.removeItem("assaddar_admin_token");
+      setAdminSession(session);
+      setConnectionAttempted(true);
+      setLoginPassword("");
+      const nextTenants = await apiFetch<Tenant[]>("/admin/tenants");
+      setTenants(nextTenants);
+      if (nextTenants[0]) {
+        setSelectedTenantId(nextTenants[0].id);
+      }
+      setStatus(nextTenants.length ? "Logged in" : "No projects assigned");
+    } catch (error) {
+      setStatus(readableError(error));
+      setConnectionAttempted(false);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function logout() {
+    setBusy(true);
+    try {
+      await apiFetch("/auth/logout", { method: "POST" });
+    } catch {
+      // Local cleanup still matters even if the network request fails.
+    } finally {
+      setAdminSession(null);
+      setTenants([]);
+      setSelectedTenantId("");
+      setConnectionAttempted(false);
+      setAdminToken("");
+      window.localStorage.removeItem("assaddar_admin_token");
+      setBusy(false);
+      setStatus("Logged out");
+    }
+  }
+
+  async function acceptInvite(event: FormEvent) {
+    event.preventDefault();
+    if (!deepLink.inviteToken || !inviteName || !invitePassword) {
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const session = await apiFetch<AdminSession>("/auth/invites/accept", {
+        method: "POST",
+        body: JSON.stringify({
+          token: deepLink.inviteToken,
+          name: inviteName,
+          password: invitePassword,
+        }),
+      });
+      setAdminSession(session);
+      setConnectionAttempted(true);
+      setInvitePassword("");
+      const nextTenants = await apiFetch<Tenant[]>("/admin/tenants");
+      setTenants(nextTenants);
+      if (nextTenants[0]) {
+        setSelectedTenantId(nextTenants[0].id);
+      }
+      window.history.replaceState({}, "", window.location.pathname);
+      setStatus("Invite accepted");
+    } catch (error) {
+      setStatus(readableError(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createTenantUser(event: FormEvent) {
+    event.preventDefault();
+    if (!selectedTenant || !newUserEmail || !newUserName) {
+      return;
+    }
+
+    setBusy(true);
+    try {
+      await apiFetch(`/admin/tenants/${selectedTenant.id}/users`, {
+        method: "POST",
+        body: JSON.stringify({
+          email: newUserEmail,
+          name: newUserName,
+          role: newUserRole,
+          password: newUserPassword || undefined,
+        }),
+      });
+      setNewUserEmail("");
+      setNewUserName("");
+      setNewUserPassword("");
+      await refreshTenantUsers(selectedTenant.id);
+      setStatus("Project user saved");
+    } catch (error) {
+      setStatus(readableError(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createTenantInvite(event: FormEvent) {
+    event.preventDefault();
+    if (!selectedTenant || !inviteEmail) {
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const result = await apiFetch<{ acceptUrl: string }>(
+        `/admin/tenants/${selectedTenant.id}/invites`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            email: inviteEmail,
+            role: inviteRole,
+          }),
+        },
+      );
+      setInviteEmail("");
+      setLastInviteUrl(result.acceptUrl);
+      await refreshTenantUsers(selectedTenant.id);
+      setStatus("Invite link created");
+    } catch (error) {
+      setStatus(readableError(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function refreshWorkspace(tenantId = selectedTenant?.id) {
     if (!tenantId) {
       setKnowledge([]);
@@ -1944,6 +2142,8 @@ export default function DashboardPage() {
       setWhatsappTemplates([]);
       setWhatsappCompliance(null);
       setWorkflowSuggestions(null);
+      setTenantUsers([]);
+      setTenantInvites([]);
       setChannelAccountDrafts({});
       return;
     }
@@ -1959,6 +2159,7 @@ export default function DashboardPage() {
       refreshWhatsappOperations(tenantId),
       refreshUnanswered(tenantId),
       refreshWorkflowSuggestions(tenantId),
+      refreshTenantUsers(tenantId),
     ]);
   }
 
@@ -2149,6 +2350,28 @@ export default function DashboardPage() {
       setWorkflowSuggestions(result);
     } catch {
       setWorkflowSuggestions(null);
+    }
+  }
+
+  async function refreshTenantUsers(tenantId = selectedTenant?.id) {
+    if (!tenantId) {
+      setTenantUsers([]);
+      setTenantInvites([]);
+      return;
+    }
+
+    try {
+      const [users, invites] = await Promise.all([
+        apiFetch<TenantUser[]>(`/admin/tenants/${tenantId}/users`),
+        canManageUsers()
+          ? apiFetch<TenantInvite[]>(`/admin/tenants/${tenantId}/invites`)
+          : Promise.resolve([]),
+      ]);
+      setTenantUsers(users);
+      setTenantInvites(invites);
+    } catch {
+      setTenantUsers([]);
+      setTenantInvites([]);
     }
   }
 
@@ -3348,6 +3571,8 @@ export default function DashboardPage() {
   function renderKnowledge() {
     return (
       <div className="workspaceStack">
+        {renderProjectUsers()}
+
         <section className="panel">
           <div className="panelHeader">
             <div className="panelTitle">
@@ -6002,6 +6227,27 @@ export default function DashboardPage() {
     return `${amount} ${currency ?? ""}/mo`.trim();
   }
 
+  function canManageUsers() {
+    if (adminSession?.authType === "admin_token") {
+      return true;
+    }
+    const role = adminSession?.memberships?.find(
+      (membership) => membership.tenantId === selectedTenant?.id,
+    )?.role;
+    return role ? tenantRoleRank(role) >= tenantRoleRank("tenant_admin") : false;
+  }
+
+  function tenantRoleRank(role: string) {
+    const ranks: Record<string, number> = {
+      viewer: 10,
+      operator: 20,
+      tenant_admin: 30,
+      tenant_owner: 40,
+      platform_owner: 50,
+    };
+    return ranks[role] ?? 0;
+  }
+
   function channelAccountLabel(channel: ChannelConnection["channel"]) {
     if (channel === "telephone") {
       return "Twilio phone number";
@@ -6460,15 +6706,178 @@ export default function DashboardPage() {
           </div>
           <button
             className="primaryButton full"
-            disabled={busy || !adminToken}
+            disabled={busy || (!adminToken && !adminSession)}
             type="button"
             onClick={refreshTenants}
           >
             <RefreshCw size={16} />
             Reconnect
           </button>
+          {adminSession ? (
+            <button
+              className="secondaryButton full"
+              disabled={busy}
+              type="button"
+              onClick={logout}
+            >
+              <X size={16} />
+              Logout
+            </button>
+          ) : null}
         </section>
       </div>
+    );
+  }
+
+  function renderProjectUsers() {
+    const canEdit = canManageUsers();
+
+    return (
+      <section className="panel">
+        <div className="panelHeader">
+          <div className="panelTitle">
+            <UserCheck size={18} />
+            <h2>Project users</h2>
+          </div>
+          <span className="countPill">{tenantUsers.length}</span>
+        </div>
+
+        <div className="userList">
+          {tenantUsers.length ? (
+            tenantUsers.map((user) => (
+              <article key={user.id}>
+                <div>
+                  <strong>{user.name}</strong>
+                  <span>{user.email}</span>
+                </div>
+                <small>{titleCase(user.role)}</small>
+              </article>
+            ))
+          ) : (
+            <div className="emptyState compact">
+              No project users yet. Create the first project owner with the
+              admin token.
+            </div>
+          )}
+        </div>
+
+        {canEdit ? (
+          <>
+            <form className="authManagementForm" onSubmit={createTenantUser}>
+              <div className="formGrid two">
+                <label className="field">
+                  <span>Name</span>
+                  <input
+                    value={newUserName}
+                    onChange={(event) => setNewUserName(event.target.value)}
+                  />
+                </label>
+                <label className="field">
+                  <span>Email</span>
+                  <input
+                    type="email"
+                    value={newUserEmail}
+                    onChange={(event) => setNewUserEmail(event.target.value)}
+                  />
+                </label>
+                <label className="field">
+                  <span>Role</span>
+                  <select
+                    value={newUserRole}
+                    onChange={(event) =>
+                      setNewUserRole(event.target.value as TenantRole)
+                    }
+                  >
+                    <option value="tenant_owner">Owner</option>
+                    <option value="tenant_admin">Admin</option>
+                    <option value="operator">Operator</option>
+                    <option value="viewer">Viewer</option>
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Password</span>
+                  <input
+                    type="password"
+                    value={newUserPassword}
+                    onChange={(event) =>
+                      setNewUserPassword(event.target.value)
+                    }
+                    placeholder="Optional for invite-only users"
+                  />
+                </label>
+              </div>
+              <button className="primaryButton full" disabled={busy}>
+                <Save size={16} />
+                Save project user
+              </button>
+            </form>
+
+            <form className="authManagementForm" onSubmit={createTenantInvite}>
+              <div className="formGrid two">
+                <label className="field">
+                  <span>Invite email</span>
+                  <input
+                    type="email"
+                    value={inviteEmail}
+                    onChange={(event) => setInviteEmail(event.target.value)}
+                  />
+                </label>
+                <label className="field">
+                  <span>Invite role</span>
+                  <select
+                    value={inviteRole}
+                    onChange={(event) =>
+                      setInviteRole(event.target.value as TenantRole)
+                    }
+                  >
+                    <option value="tenant_owner">Owner</option>
+                    <option value="tenant_admin">Admin</option>
+                    <option value="operator">Operator</option>
+                    <option value="viewer">Viewer</option>
+                  </select>
+                </label>
+              </div>
+              <button className="secondaryButton full" disabled={busy}>
+                <Plus size={16} />
+                Create invite link
+              </button>
+            </form>
+
+            {lastInviteUrl ? (
+              <div className="webhookBox">
+                <span>Invite link</span>
+                <code>{lastInviteUrl}</code>
+                <button
+                  className="secondaryButton"
+                  type="button"
+                  onClick={() => copyText(lastInviteUrl, "Invite link")}
+                >
+                  <Copy size={15} />
+                  Copy
+                </button>
+              </div>
+            ) : null}
+
+            {tenantInvites.length ? (
+              <div className="inviteList">
+                {tenantInvites.slice(0, 4).map((invite) => (
+                  <article key={invite.id}>
+                    <strong>{invite.email}</strong>
+                    <span>
+                      {titleCase(invite.roleName)} · {invite.status}
+                    </span>
+                  </article>
+                ))}
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <div className="inlineNotice">
+            <ShieldCheck size={16} />
+            <span>Your role can view users but not create or invite them.</span>
+          </div>
+        )}
+      </section>
     );
   }
 
@@ -6642,7 +7051,7 @@ export default function DashboardPage() {
     return renderSettingsWorkspace();
   }
 
-  if (!adminToken || (!connectionAttempted && !tenants.length)) {
+  if (!connectionAttempted && !tenants.length) {
     return (
       <main className="authShell">
         <section className="authPanel">
@@ -6655,6 +7064,134 @@ export default function DashboardPage() {
               <span>Consultancy assistant admin</span>
             </div>
           </div>
+
+          {deepLink.inviteToken ? (
+            <form className="authForm" onSubmit={acceptInvite}>
+              <label className="field">
+                <span>Name</span>
+                <input
+                  value={inviteName}
+                  onChange={(event) => setInviteName(event.target.value)}
+                  autoComplete="name"
+                  autoFocus
+                />
+              </label>
+              <label className="field">
+                <span>Password</span>
+                <div className="inputIcon">
+                  <KeyRound size={16} />
+                  <input
+                    type="password"
+                    value={invitePassword}
+                    onChange={(event) => setInvitePassword(event.target.value)}
+                    autoComplete="new-password"
+                  />
+                </div>
+              </label>
+              <button
+                className="primaryButton full"
+                disabled={busy || !inviteName || !invitePassword}
+              >
+                {busy ? (
+                  <Loader2 className="spin" size={16} />
+                ) : (
+                  <ShieldCheck size={16} />
+                )}
+                Accept invite
+              </button>
+              {status ? (
+                <span className="status authStatus" data-tone={statusKind}>
+                  {statusKind === "danger" ? (
+                    <AlertCircle size={16} />
+                  ) : (
+                    <CheckCircle2 size={16} />
+                  )}
+                  {status}
+                </span>
+              ) : null}
+            </form>
+          ) : (
+            <>
+          <div className="segmented authModeSwitch">
+            <button
+              data-active={authMode === "login" ? "true" : "false"}
+              type="button"
+              onClick={() => setAuthMode("login")}
+            >
+              User login
+            </button>
+            <button
+              data-active={authMode === "admin_token" ? "true" : "false"}
+              type="button"
+              onClick={() => setAuthMode("admin_token")}
+            >
+              Admin token
+            </button>
+          </div>
+
+          {authMode === "login" ? (
+            <form className="authForm" onSubmit={loginWithPassword}>
+              <label className="field">
+                <span>Email</span>
+                <input
+                  type="email"
+                  value={loginEmail}
+                  onChange={(event) => setLoginEmail(event.target.value)}
+                  autoComplete="email"
+                  autoFocus
+                />
+              </label>
+              <label className="field">
+                <span>Password</span>
+                <div className="inputIcon">
+                  <KeyRound size={16} />
+                  <input
+                    type="password"
+                    value={loginPassword}
+                    onChange={(event) => setLoginPassword(event.target.value)}
+                    autoComplete="current-password"
+                  />
+                </div>
+              </label>
+              {showAdvancedConnection ? (
+                <label className="field">
+                  <span>API base</span>
+                  <input
+                    value={apiBase}
+                    onChange={(event) => setApiBase(event.target.value)}
+                  />
+                </label>
+              ) : null}
+              <button
+                className="primaryButton full"
+                disabled={busy || !loginEmail || !loginPassword}
+              >
+                {busy ? (
+                  <Loader2 className="spin" size={16} />
+                ) : (
+                  <ShieldCheck size={16} />
+                )}
+                Login
+              </button>
+              <button
+                className="textToggle"
+                type="button"
+                onClick={() => setShowAdvancedConnection((current) => !current)}
+              >
+                {showAdvancedConnection ? "Hide advanced" : "Advanced"}
+              </button>
+              {status ? (
+                <span className="status authStatus" data-tone={statusKind}>
+                  {statusKind === "danger" ? (
+                    <AlertCircle size={16} />
+                  ) : (
+                    <CheckCircle2 size={16} />
+                  )}
+                  {status}
+                </span>
+              ) : null}
+            </form>
+          ) : (
           <form
             className="authForm"
             onSubmit={(event) => {
@@ -6713,6 +7250,9 @@ export default function DashboardPage() {
               </span>
             ) : null}
           </form>
+          )}
+            </>
+          )}
         </section>
       </main>
     );
@@ -6786,7 +7326,7 @@ export default function DashboardPage() {
 
           <button
             className="primaryButton full"
-            disabled={busy || !adminToken}
+            disabled={busy || (!adminToken && !adminSession)}
             onClick={refreshTenants}
           >
             {busy ? (
@@ -6796,6 +7336,17 @@ export default function DashboardPage() {
             )}
             {tenants.length ? "Refresh tenants" : "Connect"}
           </button>
+          {adminSession ? (
+            <button
+              className="secondaryButton full"
+              disabled={busy}
+              type="button"
+              onClick={logout}
+            >
+              <X size={16} />
+              Logout
+            </button>
+          ) : null}
         </section>
 
         <section className="sidebarSection grow">

@@ -18,7 +18,7 @@ The product runtime is intentionally separate from any marketing website. A publ
 - Manage WhatsApp templates and view the 24-hour response-window compliance state.
 - Record provider delivery outcomes for social messaging sends.
 - Surface workflow recommendations for handoffs, WhatsApp readiness, and contact completion.
-- Run on Supabase Postgres with `pgvector`, with local Docker Postgres as an optional fallback.
+- Run on Railway Postgres with `pgvector`, with local Docker Postgres as an optional fallback.
 - Use adapter interfaces for Website, WhatsApp, Instagram/Messenger, TikTok, and Telephone.
 - Run core guardrail and tenant-isolation tests without external credentials.
 
@@ -36,9 +36,9 @@ packages/channels Channel adapter contracts and mock/provider skeletons
 docs           Architecture, API, security/GDPR, integration notes
 ```
 
-## Supabase Setup
+## Railway Postgres Setup
 
-Supabase Postgres is the recommended database. Create a Supabase project, open **Connect**, and copy a Postgres connection string. For migrations, use the direct connection or session pooler on port `5432`.
+Railway Postgres is the production database for this project. Add a Railway Postgres service, copy the `DATABASE_URL`, and use that same connection string for the API, workers, voice service, and migrations.
 
 ```bash
 pnpm install
@@ -52,10 +52,10 @@ pnpm dev:api
 Set `DATABASE_URL` in `.env` before running the DB commands:
 
 ```bash
-DATABASE_URL='postgresql://postgres.PROJECT_REF:YOUR_DB_PASSWORD@aws-0-REGION.pooler.supabase.com:5432/postgres?sslmode=require'
+DATABASE_URL='postgresql://USER:PASSWORD@HOST:PORT/railway?sslmode=require'
 ```
 
-See [docs/supabase.md](docs/supabase.md) for the full setup.
+See [docs/supabase.md](docs/supabase.md) for the PostgreSQL setup notes.
 
 ## Optional Local Docker Setup
 
