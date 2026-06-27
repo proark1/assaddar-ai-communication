@@ -6,4 +6,5 @@ export default defineWorkspace([
   "packages/channels/vitest.config.ts",
   "apps/api/vitest.config.ts",
   "apps/workers/vitest.config.ts",
+  "apps/admin/vitest.config.ts",
 ]);
