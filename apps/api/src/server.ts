@@ -27,423 +27,54 @@ import { promisify } from "node:util";
 import { z } from "zod";
 import { openApiDocument } from "./openapi";
 import { AppError } from "./errors";
+import {
+  ParamsTenantSchema,
+  ParamsKnowledgeSchema,
+  ParamsConversationSchema,
+  ParamsHandoffSchema,
+  ParamsAssistantSchema,
+  ParamsMetaChannelSchema,
+  ParamsChannelSchema,
+  CreateTenantSchema,
+  UpdateTenantSchema,
+  AddFaqSchema,
+  UpdateHandoffSchema,
+  TestAssistantSchema,
+  WidgetChatSchema,
+  WidgetLeadSchema,
+  WidgetReadinessSchema,
+  WidgetEventSchema,
+  MetaWebhookQuerySchema,
+  ChannelConnectionSchema,
+  TelephoneProviderSchema,
+  TelephoneNumberTypeSchema,
+  TwilioNumberTypeSchema,
+  TwilioNumberSearchQuerySchema,
+  PurchaseTwilioNumberSchema,
+  ConnectExistingTwilioNumberSchema,
+  NewTelephoneNumberSetupSchema,
+  CarrierForwardingSchema,
+  SipByocSetupSchema,
+  TelephoneSettingsSchema,
+  WhatsappTemplateSchema,
+  WebsiteImportSchema,
+  InstallCheckSchema,
+  LoginSchema,
+  CreateTenantUserSchema,
+  CreateTenantInviteSchema,
+  AcceptTenantInviteSchema,
+  type CreateTenantInput,
+  type UpdateTenantInput,
+  type AddFaqInput,
+  type UpdateHandoffInput,
+  type ChannelConnectionInput,
+  type WhatsappTemplateInput,
+  type WidgetThemeInput,
+  type RoleName,
+} from "./schemas";
 
 const scryptAsync = promisify(scrypt);
 
-const ParamsTenantSchema = z.object({
-  tenantId: z.string().uuid(),
-});
-
-const RoleNameSchema = z.enum([
-  "platform_owner",
-  "tenant_owner",
-  "tenant_admin",
-  "operator",
-  "viewer",
-]);
-
-const ParamsKnowledgeSchema = ParamsTenantSchema.extend({
-  knowledgeId: z.string().uuid(),
-});
-
-const ParamsConversationSchema = ParamsTenantSchema.extend({
-  conversationId: z.string().uuid(),
-});
-
-const ParamsHandoffSchema = ParamsTenantSchema.extend({
-  handoffId: z.string().uuid(),
-});
-
-const ParamsAssistantSchema = z.object({
-  assistantId: z.string().min(8),
-});
-
-const ParamsMetaChannelSchema = z.object({
-  channel: z.enum(["whatsapp", "messenger", "instagram"]),
-});
-
-const ParamsChannelSchema = ParamsTenantSchema.extend({
-  channel: z.enum([
-    "website",
-    "whatsapp",
-    "messenger",
-    "instagram",
-    "telephone",
-  ]),
-});
-
-const CreateTenantSchema = z.object({
-  name: z.string().min(2).max(120),
-  slug: z
-    .string()
-    .min(2)
-    .max(120)
-    .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
-  defaultLocale: z.string().min(2).max(16).optional(),
-  theme: z
-    .object({
-      primaryColor: z.string().optional(),
-      backgroundColor: z.string().optional(),
-      textColor: z.string().optional(),
-      launcherLabel: z.string().optional(),
-      openingMessage: z.string().optional(),
-      language: z.string().optional(),
-    })
-    .optional(),
-});
-
-const AutomationSettingsSchema = z.object({
-  ownerLeadEmailEnabled: z.boolean().optional(),
-  visitorConfirmationEmailEnabled: z.boolean().optional(),
-  autoQualifyReadinessEnabled: z.boolean().optional(),
-  autoQualifyLeadDetailsEnabled: z.boolean().optional(),
-  weeklySummaryEmailEnabled: z.boolean().optional(),
-  staleLeadReminderDays: z.number().int().min(1).max(30).optional(),
-  readinessQualificationScore: z.number().int().min(1).max(100).optional(),
-});
-
-const WidgetThemeSchema = z.object({
-  primaryColor: z.string().min(3).max(32).optional(),
-  backgroundColor: z.string().min(3).max(32).optional(),
-  textColor: z.string().min(3).max(32).optional(),
-  launcherLabel: z.string().min(1).max(40).optional(),
-  openingMessage: z.string().min(1).max(500).optional(),
-  language: z.string().min(2).max(16).optional(),
-  position: z.enum(["bottom-right", "bottom-left"]).optional(),
-  assistantName: z.string().min(1).max(80).optional(),
-  leadCaptureEnabled: z.boolean().optional(),
-  leadCaptureIntro: z.string().min(1).max(500).optional(),
-  leadCaptureFields: z.array(z.string().min(1).max(40)).max(10).optional(),
-  ctaLabel: z.string().min(1).max(80).optional(),
-  ctaUrl: z.string().url().max(500).optional(),
-  bookingUrl: z.string().url().max(500).optional(),
-  consentEnabled: z.boolean().optional(),
-  consentText: z.string().min(1).max(500).optional(),
-  quickReplies: z.array(z.string().min(1).max(120)).max(8).optional(),
-  readinessEnabled: z.boolean().optional(),
-  readinessIntro: z.string().min(1).max(500).optional(),
-  automation: AutomationSettingsSchema.optional(),
-});
-
-const UpdateTenantSchema = z.object({
-  name: z.string().min(2).max(120).optional(),
-  slug: z
-    .string()
-    .min(2)
-    .max(120)
-    .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
-    .optional(),
-  defaultLocale: z.string().min(2).max(16).optional(),
-  tone: z.enum(["friendly", "neutral", "formal"]).optional(),
-  confidenceThreshold: z.number().min(0.05).max(0.95).optional(),
-  maxMessageLength: z.number().int().min(200).max(4000).optional(),
-  retentionDays: z.number().int().min(1).max(3650).optional(),
-  theme: WidgetThemeSchema.optional(),
-});
-
-const AddFaqSchema = z.object({
-  question: z.string().min(3).max(500),
-  answer: z.string().min(3).max(4000),
-  tags: z.array(z.string().min(1).max(60)).max(20).optional(),
-});
-
-const UpdateHandoffSchema = z.object({
-  status: z.enum(["open", "in_progress", "resolved", "dismissed"]).optional(),
-  assignedTo: z.string().max(120).nullable().optional(),
-  pipelineStage: z
-    .enum(["new", "contacted", "qualified", "proposal", "won", "lost"])
-    .optional(),
-  note: z.string().max(1000).optional(),
-});
-
-const TestAssistantSchema = z.object({
-  message: z.string().min(1).max(1200),
-  locale: z.string().min(2).max(16).optional(),
-});
-
-const WidgetChatSchema = z.object({
-  assistantId: z.string().min(8),
-  message: z.string().min(1).max(1200),
-  conversationId: z.string().min(8).max(80).optional(),
-  visitorId: z.string().min(1).max(120).optional(),
-  locale: z.string().min(2).max(16).optional(),
-});
-
-const WidgetLeadSchema = z.object({
-  assistantId: z.string().min(8),
-  conversationId: z.string().min(8).max(80).optional(),
-  visitorId: z.string().min(1).max(120).optional(),
-  pageUrl: z.string().url().max(500).optional(),
-  fields: z
-    .record(z.string().max(1000))
-    .refine(
-      (fields) => Object.values(fields).some((value) => value.trim()),
-      "At least one lead field is required.",
-    ),
-});
-
-const WidgetReadinessSchema = z.object({
-  assistantId: z.string().min(8),
-  conversationId: z.string().min(8).max(80).optional(),
-  visitorId: z.string().min(1).max(120).optional(),
-  pageUrl: z.string().url().max(500).optional(),
-  answers: z
-    .record(z.string().max(1200))
-    .refine(
-      (answers) => Object.values(answers).some((value) => value.trim()),
-      "At least one readiness answer is required.",
-    ),
-});
-
-const WidgetEventSchema = z.object({
-  assistantId: z.string().min(8),
-  conversationId: z.string().min(8).max(80).optional(),
-  visitorId: z.string().min(1).max(120).optional(),
-  pageUrl: z.string().url().max(500).optional(),
-  eventType: z.enum(["widget_open", "quick_reply_clicked", "cta_clicked"]),
-  metadata: z.record(z.unknown()).optional(),
-});
-
-const MetaWebhookQuerySchema = z.object({
-  assistantId: z.string().min(8).optional(),
-});
-
-const ChannelConnectionSchema = z.object({
-  channel: z.enum([
-    "website",
-    "whatsapp",
-    "messenger",
-    "instagram",
-    "telephone",
-  ]),
-  provider: z.string().min(1).max(80),
-  externalAccountId: z.string().max(256).nullable().optional(),
-  status: z.enum(["pending", "connected", "disabled"]).optional(),
-  settings: z.record(z.unknown()).optional(),
-});
-
-const E164PhoneNumberSchema = z
-  .string()
-  .trim()
-  .regex(/^\+[1-9]\d{6,14}$/, "Use E.164 format, for example +49301234567.");
-
-const TelephoneProviderSchema = z.enum([
-  "easybell",
-  "sipgate",
-  "peoplefone",
-  "custom_sip",
-]);
-const TelephoneNumberTypeSchema = z.enum(["local", "mobile", "toll-free"]);
-const TwilioNumberTypeSchema = z.enum(["local", "mobile", "toll-free"]);
-
-const TelephoneCountrySchema = z
-  .string()
-  .trim()
-  .length(2)
-  .default("DE")
-  .transform((value) => value.toUpperCase());
-
-const TwilioNumberSearchQuerySchema = z.object({
-  country: TelephoneCountrySchema,
-  numberType: TwilioNumberTypeSchema.default("local"),
-  contains: z.string().trim().min(1).max(32).optional(),
-  locality: z.string().trim().min(1).max(80).optional(),
-  region: z.string().trim().min(1).max(80).optional(),
-  postalCode: z.string().trim().min(1).max(24).optional(),
-  limit: z.coerce.number().int().min(1).max(50).default(10),
-});
-
-const PurchaseTwilioNumberSchema = z.object({
-  phoneNumber: E164PhoneNumberSchema,
-  numberType: TwilioNumberTypeSchema.default("local"),
-  friendlyName: z.string().trim().min(1).max(120).optional(),
-  bundleSid: z
-    .string()
-    .trim()
-    .regex(/^BU[0-9a-fA-F]{32}$/)
-    .optional(),
-  addressSid: z
-    .string()
-    .trim()
-    .regex(/^AD[0-9a-fA-F]{32}$/)
-    .optional(),
-});
-
-const ConnectExistingTwilioNumberSchema = z
-  .object({
-    phoneNumberSid: z
-      .string()
-      .trim()
-      .regex(/^PN[0-9a-fA-F]{32}$/)
-      .optional(),
-    phoneNumber: E164PhoneNumberSchema.optional(),
-    numberType: TwilioNumberTypeSchema.default("local"),
-  })
-  .refine((input) => input.phoneNumberSid || input.phoneNumber, {
-    message: "Provide a Twilio phone number SID or phone number.",
-  });
-
-const NewTelephoneNumberSetupSchema = z.object({
-  provider: TelephoneProviderSchema.default("easybell"),
-  requestedCountry: TelephoneCountrySchema,
-  numberType: TelephoneNumberTypeSchema.default("local"),
-  areaCode: z.string().trim().min(1).max(24).optional(),
-  locality: z.string().trim().min(1).max(80).optional(),
-  orderedNumber: E164PhoneNumberSchema.optional(),
-  sipRegistrar: z.string().trim().min(3).max(240).optional(),
-  sipUsername: z.string().trim().min(1).max(160).optional(),
-  sipConfigured: z.boolean().default(false),
-  fallbackNumber: E164PhoneNumberSchema.optional(),
-  notes: z.string().trim().max(1000).optional(),
-});
-
-const CarrierForwardingSchema = z.object({
-  provider: TelephoneProviderSchema.default("easybell"),
-  existingNumber: E164PhoneNumberSchema,
-  aiNumber: E164PhoneNumberSchema,
-  carrierName: z.string().trim().min(1).max(120).optional(),
-  forwardingConfirmed: z.boolean().default(false),
-  fallbackNumber: E164PhoneNumberSchema.optional(),
-  notes: z.string().trim().max(1000).optional(),
-});
-
-const SipByocSetupSchema = z.object({
-  provider: TelephoneProviderSchema.default("custom_sip"),
-  carrierName: z.string().trim().min(1).max(120).optional(),
-  sipDomain: z.string().trim().min(3).max(240).optional(),
-  sipRegistrar: z.string().trim().min(3).max(240).optional(),
-  sipUsername: z.string().trim().min(1).max(160).optional(),
-  trunkSid: z.string().trim().min(2).max(160).optional(),
-  inboundSipUri: z.string().trim().min(3).max(240).optional(),
-  publicNumber: E164PhoneNumberSchema.optional(),
-  fallbackNumber: E164PhoneNumberSchema.optional(),
-  sipConfigured: z.boolean().default(false),
-  notes: z.string().trim().max(1000).optional(),
-});
-
-const TelephoneSettingsSchema = z.object({
-  provider: TelephoneProviderSchema.optional(),
-  setupChecklist: z
-    .object({
-      numberOrdered: z.boolean().optional(),
-      sipConfigured: z.boolean().optional(),
-      testCallCompleted: z.boolean().optional(),
-      fallbackSet: z.boolean().optional(),
-      disclosureConfirmed: z.boolean().optional(),
-    })
-    .optional(),
-  businessHours: z
-    .object({
-      mode: z
-        .enum(["always_on", "business_hours", "after_hours_only"])
-        .default("always_on"),
-      timezone: z.string().trim().min(1).max(80).default("Europe/Berlin"),
-      hours: z.string().trim().max(240).optional(),
-      afterHoursAction: z
-        .enum(["answer", "voicemail", "callback", "transfer"])
-        .default("answer"),
-    })
-    .optional(),
-  handoffRules: z
-    .object({
-      lowConfidence: z.boolean().default(true),
-      urgentKeywords: z.boolean().default(true),
-      officeHoursTransfer: z.boolean().default(false),
-      repeatedFailure: z.boolean().default(true),
-      askBeforeTransfer: z.boolean().default(true),
-    })
-    .optional(),
-  gdpr: z
-    .object({
-      disclosureText: z.string().trim().min(1).max(500).optional(),
-      recordingEnabled: z.boolean().default(false),
-      storeTranscripts: z.boolean().default(true),
-      transcriptRetentionDays: z.coerce
-        .number()
-        .int()
-        .min(1)
-        .max(3650)
-        .default(90),
-    })
-    .optional(),
-  voiceQuality: z
-    .object({
-      language: z.string().trim().min(2).max(16).default("de-DE"),
-      speakingStyle: z
-        .enum(["professional", "friendly", "concise"])
-        .default("professional"),
-      maxAnswerLength: z.coerce.number().int().min(160).max(1200).default(450),
-      askBeforeTransfer: z.boolean().default(true),
-    })
-    .optional(),
-  testCall: z
-    .object({
-      status: z.enum(["not_started", "pending", "passed", "failed"]),
-      phoneNumber: E164PhoneNumberSchema.optional(),
-      notes: z.string().trim().max(1000).optional(),
-    })
-    .optional(),
-});
-
-const WhatsappTemplateSchema = z.object({
-  name: z
-    .string()
-    .min(2)
-    .max(80)
-    .regex(/^[a-zA-Z0-9_ -]+$/),
-  language: z.string().min(2).max(16).default("de"),
-  category: z
-    .enum(["marketing", "utility", "authentication"])
-    .default("utility"),
-  status: z
-    .enum(["draft", "submitted", "approved", "rejected", "paused"])
-    .default("draft"),
-  body: z.string().min(5).max(1024),
-  variables: z.array(z.string().min(1).max(80)).max(20).optional(),
-  providerTemplateId: z.string().max(240).nullable().optional(),
-  metadata: z.record(z.unknown()).optional(),
-});
-
-const WebsiteImportSchema = z.object({
-  url: z.string().url().max(500),
-  maxFaqs: z.number().int().min(1).max(12).default(6),
-  maxPages: z.number().int().min(1).max(8).default(1),
-});
-
-const InstallCheckSchema = z.object({
-  url: z.string().url().max(500),
-  assistantId: z.string().min(8),
-  widgetUrl: z.string().url().max(500).optional(),
-});
-
-const LoginSchema = z.object({
-  email: z.string().email().max(240),
-  password: z.string().min(8).max(200),
-});
-
-const CreateTenantUserSchema = z.object({
-  email: z.string().email().max(240),
-  name: z.string().min(1).max(160),
-  role: RoleNameSchema.default("operator"),
-  password: z.string().min(8).max(200).optional(),
-});
-
-const CreateTenantInviteSchema = z.object({
-  email: z.string().email().max(240),
-  role: RoleNameSchema.default("operator"),
-});
-
-const AcceptTenantInviteSchema = z.object({
-  token: z.string().min(24).max(240),
-  name: z.string().min(1).max(160),
-  password: z.string().min(8).max(200),
-});
-
-type CreateTenantInput = z.infer<typeof CreateTenantSchema>;
-type UpdateTenantInput = z.infer<typeof UpdateTenantSchema>;
-type AddFaqInput = z.infer<typeof AddFaqSchema>;
-type UpdateHandoffInput = z.infer<typeof UpdateHandoffSchema>;
-type ChannelConnectionInput = z.infer<typeof ChannelConnectionSchema>;
 type ContactProfileInput = {
   displayName?: string | null;
   email?: string | null;
@@ -452,9 +83,6 @@ type ContactProfileInput = {
   identifiers?: Record<string, string | string[]>;
   metadata?: Record<string, unknown>;
 };
-type WhatsappTemplateInput = z.infer<typeof WhatsappTemplateSchema>;
-type WidgetThemeInput = z.infer<typeof WidgetThemeSchema>;
-type RoleName = z.infer<typeof RoleNameSchema>;
 type AutomationSettings = {
   ownerLeadEmailEnabled: boolean;
   visitorConfirmationEmailEnabled: boolean;
