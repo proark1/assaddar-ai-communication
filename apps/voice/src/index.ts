@@ -140,7 +140,7 @@ app.post("/voice/turn", async (request, reply) => {
     confidence: answer.confidence,
     handoffRecommended: answer.handoffRecommended,
     transferPhoneNumber: answer.handoffRecommended
-      ? transferPhoneNumber ?? null
+      ? (transferPhoneNumber ?? null)
       : null,
   };
 });
@@ -271,14 +271,12 @@ app.post("/twilio/voice", async (request, reply) => {
 
 app.setErrorHandler(async (error, request, reply) => {
   request.log.error(error);
-  return reply
-    .type("text/xml")
-    .send(
-      createTwiMLSay("I cannot answer right now. Please try again later.", {
-        language: twilioVoiceLanguage,
-        voice: twilioVoiceName,
-      }),
-    );
+  return reply.type("text/xml").send(
+    createTwiMLSay("I cannot answer right now. Please try again later.", {
+      language: twilioVoiceLanguage,
+      voice: twilioVoiceName,
+    }),
+  );
 });
 
 process.on("SIGTERM", async () => {

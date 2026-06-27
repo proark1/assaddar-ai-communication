@@ -9,10 +9,12 @@ export const NormalizedInboundEventSchema = z.object({
   externalConversationId: z.string().min(1).optional(),
   externalUserId: z.string().min(1).optional(),
   text: z.string().min(1).max(4000),
-  raw: z.record(z.unknown()).default({})
+  raw: z.record(z.unknown()).default({}),
 });
 
-export type NormalizedInboundEvent = z.infer<typeof NormalizedInboundEventSchema>;
+export type NormalizedInboundEvent = z.infer<
+  typeof NormalizedInboundEventSchema
+>;
 
 export type OutboundMessage = {
   tenantId: string;
@@ -40,7 +42,10 @@ export type ChannelAdapter = {
   channel: Channel;
   provider: string;
   verifyWebhook?(request: WebhookVerificationRequest): string | null;
-  normalizeInbound(payload: unknown, tenantId: string): NormalizedInboundEvent[];
+  normalizeInbound(
+    payload: unknown,
+    tenantId: string,
+  ): NormalizedInboundEvent[];
   sendMessage(message: OutboundMessage): Promise<DeliveryResult>;
 };
 

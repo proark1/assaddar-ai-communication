@@ -4,7 +4,7 @@ import type {
   MessagingWindowPolicy,
   NormalizedInboundEvent,
   OutboundMessage,
-  WebhookVerificationRequest
+  WebhookVerificationRequest,
 } from "./types";
 
 export class WhatsAppCloudAdapter implements ChannelAdapter {
@@ -14,27 +14,39 @@ export class WhatsAppCloudAdapter implements ChannelAdapter {
   constructor(
     private readonly verifyToken: string,
     private readonly accessToken?: string,
-    private readonly graphApiVersion = "v25.0"
+    private readonly graphApiVersion = "v25.0",
   ) {}
 
   verifyWebhook(request: WebhookVerificationRequest): string | null {
-    if (request.mode === "subscribe" && request.verifyToken === this.verifyToken && request.challenge) {
+    if (
+      request.mode === "subscribe" &&
+      request.verifyToken === this.verifyToken &&
+      request.challenge
+    ) {
       return request.challenge;
     }
 
     return null;
   }
 
-  normalizeInbound(payload: unknown, tenantId: string): NormalizedInboundEvent[] {
+  normalizeInbound(
+    payload: unknown,
+    tenantId: string,
+  ): NormalizedInboundEvent[] {
     const events: NormalizedInboundEvent[] = [];
-    const entries = isRecord(payload) && Array.isArray(payload.entry) ? payload.entry : [];
+    const entries =
+      isRecord(payload) && Array.isArray(payload.entry) ? payload.entry : [];
 
     for (const entry of entries) {
-      const changes = isRecord(entry) && Array.isArray(entry.changes) ? entry.changes : [];
+      const changes =
+        isRecord(entry) && Array.isArray(entry.changes) ? entry.changes : [];
       for (const change of changes) {
-        const value = isRecord(change) && isRecord(change.value) ? change.value : undefined;
-        const messages = value && Array.isArray(value.messages) ? value.messages : [];
-        const metadata = value && isRecord(value.metadata) ? value.metadata : undefined;
+        const value =
+          isRecord(change) && isRecord(change.value) ? change.value : undefined;
+        const messages =
+          value && Array.isArray(value.messages) ? value.messages : [];
+        const metadata =
+          value && isRecord(value.metadata) ? value.metadata : undefined;
         const phoneNumberId =
           typeof metadata?.phone_number_id === "string"
             ? metadata.phone_number_id
@@ -45,7 +57,8 @@ export class WhatsAppCloudAdapter implements ChannelAdapter {
           }
 
           const text = readNestedText(message, ["text", "body"]);
-          const from = typeof message.from === "string" ? message.from : undefined;
+          const from =
+            typeof message.from === "string" ? message.from : undefined;
           if (!text) {
             continue;
           }
@@ -57,8 +70,8 @@ export class WhatsAppCloudAdapter implements ChannelAdapter {
             text,
             raw: {
               message,
-              value
-            }
+              value,
+            },
           };
 
           if (phoneNumberId) {
@@ -82,19 +95,19 @@ export class WhatsAppCloudAdapter implements ChannelAdapter {
     if (!this.accessToken) {
       return {
         status: "skipped",
-        detail: "WHATSAPP_ACCESS_TOKEN is not configured."
+        detail: "WHATSAPP_ACCESS_TOKEN is not configured.",
       };
     }
     if (!message.providerAccountId) {
       return {
         status: "skipped",
-        detail: "WhatsApp phone number ID is not mapped to this tenant."
+        detail: "WhatsApp phone number ID is not mapped to this tenant.",
       };
     }
     if (!message.externalUserId) {
       return {
         status: "skipped",
-        detail: "WhatsApp recipient is missing."
+        detail: "WhatsApp recipient is missing.",
       };
     }
 
@@ -104,7 +117,7 @@ export class WhatsAppCloudAdapter implements ChannelAdapter {
         method: "POST",
         headers: {
           authorization: `Bearer ${this.accessToken}`,
-          "content-type": "application/json"
+          "content-type": "application/json",
         },
         body: JSON.stringify({
           messaging_product: "whatsapp",
@@ -112,16 +125,16 @@ export class WhatsAppCloudAdapter implements ChannelAdapter {
           type: "text",
           text: {
             preview_url: false,
-            body: truncateMessage(message.text)
-          }
-        })
-      }
+            body: truncateMessage(message.text),
+          },
+        }),
+      },
     );
 
     if (!response.ok) {
       return {
         status: "skipped",
-        detail: `WhatsApp send failed with ${response.status}.`
+        detail: `WhatsApp send failed with ${response.status}.`,
       };
     }
 
@@ -130,7 +143,7 @@ export class WhatsAppCloudAdapter implements ChannelAdapter {
     };
 
     const result: DeliveryResult = {
-      status: "sent"
+      status: "sent",
     };
     if (body.messages?.[0]?.id) {
       result.providerMessageId = body.messages[0].id;
@@ -146,31 +159,47 @@ export class MetaMessengerAdapter implements ChannelAdapter {
     readonly channel: "instagram" | "messenger",
     private readonly verifyToken: string,
     private readonly pageAccessToken?: string,
-    private readonly graphApiVersion = "v25.0"
+    private readonly graphApiVersion = "v25.0",
   ) {}
 
   verifyWebhook(request: WebhookVerificationRequest): string | null {
-    if (request.mode === "subscribe" && request.verifyToken === this.verifyToken && request.challenge) {
+    if (
+      request.mode === "subscribe" &&
+      request.verifyToken === this.verifyToken &&
+      request.challenge
+    ) {
       return request.challenge;
     }
 
     return null;
   }
 
-  normalizeInbound(payload: unknown, tenantId: string): NormalizedInboundEvent[] {
+  normalizeInbound(
+    payload: unknown,
+    tenantId: string,
+  ): NormalizedInboundEvent[] {
     const events: NormalizedInboundEvent[] = [];
-    const entries = isRecord(payload) && Array.isArray(payload.entry) ? payload.entry : [];
+    const entries =
+      isRecord(payload) && Array.isArray(payload.entry) ? payload.entry : [];
 
     for (const entry of entries) {
-      const accountId = isRecord(entry) && typeof entry.id === "string" ? entry.id : undefined;
-      const messaging = isRecord(entry) && Array.isArray(entry.messaging) ? entry.messaging : [];
+      const accountId =
+        isRecord(entry) && typeof entry.id === "string" ? entry.id : undefined;
+      const messaging =
+        isRecord(entry) && Array.isArray(entry.messaging)
+          ? entry.messaging
+          : [];
       for (const item of messaging) {
         if (!isRecord(item) || !isRecord(item.message)) {
           continue;
         }
 
-        const text = typeof item.message.text === "string" ? item.message.text : undefined;
-        const sender = isRecord(item.sender) && typeof item.sender.id === "string" ? item.sender.id : undefined;
+        const text =
+          typeof item.message.text === "string" ? item.message.text : undefined;
+        const sender =
+          isRecord(item.sender) && typeof item.sender.id === "string"
+            ? item.sender.id
+            : undefined;
         if (!text) {
           continue;
         }
@@ -180,7 +209,7 @@ export class MetaMessengerAdapter implements ChannelAdapter {
           channel: this.channel,
           provider: this.provider,
           text,
-          raw: item
+          raw: item,
         };
 
         if (accountId) {
@@ -203,13 +232,13 @@ export class MetaMessengerAdapter implements ChannelAdapter {
     if (!this.pageAccessToken) {
       return {
         status: "skipped",
-        detail: "MESSENGER_PAGE_ACCESS_TOKEN is not configured."
+        detail: "MESSENGER_PAGE_ACCESS_TOKEN is not configured.",
       };
     }
     if (!message.externalUserId) {
       return {
         status: "skipped",
-        detail: `Meta ${message.channel} recipient is missing.`
+        detail: `Meta ${message.channel} recipient is missing.`,
       };
     }
 
@@ -219,23 +248,23 @@ export class MetaMessengerAdapter implements ChannelAdapter {
         method: "POST",
         headers: {
           authorization: `Bearer ${this.pageAccessToken}`,
-          "content-type": "application/json"
+          "content-type": "application/json",
         },
         body: JSON.stringify({
           recipient: {
-            id: message.externalUserId
+            id: message.externalUserId,
           },
           message: {
-            text: truncateMessage(message.text)
-          }
-        })
-      }
+            text: truncateMessage(message.text),
+          },
+        }),
+      },
     );
 
     if (!response.ok) {
       return {
         status: "skipped",
-        detail: `Meta ${message.channel} send failed with ${response.status}.`
+        detail: `Meta ${message.channel} send failed with ${response.status}.`,
       };
     }
 
@@ -244,7 +273,7 @@ export class MetaMessengerAdapter implements ChannelAdapter {
     };
 
     const result: DeliveryResult = {
-      status: "sent"
+      status: "sent",
     };
     if (body.message_id) {
       result.providerMessageId = body.message_id;
@@ -259,14 +288,18 @@ export const meta24HourMessagingWindow: MessagingWindowPolicy = {
   canRespond(lastUserMessageAt, now) {
     return now.getTime() - lastUserMessageAt.getTime() <= 24 * 60 * 60 * 1000;
   },
-  reason: "Meta Messenger and Instagram messaging require awareness of the standard response window."
+  reason:
+    "Meta Messenger and Instagram messaging require awareness of the standard response window.",
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function readNestedText(value: Record<string, unknown>, path: string[]): string | undefined {
+function readNestedText(
+  value: Record<string, unknown>,
+  path: string[],
+): string | undefined {
   let current: unknown = value;
   for (const segment of path) {
     if (!isRecord(current)) {

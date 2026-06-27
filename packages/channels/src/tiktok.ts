@@ -1,10 +1,18 @@
-import type { ChannelAdapter, DeliveryResult, NormalizedInboundEvent, OutboundMessage } from "./types";
+import type {
+  ChannelAdapter,
+  DeliveryResult,
+  NormalizedInboundEvent,
+  OutboundMessage,
+} from "./types";
 
 export class TikTokBusinessMessagingMockAdapter implements ChannelAdapter {
   readonly channel = "tiktok" as const;
   readonly provider = "tiktok-business-messaging-mock";
 
-  normalizeInbound(payload: unknown, tenantId: string): NormalizedInboundEvent[] {
+  normalizeInbound(
+    payload: unknown,
+    tenantId: string,
+  ): NormalizedInboundEvent[] {
     if (!isRecord(payload) || typeof payload.text !== "string") {
       return [];
     }
@@ -14,7 +22,7 @@ export class TikTokBusinessMessagingMockAdapter implements ChannelAdapter {
       channel: this.channel,
       provider: this.provider,
       text: payload.text,
-      raw: payload
+      raw: payload,
     };
 
     if (typeof payload.threadId === "string") {
@@ -31,7 +39,8 @@ export class TikTokBusinessMessagingMockAdapter implements ChannelAdapter {
   async sendMessage(_message: OutboundMessage): Promise<DeliveryResult> {
     return {
       status: "skipped",
-      detail: "TikTok Business Messaging is mocked until app credentials and partner access are available."
+      detail:
+        "TikTok Business Messaging is mocked until app credentials and partner access are available.",
     };
   }
 }

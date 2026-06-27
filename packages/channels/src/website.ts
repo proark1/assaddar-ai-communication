@@ -1,10 +1,18 @@
-import type { ChannelAdapter, DeliveryResult, NormalizedInboundEvent, OutboundMessage } from "./types";
+import type {
+  ChannelAdapter,
+  DeliveryResult,
+  NormalizedInboundEvent,
+  OutboundMessage,
+} from "./types";
 
 export class WebsiteAdapter implements ChannelAdapter {
   readonly channel = "website" as const;
   readonly provider = "assaddar-widget";
 
-  normalizeInbound(payload: unknown, tenantId: string): NormalizedInboundEvent[] {
+  normalizeInbound(
+    payload: unknown,
+    tenantId: string,
+  ): NormalizedInboundEvent[] {
     if (!isRecord(payload) || typeof payload.message !== "string") {
       return [];
     }
@@ -14,7 +22,7 @@ export class WebsiteAdapter implements ChannelAdapter {
       channel: this.channel,
       provider: this.provider,
       text: payload.message,
-      raw: payload
+      raw: payload,
     };
 
     if (typeof payload.conversationId === "string") {
@@ -31,7 +39,7 @@ export class WebsiteAdapter implements ChannelAdapter {
   async sendMessage(message: OutboundMessage): Promise<DeliveryResult> {
     return {
       status: "sent",
-      detail: `Website replies are returned directly by the API for tenant ${message.tenantId}.`
+      detail: `Website replies are returned directly by the API for tenant ${message.tenantId}.`,
     };
   }
 }
