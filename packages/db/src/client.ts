@@ -4,11 +4,35 @@ import * as schema from "./schema";
 
 export type Database = PostgresJsDatabase<typeof schema>;
 
+/**
+ * The transaction handle passed to `db.transaction((tx) => ...)`. Derived from
+ * the driver's own type so it stays accurate, and exposes the same query
+ * builders as `Database`.
+ */
+export type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
+
+/** Either the root db or an active transaction; both share the query API. */
+export type DbExecutor = Database | Transaction;
+
 export type DatabaseClient = {
   sql: postgres.Sql;
   db: Database;
   close: () => Promise<void>;
 };
+
+/**
+ * Resolve the maximum pool size from `DATABASE_POOL_MAX`, falling back to a
+ * sane default when the var is absent or not a positive integer. Kept generous
+ * (20) so the API can serve more concurrent requests under load.
+ */
+function resolvePoolMax(raw = process.env.DATABASE_POOL_MAX): number {
+  const DEFAULT_POOL_MAX = 20;
+  if (raw === undefined) {
+    return DEFAULT_POOL_MAX;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : DEFAULT_POOL_MAX;
+}
 
 export function createDbClient(
   connectionString = process.env.DATABASE_URL,
@@ -18,7 +42,7 @@ export function createDbClient(
   }
 
   const sql = postgres(connectionString, {
-    max: 10,
+    max: resolvePoolMax(),
     transform: postgres.camel,
   });
 

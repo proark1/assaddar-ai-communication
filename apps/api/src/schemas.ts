@@ -12,6 +12,16 @@ export const RoleNameSchema = z.enum([
   "viewer",
 ]);
 
+/**
+ * Optional pagination query params for list endpoints. Both are coerced from
+ * strings and clamped: `limit` to [1, 100], `offset` to >= 0. Omitting them
+ * preserves the prior default-page behaviour.
+ */
+export const PaginationQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+  offset: z.coerce.number().int().min(0).optional(),
+});
+
 export const ParamsKnowledgeSchema = ParamsTenantSchema.extend({
   knowledgeId: z.string().uuid(),
 });

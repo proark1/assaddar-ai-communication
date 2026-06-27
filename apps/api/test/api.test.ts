@@ -762,6 +762,89 @@ class MemoryPlatformStore
     return handoff;
   }
 
+  async captureWebsiteLead(input: {
+    tenantId: string;
+    channel: Channel;
+    locale?: string | undefined;
+    publicConversationId?: string | undefined;
+    externalUserId?: string | undefined;
+    contact: {
+      displayName?: string | null | undefined;
+      email?: string | null | undefined;
+      phone?: string | null | undefined;
+      company?: string | null | undefined;
+      metadata?: Record<string, unknown> | undefined;
+    };
+    message: string;
+    trace?: Record<string, unknown> | undefined;
+    reason: string;
+    handoffMetadata?: Record<string, unknown> | undefined;
+    idempotencyKey?: string | null | undefined;
+  }) {
+    const conversationInput: Parameters<
+      MemoryPlatformStore["findOrCreateConversation"]
+    >[0] = {
+      tenantId: input.tenantId,
+      channel: input.channel,
+    };
+    if (input.locale !== undefined) {
+      conversationInput.locale = input.locale;
+    }
+    if (input.publicConversationId !== undefined) {
+      conversationInput.publicConversationId = input.publicConversationId;
+    }
+    if (input.externalUserId !== undefined) {
+      conversationInput.externalUserId = input.externalUserId;
+    }
+
+    const conversation = await this.findOrCreateConversation(conversationInput);
+
+    await this.enrichConversationContact({
+      tenantId: input.tenantId,
+      conversationId: conversation.id,
+      channel: input.channel,
+      externalUserId: input.externalUserId ?? null,
+      contact: input.contact,
+    });
+
+    await this.addMessage({
+      tenantId: input.tenantId,
+      conversationId: conversation.id,
+      channel: input.channel,
+      direction: "inbound",
+      role: "user",
+      content: input.message,
+      trace: input.trace ?? {},
+    });
+
+    const key = input.idempotencyKey ?? null;
+    const existing = key
+      ? this.handoffs.find(
+          (handoff) =>
+            handoff.tenantId === input.tenantId &&
+            handoff.conversationId === conversation.id &&
+            (handoff.metadata as Record<string, unknown> | undefined)
+              ?.idempotencyKey === key,
+        )
+      : undefined;
+    if (existing) {
+      return { conversation, handoff: existing };
+    }
+
+    const handoff = await this.createHandoff({
+      tenantId: input.tenantId,
+      conversationId: conversation.id,
+      channel: input.channel,
+      reason: input.reason,
+      message: input.message,
+      ...(input.handoffMetadata ? { metadata: input.handoffMetadata } : {}),
+    });
+    if (key) {
+      handoff.metadata = { ...(handoff.metadata ?? {}), idempotencyKey: key };
+    }
+    return { conversation, handoff };
+  }
+
   async listHandoffs(tenantId: string) {
     return this.handoffs.filter((handoff) => handoff.tenantId === tenantId);
   }
@@ -2569,6 +2652,114 @@ describe("API", () => {
     expect(response.headers["referrer-policy"]).toBe("no-referrer");
     expect(response.headers["content-security-policy"]).toContain(
       "frame-ancestors 'none'",
+    );
+    await app.close();
+  });
+
+  it("threads validated pagination query params into list endpoints", async () => {
+    const store = new MemoryPlatformStore();
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+    });
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+    const handoffsSpy = vi.spyOn(store, "listHandoffs");
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/admin/tenants/${tenant.id}/handoffs?limit=25&offset=50`,
+      headers: { "x-admin-token": "test-token" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(handoffsSpy).toHaveBeenCalledWith(tenant.id, {
+      limit: 25,
+      offset: 50,
+    });
+
+    // Omitting the params leaves them undefined so the store keeps its default.
+    handoffsSpy.mockClear();
+    const defaultResponse = await app.inject({
+      method: "GET",
+      url: `/admin/tenants/${tenant.id}/handoffs`,
+      headers: { "x-admin-token": "test-token" },
+    });
+    expect(defaultResponse.statusCode).toBe(200);
+    expect(handoffsSpy).toHaveBeenCalledWith(tenant.id, {
+      limit: undefined,
+      offset: undefined,
+    });
+    await app.close();
+  });
+
+  it("rejects out-of-range pagination query params", async () => {
+    const store = new MemoryPlatformStore();
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+    });
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/admin/tenants/${tenant.id}/contacts?limit=9999`,
+      headers: { "x-admin-token": "test-token" },
+    });
+
+    expect(response.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it("dedupes retried lead submissions sharing an idempotency key", async () => {
+    const store = new MemoryPlatformStore();
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+    });
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+
+    const payload = {
+      assistantId: tenant.publicId,
+      conversationId: "conv_dedupe_test_000001",
+      visitorId: "visitor-one",
+      fields: {
+        name: "Ada",
+        email: "ada@example.com",
+      },
+    };
+    const headers = { "idempotency-key": "lead-key-123" };
+
+    const first = await app.inject({
+      method: "POST",
+      url: "/widget/leads",
+      headers,
+      payload,
+    });
+    const second = await app.inject({
+      method: "POST",
+      url: "/widget/leads",
+      headers,
+      payload,
+    });
+
+    expect(first.statusCode).toBe(201);
+    expect(second.statusCode).toBe(201);
+    // The retry must not create a second handoff for the same conversation+key.
+    expect(store.handoffs).toHaveLength(1);
+    expect(first.json<{ conversationId: string }>().conversationId).toBe(
+      second.json<{ conversationId: string }>().conversationId,
     );
     await app.close();
   });

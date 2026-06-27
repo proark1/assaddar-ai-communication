@@ -37,6 +37,7 @@ import {
   ParamsAssistantSchema,
   ParamsMetaChannelSchema,
   ParamsChannelSchema,
+  PaginationQuerySchema,
   CreateTenantSchema,
   UpdateTenantSchema,
   AddFaqSchema,
@@ -132,6 +133,12 @@ type StoreAuthSession = {
   memberships: StoreTenantMembership[];
 };
 
+/** Optional pagination for list endpoints; omit for the default page. */
+export type PaginationOptions = {
+  limit?: number | undefined;
+  offset?: number | undefined;
+};
+
 export type PlatformStore = AnswerDataStore &
   HandoffStore & {
     createTenant(input: CreateTenantInput): Promise<unknown>;
@@ -191,9 +198,18 @@ export type PlatformStore = AnswerDataStore &
     ): Promise<unknown>;
     deleteKnowledge(tenantId: string, knowledgeId: string): Promise<void>;
     listKnowledge(tenantId: string): Promise<unknown[]>;
-    listConversations(tenantId: string): Promise<unknown[]>;
-    listUnifiedInbox(tenantId: string): Promise<unknown[]>;
-    listContacts(tenantId: string): Promise<unknown[]>;
+    listConversations(
+      tenantId: string,
+      options?: PaginationOptions,
+    ): Promise<unknown[]>;
+    listUnifiedInbox(
+      tenantId: string,
+      options?: PaginationOptions,
+    ): Promise<unknown[]>;
+    listContacts(
+      tenantId: string,
+      options?: PaginationOptions,
+    ): Promise<unknown[]>;
     listChannelConnections(tenantId: string): Promise<unknown[]>;
     upsertChannelConnection(
       tenantId: string,
@@ -215,7 +231,10 @@ export type PlatformStore = AnswerDataStore &
       externalUserId?: string | null;
       contact: ContactProfileInput;
     }): Promise<unknown>;
-    listHandoffs(tenantId: string): Promise<unknown[]>;
+    listHandoffs(
+      tenantId: string,
+      options?: PaginationOptions,
+    ): Promise<unknown[]>;
     updateHandoff(
       tenantId: string,
       handoffId: string,
@@ -230,6 +249,22 @@ export type PlatformStore = AnswerDataStore &
       locale?: string;
       contact?: ContactProfileInput;
     }): Promise<{ id: string; publicId: string }>;
+    captureWebsiteLead(input: {
+      tenantId: string;
+      channel: Channel;
+      locale?: string;
+      publicConversationId?: string;
+      externalUserId?: string;
+      contact: ContactProfileInput;
+      message: string;
+      trace?: Record<string, unknown>;
+      reason: string;
+      handoffMetadata?: Record<string, unknown>;
+      idempotencyKey?: string | null;
+    }): Promise<{
+      conversation: { id: string; publicId: string };
+      handoff: unknown;
+    }>;
     addMessage(input: {
       tenantId: string;
       conversationId: string;
@@ -1222,7 +1257,8 @@ export async function buildServer(
     { preHandler: requireTenantAccess(options) },
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
-      return options.store.listConversations(tenantId);
+      const pagination = PaginationQuerySchema.parse(request.query);
+      return options.store.listConversations(tenantId, pagination);
     },
   );
 
@@ -1231,7 +1267,8 @@ export async function buildServer(
     { preHandler: requireTenantAccess(options) },
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
-      return options.store.listUnifiedInbox(tenantId);
+      const pagination = PaginationQuerySchema.parse(request.query);
+      return options.store.listUnifiedInbox(tenantId, pagination);
     },
   );
 
@@ -1240,7 +1277,8 @@ export async function buildServer(
     { preHandler: requireTenantAccess(options) },
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
-      return options.store.listContacts(tenantId);
+      const pagination = PaginationQuerySchema.parse(request.query);
+      return options.store.listContacts(tenantId, pagination);
     },
   );
 
@@ -1260,7 +1298,8 @@ export async function buildServer(
     { preHandler: requireTenantAccess(options) },
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
-      return options.store.listHandoffs(tenantId);
+      const pagination = PaginationQuerySchema.parse(request.query);
+      return options.store.listHandoffs(tenantId, pagination);
     },
   );
 
@@ -1651,55 +1690,23 @@ export async function buildServer(
       );
       const pipelineStage = autoQualified ? "qualified" : "new";
 
-      const conversationInput: Parameters<
-        PlatformStore["findOrCreateConversation"]
-      >[0] = {
+      const message = formatLeadCaptureMessage(body.fields, body.pageUrl);
+      const captureInput: Parameters<PlatformStore["captureWebsiteLead"]>[0] = {
         tenantId: tenant.id,
         channel: "website",
         locale: tenant.defaultLocale,
-      };
-      if (body.conversationId) {
-        conversationInput.publicConversationId = body.conversationId;
-      }
-      if (body.visitorId) {
-        conversationInput.externalUserId = body.visitorId;
-      }
-
-      const conversation =
-        await options.store.findOrCreateConversation(conversationInput);
-      const message = formatLeadCaptureMessage(body.fields, body.pageUrl);
-      await options.store.enrichConversationContact({
-        tenantId: tenant.id,
-        conversationId: conversation.id,
-        channel: "website",
-        externalUserId: body.visitorId ?? null,
         contact: contactProfileFromFields(body.fields, {
           pageUrl: body.pageUrl,
           source: "lead_capture",
         }),
-      });
-
-      await options.store.addMessage({
-        tenantId: tenant.id,
-        conversationId: conversation.id,
-        channel: "website",
-        direction: "inbound",
-        role: "user",
-        content: message,
+        message,
         trace: {
           type: "lead_capture",
           fields: body.fields,
           pageUrl: body.pageUrl,
         },
-      });
-
-      const handoff = await options.store.createHandoff({
-        tenantId: tenant.id,
-        conversationId: conversation.id,
-        channel: "website",
         reason: "lead_capture",
-        message,
-        metadata: {
+        handoffMetadata: {
           pipelineStage,
           ...(autoQualified
             ? {
@@ -1708,7 +1715,20 @@ export async function buildServer(
               }
             : {}),
         },
-      });
+      };
+      if (body.conversationId) {
+        captureInput.publicConversationId = body.conversationId;
+      }
+      if (body.visitorId) {
+        captureInput.externalUserId = body.visitorId;
+      }
+      const idempotencyKey = getIdempotencyKey(request.headers);
+      if (idempotencyKey) {
+        captureInput.idempotencyKey = idempotencyKey;
+      }
+
+      const { conversation, handoff } =
+        await options.store.captureWebsiteLead(captureInput);
       const handoffId = getStringProperty(handoff, "id");
 
       if (automation.ownerLeadEmailEnabled) {
@@ -1771,62 +1791,31 @@ export async function buildServer(
       const theme = tenant.theme ?? {};
       const automation = getAutomationSettings(theme);
 
-      const conversationInput: Parameters<
-        PlatformStore["findOrCreateConversation"]
-      >[0] = {
-        tenantId: tenant.id,
-        channel: "website",
-        locale: tenant.defaultLocale,
-      };
-      if (body.conversationId) {
-        conversationInput.publicConversationId = body.conversationId;
-      }
-      if (body.visitorId) {
-        conversationInput.externalUserId = body.visitorId;
-      }
-
-      const conversation =
-        await options.store.findOrCreateConversation(conversationInput);
       const score = scoreReadiness(body.answers);
       const message = formatReadinessMessage(body.answers, score, body.pageUrl);
-      await options.store.enrichConversationContact({
-        tenantId: tenant.id,
-        conversationId: conversation.id,
-        channel: "website",
-        externalUserId: body.visitorId ?? null,
-        contact: contactProfileFromFields(body.answers, {
-          pageUrl: body.pageUrl,
-          source: "readiness_assessment",
-          score,
-        }),
-      });
       const autoQualified =
         automation.autoQualifyReadinessEnabled &&
         score >= automation.readinessQualificationScore;
       const pipelineStage = autoQualified ? "qualified" : "new";
 
-      await options.store.addMessage({
+      const captureInput: Parameters<PlatformStore["captureWebsiteLead"]>[0] = {
         tenantId: tenant.id,
-        conversationId: conversation.id,
         channel: "website",
-        direction: "inbound",
-        role: "user",
-        content: message,
+        locale: tenant.defaultLocale,
+        contact: contactProfileFromFields(body.answers, {
+          pageUrl: body.pageUrl,
+          source: "readiness_assessment",
+          score,
+        }),
+        message,
         trace: {
           type: "readiness_assessment",
           answers: body.answers,
           score,
           pageUrl: body.pageUrl,
         },
-      });
-
-      const handoff = await options.store.createHandoff({
-        tenantId: tenant.id,
-        conversationId: conversation.id,
-        channel: "website",
         reason: "readiness_assessment",
-        message,
-        metadata: {
+        handoffMetadata: {
           pipelineStage,
           score,
           ...(autoQualified
@@ -1836,7 +1825,20 @@ export async function buildServer(
               }
             : {}),
         },
-      });
+      };
+      if (body.conversationId) {
+        captureInput.publicConversationId = body.conversationId;
+      }
+      if (body.visitorId) {
+        captureInput.externalUserId = body.visitorId;
+      }
+      const idempotencyKey = getIdempotencyKey(request.headers);
+      if (idempotencyKey) {
+        captureInput.idempotencyKey = idempotencyKey;
+      }
+
+      const { conversation, handoff } =
+        await options.store.captureWebsiteLead(captureInput);
       const handoffId = getStringProperty(handoff, "id");
 
       await options.store.logUsage({
@@ -3878,6 +3880,20 @@ function asRecord(value: unknown): Record<string, unknown> {
 function getStringProperty(value: unknown, key: string) {
   const record = asRecord(value);
   return typeof record[key] === "string" ? record[key] : undefined;
+}
+
+/**
+ * Read an optional `Idempotency-Key` request header used to dedupe retried lead
+ * / readiness submissions. Returns a trimmed, bounded key, or undefined when
+ * absent. Bounding the length keeps a hostile header from bloating the index.
+ */
+function getIdempotencyKey(
+  headers: Record<string, string | string[] | undefined>,
+): string | undefined {
+  const raw = headers["idempotency-key"];
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  const trimmed = value?.trim();
+  return trimmed ? trimmed.slice(0, 200) : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

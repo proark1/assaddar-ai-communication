@@ -698,6 +698,9 @@ export const handoffRequests = pgTable(
     requesterMessage: text("requester_message").notNull(),
     status: text("status").notNull().default("open"),
     assignedTo: text("assigned_to"),
+    // Optional client-supplied / derived key used to dedupe retried lead and
+    // readiness submissions. Null for handoffs that opt out of idempotency.
+    idempotencyKey: text("idempotency_key"),
     metadata: jsonb("metadata")
       .$type<Record<string, unknown>>()
       .notNull()
@@ -708,6 +711,17 @@ export const handoffRequests = pgTable(
     index("handoff_requests_tenant_status_idx").on(
       table.tenantId,
       table.status,
+    ),
+    // Dedupe retries: only one handoff per (tenant, conversation, key). Partial
+    // so handoffs without a key are unaffected. See migration 0006.
+    uniqueIndex("handoff_requests_idempotency_idx")
+      .on(table.tenantId, table.conversationId, table.idempotencyKey)
+      .where(sql`${table.idempotencyKey} is not null`),
+    // Matches listHandoffs ordering (created_at desc) for the list/pagination
+    // query. See migration 0005_handoff_created_index.sql.
+    index("handoff_requests_tenant_created_idx").on(
+      table.tenantId,
+      table.createdAt.desc(),
     ),
   ],
 );

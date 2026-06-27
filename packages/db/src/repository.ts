@@ -22,7 +22,7 @@ import {
   sql,
   type SQL,
 } from "drizzle-orm";
-import type { Database } from "./client";
+import type { Database, DbExecutor, Transaction } from "./client";
 import {
   allowedIntents,
   auditLogs,
@@ -155,6 +155,41 @@ export type AddFaqInput = {
 
 export type UpdateFaqInput = AddFaqInput;
 
+/**
+ * Optional pagination for list endpoints. Defaults preserve the previous
+ * behaviour (first page, capped page size) so existing callers are unaffected.
+ */
+export type PaginationOptions = {
+  limit?: number | undefined;
+  offset?: number | undefined;
+};
+
+const DEFAULT_LIST_LIMIT = 100;
+const MAX_LIST_LIMIT = 100;
+
+/**
+ * Clamp pagination options to safe bounds. `limit` is clamped to
+ * [1, MAX_LIST_LIMIT] and defaults to DEFAULT_LIST_LIMIT; `offset` is clamped
+ * to >= 0 and defaults to 0. This guards against negative/huge values from
+ * untrusted query params while keeping the default page identical to before.
+ */
+function resolvePagination(options?: PaginationOptions): {
+  limit: number;
+  offset: number;
+} {
+  const rawLimit = options?.limit;
+  const limit =
+    typeof rawLimit === "number" && Number.isFinite(rawLimit)
+      ? Math.min(Math.max(Math.trunc(rawLimit), 1), MAX_LIST_LIMIT)
+      : DEFAULT_LIST_LIMIT;
+  const rawOffset = options?.offset;
+  const offset =
+    typeof rawOffset === "number" && Number.isFinite(rawOffset)
+      ? Math.max(Math.trunc(rawOffset), 0)
+      : 0;
+  return { limit, offset };
+}
+
 export type ConversationRecord = typeof conversations.$inferSelect;
 
 export type MessageRecord = typeof messages.$inferSelect;
@@ -198,7 +233,36 @@ export type WhatsappTemplateInput = {
 };
 
 export class TenantRepository implements AnswerDataStore, HandoffStore {
-  constructor(private readonly db: Database) {}
+  /**
+   * The active executor: the root connection pool, or a transaction handle when
+   * this instance was created via {@link withTransaction}. All query methods go
+   * through `this.db`, so binding it to a tx makes the whole flow atomic.
+   */
+  private readonly db: DbExecutor;
+  /** The root db, used to open transactions. Same object as `db` at the root. */
+  private readonly rootDb: Database;
+
+  constructor(db: Database, executor: DbExecutor = db) {
+    this.rootDb = db;
+    this.db = executor;
+  }
+
+  /**
+   * Run `fn` against a repository bound to a single transaction so a partial
+   * failure rolls back all writes. Nested calls reuse the current tx. Always
+   * opens the tx from the root connection, never from an existing tx handle.
+   */
+  private async withTransaction<T>(
+    fn: (repo: TenantRepository) => Promise<T>,
+  ): Promise<T> {
+    if (this.db !== this.rootDb) {
+      // Already inside a transaction; reuse it.
+      return fn(this);
+    }
+    return this.rootDb.transaction((tx: Transaction) =>
+      fn(new TenantRepository(this.rootDb, tx)),
+    );
+  }
 
   async createTenant(input: CreateTenantInput) {
     const [tenant] = await this.db
@@ -755,40 +819,63 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
   }
 
   async acceptTenantInvite(input: AcceptTenantInviteInput) {
-    const [invite] = await this.db
-      .select()
-      .from(tenantInvites)
-      .where(eq(tenantInvites.tokenHash, input.tokenHash))
-      .limit(1);
+    // Run the whole accept inside a transaction so the invite is claimed and
+    // the user upserted atomically (item 6). The claim is a conditional update
+    // (`where status = 'pending'`) with RETURNING: only one of two concurrent
+    // accepts gets a row back, so the other sees null and bails — no
+    // double-create. Memberships also have a unique (tenant, user) index as a
+    // second line of defence.
+    return this.withTransaction(async (repo) => {
+      const [invite] = await repo.db
+        .select()
+        .from(tenantInvites)
+        .where(eq(tenantInvites.tokenHash, input.tokenHash))
+        .limit(1);
 
-    if (!invite || invite.status !== "pending") {
-      return null;
-    }
-    if (invite.expiresAt.getTime() <= Date.now()) {
-      await this.db
+      if (!invite || invite.status !== "pending") {
+        return null;
+      }
+      if (invite.expiresAt.getTime() <= Date.now()) {
+        await repo.db
+          .update(tenantInvites)
+          .set({ status: "expired", updatedAt: sql`now()` })
+          .where(
+            and(
+              eq(tenantInvites.id, invite.id),
+              eq(tenantInvites.status, "pending"),
+            ),
+          );
+        return null;
+      }
+
+      // Atomically claim the invite; a concurrent accept that already flipped
+      // it to "accepted" makes this match zero rows and we abort.
+      const claimed = await repo.db
         .update(tenantInvites)
-        .set({ status: "expired", updatedAt: sql`now()` })
-        .where(eq(tenantInvites.id, invite.id));
-      return null;
-    }
+        .set({
+          status: "accepted",
+          acceptedAt: sql`now()`,
+          updatedAt: sql`now()`,
+        })
+        .where(
+          and(
+            eq(tenantInvites.id, invite.id),
+            eq(tenantInvites.status, "pending"),
+          ),
+        )
+        .returning({ id: tenantInvites.id });
 
-    const user = await this.upsertTenantUser(invite.tenantId, {
-      email: invite.email,
-      name: input.name,
-      role: normalizeRoleName(invite.roleName),
-      passwordHash: input.passwordHash,
+      if (claimed.length === 0) {
+        return null;
+      }
+
+      return repo.upsertTenantUser(invite.tenantId, {
+        email: invite.email,
+        name: input.name,
+        role: normalizeRoleName(invite.roleName),
+        passwordHash: input.passwordHash,
+      });
     });
-
-    await this.db
-      .update(tenantInvites)
-      .set({
-        status: "accepted",
-        acceptedAt: sql`now()`,
-        updatedAt: sql`now()`,
-      })
-      .where(eq(tenantInvites.id, invite.id));
-
-    return user;
   }
 
   async addFaq(tenantId: string, input: AddFaqInput) {
@@ -1462,18 +1549,24 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       .orderBy(messages.createdAt);
   }
 
-  async listConversations(tenantId: string) {
+  async listConversations(tenantId: string, options?: PaginationOptions) {
     assertTenantId(tenantId);
+    const { limit, offset } = resolvePagination(options);
     return this.db
       .select()
       .from(conversations)
       .where(eq(conversations.tenantId, tenantId))
       .orderBy(desc(conversations.createdAt))
-      .limit(100);
+      .limit(limit)
+      .offset(offset);
   }
 
-  async listUnifiedInbox(tenantId: string) {
+  async listUnifiedInbox(tenantId: string, options?: PaginationOptions) {
     assertTenantId(tenantId);
+    const { limit, offset } = resolvePagination(options);
+    // Fetch enough recent messages to summarise the conversations on this page.
+    // Scales with the page size rather than the hard-coded 400 it used before.
+    const messageFetchLimit = limit * 4;
     const [conversationRows, recentMessages, openHandoffs] = await Promise.all([
       this.db
         .select({
@@ -1497,13 +1590,14 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
         )
         .where(eq(conversations.tenantId, tenantId))
         .orderBy(desc(conversations.updatedAt))
-        .limit(100),
+        .limit(limit)
+        .offset(offset),
       this.db
         .select()
         .from(messages)
         .where(eq(messages.tenantId, tenantId))
         .orderBy(desc(messages.createdAt))
-        .limit(400),
+        .limit(messageFetchLimit),
       this.db
         .select()
         .from(handoffRequests)
@@ -1579,24 +1673,28 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     });
   }
 
-  async listContacts(tenantId: string) {
+  async listContacts(tenantId: string, options?: PaginationOptions) {
     assertTenantId(tenantId);
+    const { limit, offset } = resolvePagination(options);
     return this.db
       .select()
       .from(contacts)
       .where(eq(contacts.tenantId, tenantId))
       .orderBy(desc(contacts.updatedAt))
-      .limit(100);
+      .limit(limit)
+      .offset(offset);
   }
 
-  async listHandoffs(tenantId: string) {
+  async listHandoffs(tenantId: string, options?: PaginationOptions) {
     assertTenantId(tenantId);
+    const { limit, offset } = resolvePagination(options);
     return this.db
       .select()
       .from(handoffRequests)
       .where(eq(handoffRequests.tenantId, tenantId))
       .orderBy(desc(handoffRequests.createdAt))
-      .limit(100);
+      .limit(limit)
+      .offset(offset);
   }
 
   async updateHandoff(
@@ -1717,6 +1815,165 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       .returning();
 
     return handoff;
+  }
+
+  /**
+   * Atomically run the website lead / readiness write flow:
+   * find-or-create conversation -> enrich contact -> store message -> create
+   * handoff. Wrapping these in one transaction means a partial failure rolls
+   * back instead of leaving an orphan conversation/message without a handoff.
+   *
+   * Idempotency (item 5): when `idempotencyKey` is supplied, a retry that hits
+   * the partial unique index on (tenant, conversation, key) reuses the existing
+   * handoff instead of creating a duplicate (insert ... on conflict do nothing,
+   * then select). When no key is supplied the behaviour is identical to the
+   * previous sequential code path. Returns the conversation plus the handoff so
+   * the caller can still send notifications / log usage outside the tx.
+   */
+  async captureWebsiteLead(input: {
+    tenantId: string;
+    channel: Channel;
+    locale?: string;
+    publicConversationId?: string;
+    externalUserId?: string;
+    contact: ContactProfileInput;
+    message: string;
+    trace?: Record<string, unknown>;
+    reason: string;
+    handoffMetadata?: Record<string, unknown>;
+    idempotencyKey?: string | null;
+  }): Promise<{
+    conversation: ConversationRecord;
+    handoff: typeof handoffRequests.$inferSelect | undefined;
+  }> {
+    assertTenantId(input.tenantId);
+    return this.withTransaction(async (repo) => {
+      const conversationInput: Parameters<
+        TenantRepository["findOrCreateConversation"]
+      >[0] = {
+        tenantId: input.tenantId,
+        channel: input.channel,
+      };
+      if (input.locale !== undefined) {
+        conversationInput.locale = input.locale;
+      }
+      if (input.publicConversationId !== undefined) {
+        conversationInput.publicConversationId = input.publicConversationId;
+      }
+      if (input.externalUserId !== undefined) {
+        conversationInput.externalUserId = input.externalUserId;
+      }
+
+      const conversation =
+        await repo.findOrCreateConversation(conversationInput);
+
+      await repo.enrichConversationContact({
+        tenantId: input.tenantId,
+        conversationId: conversation.id,
+        channel: input.channel,
+        externalUserId: input.externalUserId ?? null,
+        contact: input.contact,
+      });
+
+      await repo.addMessage({
+        tenantId: input.tenantId,
+        conversationId: conversation.id,
+        channel: input.channel,
+        direction: "inbound",
+        role: "user",
+        content: input.message,
+        ...(input.trace ? { trace: input.trace } : {}),
+      });
+
+      const handoff = await repo.createHandoffIdempotent({
+        tenantId: input.tenantId,
+        conversationId: conversation.id,
+        channel: input.channel,
+        reason: input.reason,
+        message: input.message,
+        ...(input.handoffMetadata ? { metadata: input.handoffMetadata } : {}),
+        idempotencyKey: input.idempotencyKey ?? null,
+      });
+
+      return { conversation, handoff };
+    });
+  }
+
+  /**
+   * Like {@link createHandoff} but dedupes on `idempotencyKey` when present. A
+   * concurrent or retried call with the same (tenant, conversation, key) reuses
+   * the row created first via `on conflict do nothing` + select. With a null key
+   * it behaves exactly like {@link createHandoff}.
+   */
+  private async createHandoffIdempotent(input: {
+    tenantId: string;
+    conversationId: string;
+    channel: Channel;
+    reason: string;
+    message: string;
+    metadata?: Record<string, unknown>;
+    idempotencyKey?: string | null;
+  }): Promise<typeof handoffRequests.$inferSelect | undefined> {
+    const metadata =
+      input.reason === "lead_capture" || input.reason === "readiness_assessment"
+        ? { pipelineStage: "new", ...(input.metadata ?? {}) }
+        : (input.metadata ?? {});
+
+    const key = input.idempotencyKey ?? null;
+
+    if (!key) {
+      const [handoff] = await this.db
+        .insert(handoffRequests)
+        .values({
+          tenantId: input.tenantId,
+          conversationId: input.conversationId,
+          channel: input.channel,
+          reason: input.reason,
+          requesterMessage: input.message,
+          metadata,
+        })
+        .returning();
+      return handoff;
+    }
+
+    const [inserted] = await this.db
+      .insert(handoffRequests)
+      .values({
+        tenantId: input.tenantId,
+        conversationId: input.conversationId,
+        channel: input.channel,
+        reason: input.reason,
+        requesterMessage: input.message,
+        metadata,
+        idempotencyKey: key,
+      })
+      .onConflictDoNothing({
+        target: [
+          handoffRequests.tenantId,
+          handoffRequests.conversationId,
+          handoffRequests.idempotencyKey,
+        ],
+      })
+      .returning();
+
+    if (inserted) {
+      return inserted;
+    }
+
+    // A row with this key already existed (retry): return it instead of a dup.
+    const [existing] = await this.db
+      .select()
+      .from(handoffRequests)
+      .where(
+        and(
+          eq(handoffRequests.tenantId, input.tenantId),
+          eq(handoffRequests.conversationId, input.conversationId),
+          eq(handoffRequests.idempotencyKey, key),
+        ),
+      )
+      .limit(1);
+
+    return existing;
   }
 
   async logUsage(input: {
