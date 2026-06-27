@@ -5,6 +5,7 @@ type WidgetTheme = {
   launcherLabel?: string;
   openingMessage?: string;
   language?: string;
+  locale?: string;
   position?: "bottom-right" | "bottom-left";
   assistantName?: string;
   leadCaptureEnabled?: boolean;
@@ -67,6 +68,209 @@ type WidgetState = {
   messages: StoredMessage[];
 };
 
+type StringKey =
+  | "closeChat"
+  | "sendMessage"
+  | "launcherAriaLabel"
+  | "panelAriaLabel"
+  | "messagesAriaLabel"
+  | "composerInputLabel"
+  | "composerInputPlaceholder"
+  | "consentText"
+  | "consentAccept"
+  | "intakePrompt"
+  | "intakeQuestion"
+  | "intakeQuestionTag"
+  | "intakeReadiness"
+  | "intakeReadinessTag"
+  | "intakeLead"
+  | "intakeLeadTag"
+  | "readinessIntro"
+  | "readinessGoal"
+  | "readinessProcessPain"
+  | "readinessSystems"
+  | "readinessTimeline"
+  | "readinessBudget"
+  | "readinessSubmit"
+  | "leadIntro"
+  | "leadSubmit"
+  | "modeReadinessReply"
+  | "modeLeadReply"
+  | "modeQuestionReply"
+  | "readinessScore"
+  | "readinessQualifiedBooking"
+  | "readinessQualifiedNoBooking"
+  | "readinessError"
+  | "leadThanks"
+  | "leadBooking"
+  | "leadError"
+  | "chatError"
+  | "openingMessage"
+  | "leadFieldName"
+  | "leadFieldEmail"
+  | "leadFieldPhone"
+  | "leadFieldCompany"
+  | "leadFieldProjectType"
+  | "leadFieldBudget"
+  | "leadFieldTimeline"
+  | "leadFieldContactPreference"
+  | "leadFieldMessage"
+  | "contactPreferenceEmail"
+  | "contactPreferencePhone"
+  | "contactPreferenceVideoCall";
+
+type StringSet = Record<StringKey, string>;
+
+const STRINGS: Record<string, StringSet> = {
+  de: {
+    closeChat: "Chat schließen",
+    sendMessage: "Nachricht senden",
+    launcherAriaLabel: "Chat öffnen",
+    panelAriaLabel: "Chat-Fenster",
+    messagesAriaLabel: "Nachrichtenverlauf",
+    composerInputLabel: "Ihre Nachricht",
+    composerInputPlaceholder: "Nachricht schreiben …",
+    consentText:
+      "Dieser Assistent nutzt freigegebene Geschäftsinformationen und speichert Nachrichten, damit das Team nachfassen kann.",
+    consentAccept: "Akzeptieren",
+    intakePrompt: "Was möchten Sie als Nächstes tun?",
+    intakeQuestion: "Eine Frage stellen",
+    intakeQuestionTag: "Chat",
+    intakeReadiness: "KI-Readiness prüfen",
+    intakeReadinessTag: "Check",
+    intakeLead: "Beratung anfragen",
+    intakeLeadTag: "Kontakt",
+    readinessIntro:
+      "Prüfen Sie, ob Ihr Unternehmen bereit für ein sinnvolles KI-Automatisierungsprojekt ist.",
+    readinessGoal: "Wichtigstes KI-Ziel",
+    readinessProcessPain: "Aufwendigster manueller Prozess",
+    readinessSystems: "Aktuelle Systeme, Tools oder Datenquellen",
+    readinessTimeline: "Zeitrahmen",
+    readinessBudget: "Budgetrahmen",
+    readinessSubmit: "Readiness prüfen",
+    leadIntro: "Hinterlassen Sie Ihre Daten und wir melden uns bei Ihnen.",
+    leadSubmit: "Daten senden",
+    modeReadinessReply:
+      "Gerne. Beantworten Sie kurz die Fragen, dann schätze ich die KI-Readiness ein.",
+    modeLeadReply:
+      "Gerne. Hinterlassen Sie kurz Ihre Daten, dann kann Assad Dar passend nachfassen.",
+    modeQuestionReply: "Stellen Sie Ihre Frage direkt hier im Chat.",
+    readinessScore: "KI-Readiness-Score: {score}/100. {recommendation}",
+    readinessQualifiedBooking:
+      "Das sieht nach einem qualifizierten Use Case aus. Hier können Sie direkt einen Termin buchen: {url}",
+    readinessQualifiedNoBooking:
+      "Das sieht nach einem qualifizierten Use Case aus. Der nächste sinnvolle Schritt ist ein kurzes Erstgespräch.",
+    readinessError:
+      "Ich konnte den Readiness-Check gerade nicht absenden. Bitte versuchen Sie es später erneut.",
+    leadThanks:
+      "Danke. Ihre Anfrage ist angekommen und wird von Assad Dar geprüft.",
+    leadBooking:
+      "Wenn Sie möchten, können Sie auch direkt einen Termin buchen: {url}",
+    leadError:
+      "Ich konnte Ihre Daten gerade nicht senden. Bitte versuchen Sie es später erneut.",
+    chatError:
+      "Ich kann diese Nachricht gerade nicht senden. Bitte versuchen Sie es später erneut.",
+    openingMessage: "Hallo, wie kann ich helfen?",
+    leadFieldName: "Name",
+    leadFieldEmail: "E-Mail",
+    leadFieldPhone: "Telefon",
+    leadFieldCompany: "Unternehmen",
+    leadFieldProjectType: "Projektart",
+    leadFieldBudget: "Budget",
+    leadFieldTimeline: "Zeitrahmen",
+    leadFieldContactPreference: "Bevorzugter Kontakt",
+    leadFieldMessage: "Nachricht",
+    contactPreferenceEmail: "E-Mail",
+    contactPreferencePhone: "Telefon",
+    contactPreferenceVideoCall: "Videoanruf",
+  },
+  en: {
+    closeChat: "Close chat",
+    sendMessage: "Send message",
+    launcherAriaLabel: "Open chat",
+    panelAriaLabel: "Chat window",
+    messagesAriaLabel: "Message history",
+    composerInputLabel: "Your message",
+    composerInputPlaceholder: "Write a message …",
+    consentText:
+      "This assistant uses approved business information and stores messages so the team can follow up.",
+    consentAccept: "Accept",
+    intakePrompt: "What would you like to do next?",
+    intakeQuestion: "Ask a question",
+    intakeQuestionTag: "Chat",
+    intakeReadiness: "Check AI readiness",
+    intakeReadinessTag: "Check",
+    intakeLead: "Request a consultation",
+    intakeLeadTag: "Contact",
+    readinessIntro:
+      "Check whether your company is ready for a useful AI automation project.",
+    readinessGoal: "Main AI goal",
+    readinessProcessPain: "Most painful manual process",
+    readinessSystems: "Current systems, tools, or data sources",
+    readinessTimeline: "Timeline",
+    readinessBudget: "Budget range",
+    readinessSubmit: "Check readiness",
+    leadIntro: "Leave your details and we will follow up.",
+    leadSubmit: "Send details",
+    modeReadinessReply:
+      "Happy to help. Answer a few quick questions and I'll estimate your AI readiness.",
+    modeLeadReply:
+      "Happy to help. Leave your details and Assad Dar will follow up.",
+    modeQuestionReply: "Ask your question right here in the chat.",
+    readinessScore: "AI readiness score: {score}/100. {recommendation}",
+    readinessQualifiedBooking:
+      "This looks like a qualified use case. You can book a meeting directly here: {url}",
+    readinessQualifiedNoBooking:
+      "This looks like a qualified use case. The next sensible step is a short intro call.",
+    readinessError:
+      "I couldn't submit the readiness check right now. Please try again later.",
+    leadThanks:
+      "Thanks. Your request has arrived and will be reviewed by Assad Dar.",
+    leadBooking: "If you'd like, you can also book a meeting directly: {url}",
+    leadError:
+      "I couldn't send your details right now. Please try again later.",
+    chatError: "I can't send this message right now. Please try again later.",
+    openingMessage: "Hi, how can I help?",
+    leadFieldName: "Name",
+    leadFieldEmail: "Email",
+    leadFieldPhone: "Phone",
+    leadFieldCompany: "Company",
+    leadFieldProjectType: "Project type",
+    leadFieldBudget: "Budget",
+    leadFieldTimeline: "Timeline",
+    leadFieldContactPreference: "Contact preference",
+    leadFieldMessage: "Message",
+    contactPreferenceEmail: "Email",
+    contactPreferencePhone: "Phone",
+    contactPreferenceVideoCall: "Video call",
+  },
+};
+
+const DEFAULT_LOCALE = "de";
+
+function resolveLocale(locale?: string) {
+  if (!locale) {
+    return DEFAULT_LOCALE;
+  }
+  const normalized = locale.toLowerCase().split("-")[0] ?? DEFAULT_LOCALE;
+  return normalized in STRINGS ? normalized : DEFAULT_LOCALE;
+}
+
+function makeTranslator(locale?: string) {
+  const resolved = resolveLocale(locale);
+  const fallback = STRINGS[DEFAULT_LOCALE] as StringSet;
+  const primary = STRINGS[resolved] ?? fallback;
+  return (key: StringKey, vars?: Record<string, string | number>): string => {
+    const template = primary[key] ?? fallback[key] ?? "";
+    if (!vars) {
+      return template;
+    }
+    return template.replace(/\{(\w+)\}/g, (match: string, name: string) =>
+      name in vars ? String(vars[name]) : match,
+    );
+  };
+}
+
 void (() => {
   const currentScript = findWidgetScript();
   const assistantId = currentScript?.dataset.assistantId;
@@ -90,14 +294,18 @@ void (() => {
     const config = await fetchJson<WidgetConfig>(
       `${baseUrl}/widget/config/${publicAssistantId}`,
     );
+    const locale =
+      config.theme.locale ?? config.theme.language ?? config.defaultLocale;
+    const t = makeTranslator(locale);
     const root = document.createElement("div");
     root.dataset.assaddarWidgetRoot = publicAssistantId;
+    root.lang = resolveLocale(locale);
     document.body.appendChild(root);
 
     const shadow = root.attachShadow({ mode: "open" });
     const state = createState(
       publicAssistantId,
-      config.theme.openingMessage ?? "Hi, how can I help?",
+      config.theme.openingMessage ?? t("openingMessage"),
     );
     render(shadow, {
       apiBase: baseUrl,
@@ -115,6 +323,9 @@ void (() => {
     },
   ) {
     const { config, state } = context;
+    const locale =
+      config.theme.locale ?? config.theme.language ?? config.defaultLocale;
+    const t = makeTranslator(locale);
     const primaryColor = config.theme.primaryColor ?? "#a66e2f";
     const backgroundColor = config.theme.backgroundColor ?? "#ffffff";
     const textColor = config.theme.textColor ?? "#16191e";
@@ -156,6 +367,17 @@ void (() => {
     shadow.innerHTML = `
     <style>
       :host { all: initial; }
+      .assaddar-shell :focus-visible {
+        outline: 2px solid ${primaryColor};
+        outline-offset: 2px;
+        border-radius: 4px;
+      }
+      .assaddar-shell .close:focus-visible,
+      .assaddar-shell .composer button:focus-visible,
+      .assaddar-shell .launcher:focus-visible {
+        outline-color: #fff;
+        box-shadow: 0 0 0 2px ${primaryColor};
+      }
       .assaddar-shell {
         position: fixed;
         z-index: 2147483000;
@@ -432,61 +654,61 @@ void (() => {
       }
     </style>
     <div class="assaddar-shell">
-      <div class="panel" part="panel">
+      <div class="panel" part="panel" role="dialog" aria-modal="true" aria-label="${escapeHtml(t("panelAriaLabel"))}" tabindex="-1">
         <div class="header">
           <div>
             <strong>${escapeHtml(assistantName)}</strong>
-            <span>${escapeHtml(config.defaultLocale.toUpperCase())}</span>
+            <span>${escapeHtml(resolveLocale(locale).toUpperCase())}</span>
           </div>
-          <button class="close" aria-label="Close chat">×</button>
+          <button class="close" type="button" aria-label="${escapeHtml(t("closeChat"))}">×</button>
         </div>
-        <div class="messages" part="messages"></div>
+        <div class="messages" part="messages" role="log" aria-live="polite" aria-relevant="additions text" aria-label="${escapeHtml(t("messagesAriaLabel"))}"></div>
 	        <div class="consent" data-visible="${consentVisible ? "true" : "false"}">
-	          <p>${escapeHtml(config.theme.consentText ?? "This assistant uses approved business information and stores messages so the team can follow up.")}</p>
-	          <button type="button">Accept</button>
+	          <p>${escapeHtml(config.theme.consentText ?? t("consentText"))}</p>
+	          <button type="button">${escapeHtml(t("consentAccept"))}</button>
 	        </div>
-	        <div class="intake-modes" data-visible="${modeChooserVisible ? "true" : "false"}">
-	          <p>Was moechten Sie als Naechstes tun?</p>
-	          <button type="button" data-mode="question"><span>Eine Frage stellen</span><strong>Chat</strong></button>
+	        <div class="intake-modes" data-visible="${modeChooserVisible ? "true" : "false"}" role="group" aria-label="${escapeHtml(t("intakePrompt"))}">
+	          <p>${escapeHtml(t("intakePrompt"))}</p>
+	          <button type="button" data-mode="question" aria-label="${escapeHtml(t("intakeQuestion"))}"><span>${escapeHtml(t("intakeQuestion"))}</span><strong>${escapeHtml(t("intakeQuestionTag"))}</strong></button>
 	          ${
               readinessAvailable
-                ? `<button type="button" data-mode="readiness"><span>KI-Readiness pruefen</span><strong>Check</strong></button>`
+                ? `<button type="button" data-mode="readiness" aria-label="${escapeHtml(t("intakeReadiness"))}"><span>${escapeHtml(t("intakeReadiness"))}</span><strong>${escapeHtml(t("intakeReadinessTag"))}</strong></button>`
                 : ""
             }
 	          ${
               leadCaptureAvailable
-                ? `<button type="button" data-mode="lead"><span>Beratung anfragen</span><strong>Kontakt</strong></button>`
+                ? `<button type="button" data-mode="lead" aria-label="${escapeHtml(t("intakeLead"))}"><span>${escapeHtml(t("intakeLead"))}</span><strong>${escapeHtml(t("intakeLeadTag"))}</strong></button>`
                 : ""
             }
 	        </div>
-	        <div class="quick-replies" data-visible="${quickRepliesVisible ? "true" : "false"}">
+	        <div class="quick-replies" data-visible="${quickRepliesVisible ? "true" : "false"}" role="group" aria-label="${escapeHtml(t("intakePrompt"))}">
 	          ${quickReplies
               .map(
                 (reply) =>
-                  `<button type="button" data-action="${inferQuickReplyAction(reply)}">${escapeHtml(reply)}</button>`,
+                  `<button type="button" data-action="${inferQuickReplyAction(reply)}" aria-label="${escapeHtml(reply)}">${escapeHtml(reply)}</button>`,
               )
               .join("")}
         </div>
-        <form class="readiness-form" data-visible="${readinessVisible && !consentVisible ? "true" : "false"}">
-          <p>${escapeHtml(config.theme.readinessIntro ?? "Check whether your company is ready for a useful AI automation project.")}</p>
-          <input name="goal" placeholder="Main AI goal" />
-          <textarea name="processPain" rows="2" placeholder="Most painful manual process"></textarea>
-          <input name="systems" placeholder="Current systems, tools, or data sources" />
-          <input name="timeline" placeholder="Timeline" />
-          <input name="budget" placeholder="Budget range" />
-          <button class="primary">Check readiness</button>
+        <form class="readiness-form" data-visible="${readinessVisible && !consentVisible ? "true" : "false"}" aria-label="${escapeHtml(t("readinessSubmit"))}">
+          <p>${escapeHtml(config.theme.readinessIntro ?? t("readinessIntro"))}</p>
+          <input name="goal" aria-label="${escapeHtml(t("readinessGoal"))}" placeholder="${escapeHtml(t("readinessGoal"))}" />
+          <textarea name="processPain" rows="2" aria-label="${escapeHtml(t("readinessProcessPain"))}" placeholder="${escapeHtml(t("readinessProcessPain"))}"></textarea>
+          <input name="systems" aria-label="${escapeHtml(t("readinessSystems"))}" placeholder="${escapeHtml(t("readinessSystems"))}" />
+          <input name="timeline" aria-label="${escapeHtml(t("readinessTimeline"))}" placeholder="${escapeHtml(t("readinessTimeline"))}" />
+          <input name="budget" aria-label="${escapeHtml(t("readinessBudget"))}" placeholder="${escapeHtml(t("readinessBudget"))}" />
+          <button class="primary">${escapeHtml(t("readinessSubmit"))}</button>
         </form>
-	        <form class="lead-form" data-visible="${leadCaptureVisible && !consentVisible ? "true" : "false"}">
-	          <strong>${escapeHtml(config.theme.leadCaptureIntro ?? "Leave your details and we will follow up.")}</strong>
-	          ${leadFields.map((field) => renderLeadField(field)).join("")}
-          <button>Send details</button>
+	        <form class="lead-form" data-visible="${leadCaptureVisible && !consentVisible ? "true" : "false"}" aria-label="${escapeHtml(t("leadSubmit"))}">
+	          <strong>${escapeHtml(config.theme.leadCaptureIntro ?? t("leadIntro"))}</strong>
+	          ${leadFields.map((field) => renderLeadField(field, t)).join("")}
+          <button>${escapeHtml(t("leadSubmit"))}</button>
         </form>
         <form class="composer">
-          <input maxlength="${config.limits.maxMessageLength}" autocomplete="off" />
-          <button aria-label="Send message">›</button>
+          <input maxlength="${config.limits.maxMessageLength}" autocomplete="off" aria-label="${escapeHtml(t("composerInputLabel"))}" placeholder="${escapeHtml(t("composerInputPlaceholder"))}" />
+          <button type="submit" aria-label="${escapeHtml(t("sendMessage"))}">›</button>
         </form>
       </div>
-      <button class="launcher">${escapeHtml(launcherLabel)}</button>
+      <button class="launcher" aria-label="${escapeHtml(launcherLabel)}" aria-haspopup="dialog" aria-expanded="false">${escapeHtml(launcherLabel)}</button>
     </div>
   `;
 
@@ -534,12 +756,15 @@ void (() => {
     const messagesEl = messages;
     const inputEl = input;
     const sendButtonEl = sendButton;
+    const panelEl = panel;
+    const launcherEl = launcher;
 
     drawMessages(messagesEl, state.messages, context.config.theme);
 
-    launcher.addEventListener("click", () => {
-      panel.classList.add("open");
-      launcher.style.display = "none";
+    function openPanel() {
+      panelEl.classList.add("open");
+      launcherEl.style.display = "none";
+      launcherEl.setAttribute("aria-expanded", "true");
       if (window.matchMedia("(min-width: 641px)").matches) {
         inputEl.focus();
       }
@@ -548,11 +773,24 @@ void (() => {
         persistState(context.config.assistantId, state);
         void trackWidgetEvent(context, state, "widget_open");
       }
-    });
+    }
 
-    close.addEventListener("click", () => {
-      panel.classList.remove("open");
-      launcher.style.display = "inline-flex";
+    function closePanel() {
+      panelEl.classList.remove("open");
+      launcherEl.style.display = "inline-flex";
+      launcherEl.setAttribute("aria-expanded", "false");
+      launcherEl.focus();
+    }
+
+    launcher.addEventListener("click", openPanel);
+
+    close.addEventListener("click", closePanel);
+
+    panel.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closePanel();
+      }
     });
 
     consentButton?.addEventListener("click", () => {
@@ -600,7 +838,7 @@ void (() => {
           readinessForm.dataset.visible = "true";
           state.messages.push({
             role: "assistant",
-            text: "Gerne. Beantworten Sie kurz die Fragen, dann schaetze ich die KI-Readiness ein.",
+            text: t("modeReadinessReply"),
           });
           persistState(context.config.assistantId, state);
           drawMessages(messagesEl, state.messages, context.config.theme);
@@ -611,7 +849,7 @@ void (() => {
           leadForm.dataset.visible = "true";
           state.messages.push({
             role: "assistant",
-            text: "Gerne. Hinterlassen Sie kurz Ihre Daten, dann kann Assad Dar passend nachfassen.",
+            text: t("modeLeadReply"),
           });
           persistState(context.config.assistantId, state);
           drawMessages(messagesEl, state.messages, context.config.theme);
@@ -623,7 +861,7 @@ void (() => {
         }
         state.messages.push({
           role: "assistant",
-          text: "Stellen Sie Ihre Frage direkt hier im Chat.",
+          text: t("modeQuestionReply"),
         });
         persistState(context.config.assistantId, state);
         drawMessages(messagesEl, state.messages, context.config.theme);
@@ -647,7 +885,7 @@ void (() => {
           leadForm.dataset.visible = "false";
           state.messages.push({
             role: "assistant",
-            text: "Gerne. Beantworten Sie kurz die Fragen, dann schaetze ich die KI-Readiness ein.",
+            text: t("modeReadinessReply"),
           });
           persistState(context.config.assistantId, state);
           drawMessages(messagesEl, state.messages, context.config.theme);
@@ -661,7 +899,7 @@ void (() => {
           readinessForm.dataset.visible = "false";
           state.messages.push({
             role: "assistant",
-            text: "Gerne. Hinterlassen Sie kurz Ihre Daten, dann kann Assad Dar passend nachfassen.",
+            text: t("modeLeadReply"),
           });
           persistState(context.config.assistantId, state);
           drawMessages(messagesEl, state.messages, context.config.theme);
@@ -723,11 +961,14 @@ void (() => {
         state.messages.push({
           role: "assistant",
           text: [
-            `AI readiness score: ${response.score}/100. ${response.recommendation}`,
+            t("readinessScore", {
+              score: response.score,
+              recommendation: response.recommendation,
+            }),
             response.qualified
               ? readinessBookingUrl
-                ? `Das sieht nach einem qualifizierten Use Case aus. Hier koennen Sie direkt einen Termin buchen: ${readinessBookingUrl}`
-                : "Das sieht nach einem qualifizierten Use Case aus. Der naechste sinnvolle Schritt ist ein kurzes Erstgespraech."
+                ? t("readinessQualifiedBooking", { url: readinessBookingUrl })
+                : t("readinessQualifiedNoBooking")
               : "",
           ]
             .filter(Boolean)
@@ -739,7 +980,7 @@ void (() => {
       } catch {
         state.messages.push({
           role: "assistant",
-          text: "I couldn't submit the readiness check right now. Please try again later.",
+          text: t("readinessError"),
         });
         drawMessages(messagesEl, state.messages, context.config.theme);
       } finally {
@@ -790,10 +1031,8 @@ void (() => {
         state.messages.push({
           role: "assistant",
           text: [
-            "Danke. Ihre Anfrage ist angekommen und wird von Assad Dar geprueft.",
-            leadBookingUrl
-              ? `Wenn Sie moechten, koennen Sie auch direkt einen Termin buchen: ${leadBookingUrl}`
-              : "",
+            t("leadThanks"),
+            leadBookingUrl ? t("leadBooking", { url: leadBookingUrl }) : "",
           ]
             .filter(Boolean)
             .join("\n"),
@@ -804,7 +1043,7 @@ void (() => {
       } catch {
         state.messages.push({
           role: "assistant",
-          text: "I couldn't send your details right now. Please try again later.",
+          text: t("leadError"),
         });
         drawMessages(messagesEl, state.messages, context.config.theme);
       } finally {
@@ -850,7 +1089,7 @@ void (() => {
       } catch {
         state.messages.push({
           role: "assistant",
-          text: "I can't send this message right now. Please try again later.",
+          text: t("chatError"),
         });
       } finally {
         sendButtonEl.disabled = false;
@@ -940,18 +1179,24 @@ void (() => {
     return Array.from(new Set(values)).slice(0, 8);
   }
 
-  function renderLeadField(field: string) {
-    const label = escapeHtml(leadFieldLabel(field));
+  function renderLeadField(
+    field: string,
+    t: (key: StringKey, vars?: Record<string, string | number>) => string,
+  ) {
+    const label = escapeHtml(leadFieldLabel(field, t));
     if (field === "message") {
-      return `<textarea name="${field}" rows="3" placeholder="${label}"></textarea>`;
+      return `<textarea name="${field}" rows="3" aria-label="${label}" placeholder="${label}"></textarea>`;
     }
     if (field === "contactPreference") {
-      return `<select name="${field}"><option value="">${label}</option><option value="Email">Email</option><option value="Phone">Phone</option><option value="Video call">Video call</option></select>`;
+      const email = escapeHtml(t("contactPreferenceEmail"));
+      const phone = escapeHtml(t("contactPreferencePhone"));
+      const videoCall = escapeHtml(t("contactPreferenceVideoCall"));
+      return `<select name="${field}" aria-label="${label}"><option value="">${label}</option><option value="Email">${email}</option><option value="Phone">${phone}</option><option value="Video call">${videoCall}</option></select>`;
     }
     const inputType =
       field === "email" ? "email" : field === "phone" ? "tel" : "text";
     const required = field === "name" || field === "email" ? "required" : "";
-    return `<input name="${field}" type="${inputType}" ${required} placeholder="${label}" />`;
+    return `<input name="${field}" type="${inputType}" ${required} aria-label="${label}" placeholder="${label}" />`;
   }
 
   function normalizeQuickReplies(replies?: string[]) {
@@ -1015,26 +1260,30 @@ void (() => {
     }
   }
 
-  function leadFieldLabel(field: string) {
-    const labels: Record<string, string> = {
-      name: "Name",
-      email: "Email",
-      phone: "Phone",
-      company: "Company",
-      projectType: "Project type",
-      budget: "Budget",
-      timeline: "Timeline",
-      contactPreference: "Contact preference",
-      message: "Message",
+  function leadFieldLabel(
+    field: string,
+    t: (key: StringKey, vars?: Record<string, string | number>) => string,
+  ) {
+    const labels: Record<string, StringKey> = {
+      name: "leadFieldName",
+      email: "leadFieldEmail",
+      phone: "leadFieldPhone",
+      company: "leadFieldCompany",
+      projectType: "leadFieldProjectType",
+      budget: "leadFieldBudget",
+      timeline: "leadFieldTimeline",
+      contactPreference: "leadFieldContactPreference",
+      message: "leadFieldMessage",
     };
-    return (
-      labels[field] ??
-      field
-        .replace(/([A-Z])/g, " $1")
-        .replace(/[_-]/g, " ")
-        .replace(/\b\w/g, (letter) => letter.toUpperCase())
-        .trim()
-    );
+    const key = labels[field];
+    if (key) {
+      return t(key);
+    }
+    return field
+      .replace(/([A-Z])/g, " $1")
+      .replace(/[_-]/g, " ")
+      .replace(/\b\w/g, (letter) => letter.toUpperCase())
+      .trim();
   }
 
   function isClientRateLimited(state: WidgetState) {
