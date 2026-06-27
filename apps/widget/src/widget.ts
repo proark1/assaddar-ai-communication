@@ -1335,9 +1335,6 @@ void (() => {
     return state.sentAt.length >= 10;
   }
 
-  const MAX_FETCH_RETRIES = 2;
-  const RETRY_BASE_DELAY_MS = 300;
-
   function delay(ms: number) {
     return new Promise<void>((resolve) => {
       window.setTimeout(resolve, ms);
@@ -1351,6 +1348,11 @@ void (() => {
     url: string,
     init?: RequestInit,
   ): Promise<Response> {
+    // Declared inside the function so they are initialised at call time.
+    // fetchWithRetry is hoisted and runs during boot before a module/closure
+    // const declared further down would be initialised (temporal dead zone).
+    const MAX_FETCH_RETRIES = 2;
+    const RETRY_BASE_DELAY_MS = 300;
     let lastError: unknown;
     for (let attempt = 0; attempt <= MAX_FETCH_RETRIES; attempt += 1) {
       try {
