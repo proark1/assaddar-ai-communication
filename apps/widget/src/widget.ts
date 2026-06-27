@@ -117,7 +117,9 @@ type StringKey =
   | "leadFieldMessage"
   | "contactPreferenceEmail"
   | "contactPreferencePhone"
-  | "contactPreferenceVideoCall";
+  | "contactPreferenceVideoCall"
+  | "formRequiredField"
+  | "formInvalidEmail";
 
 type StringSet = Record<StringKey, string>;
 
@@ -183,6 +185,8 @@ const STRINGS: Record<string, StringSet> = {
     contactPreferenceEmail: "E-Mail",
     contactPreferencePhone: "Telefon",
     contactPreferenceVideoCall: "Videoanruf",
+    formRequiredField: "Bitte füllen Sie dieses Feld aus.",
+    formInvalidEmail: "Bitte geben Sie eine gültige E-Mail-Adresse ein.",
   },
   en: {
     closeChat: "Close chat",
@@ -243,6 +247,8 @@ const STRINGS: Record<string, StringSet> = {
     contactPreferenceEmail: "Email",
     contactPreferencePhone: "Phone",
     contactPreferenceVideoCall: "Video call",
+    formRequiredField: "Please fill out this field.",
+    formInvalidEmail: "Please enter a valid email address.",
   },
 };
 
@@ -652,6 +658,16 @@ void (() => {
         .readiness-form { max-height: min(290px, calc(100vh - 318px)); }
         .launcher { float: right; }
       }
+      @media (prefers-reduced-motion: reduce) {
+        .assaddar-shell *,
+        .assaddar-shell *::before,
+        .assaddar-shell *::after {
+          animation-duration: 0.01ms !important;
+          animation-iteration-count: 1 !important;
+          transition-duration: 0.01ms !important;
+          scroll-behavior: auto !important;
+        }
+      }
     </style>
     <div class="assaddar-shell">
       <div class="panel" part="panel" role="dialog" aria-modal="true" aria-label="${escapeHtml(t("panelAriaLabel"))}" tabindex="-1">
@@ -922,6 +938,9 @@ void (() => {
 
     readinessForm.addEventListener("submit", async (event) => {
       event.preventDefault();
+      if (!validateForm(readinessForm, t)) {
+        return;
+      }
       const answers: Record<string, string> = {};
       const formData = new FormData(readinessForm);
       for (const [key, value] of formData.entries()) {
@@ -992,6 +1011,9 @@ void (() => {
 
     leadForm.addEventListener("submit", async (event) => {
       event.preventDefault();
+      if (!validateForm(leadForm, t)) {
+        return;
+      }
       const fields: Record<string, string> = {};
       const formData = new FormData(leadForm);
       for (const [key, value] of formData.entries()) {
@@ -1156,14 +1178,14 @@ void (() => {
     if (ctaUrl && theme?.ctaLabel) {
       container.insertAdjacentHTML(
         "beforeend",
-        `<a class="cta" href="${escapeHtml(ctaUrl)}" target="_blank" rel="noreferrer">${escapeHtml(theme.ctaLabel)}</a>`,
+        `<a class="cta" href="${escapeHtml(ctaUrl)}" target="_blank" rel="noreferrer noopener">${escapeHtml(theme.ctaLabel)}</a>`,
       );
     }
     container.scrollTop = container.scrollHeight;
   }
 
   function getPrimaryCtaUrl(theme?: WidgetTheme) {
-    return theme?.bookingUrl ?? theme?.ctaUrl;
+    return sanitizeUrl(theme?.bookingUrl ?? theme?.ctaUrl);
   }
 
   function normalizeLeadFields(fields?: string[]) {
@@ -1286,14 +1308,71 @@ void (() => {
       .trim();
   }
 
+  // Surface inline browser validation (required fields, invalid email) before
+  // hitting the network, with localized custom messages. Returns true when the
+  // form is valid and submission may proceed.
+  function validateForm(
+    form: HTMLFormElement,
+    t: (key: StringKey, vars?: Record<string, string | number>) => string,
+  ): boolean {
+    const controls = form.querySelectorAll<
+      HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement
+    >("input, textarea, select");
+    controls.forEach((control) => {
+      control.setCustomValidity("");
+      if (control.validity.valueMissing) {
+        control.setCustomValidity(t("formRequiredField"));
+      } else if (control.validity.typeMismatch) {
+        control.setCustomValidity(t("formInvalidEmail"));
+      }
+    });
+    return form.reportValidity();
+  }
+
   function isClientRateLimited(state: WidgetState) {
     const now = Date.now();
     state.sentAt = state.sentAt.filter((value: number) => now - value < 60_000);
     return state.sentAt.length >= 10;
   }
 
+  const MAX_FETCH_RETRIES = 2;
+  const RETRY_BASE_DELAY_MS = 300;
+
+  function delay(ms: number) {
+    return new Promise<void>((resolve) => {
+      window.setTimeout(resolve, ms);
+    });
+  }
+
+  // Retry only transient failures: network errors (fetch rejects) and 5xx
+  // server responses. 4xx responses are returned to the caller unchanged so
+  // they are never retried, which keeps client-side rate limiting intact.
+  async function fetchWithRetry(
+    url: string,
+    init?: RequestInit,
+  ): Promise<Response> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= MAX_FETCH_RETRIES; attempt += 1) {
+      try {
+        const response = await fetch(url, init);
+        if (response.status >= 500 && attempt < MAX_FETCH_RETRIES) {
+          await delay(RETRY_BASE_DELAY_MS * 2 ** attempt);
+          continue;
+        }
+        return response;
+      } catch (error) {
+        lastError = error;
+        if (attempt < MAX_FETCH_RETRIES) {
+          await delay(RETRY_BASE_DELAY_MS * 2 ** attempt);
+          continue;
+        }
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error("Network error");
+  }
+
   async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
-    const response = await fetch(url, init);
+    const response = await fetchWithRetry(url, init);
     if (!response.ok) {
       throw new Error(response.statusText);
     }
@@ -1311,6 +1390,30 @@ void (() => {
       };
       return replacements[character] ?? character;
     });
+  }
+
+  const ALLOWED_URL_PROTOCOLS = new Set(["http:", "https:", "mailto:", "tel:"]);
+
+  // Validate a theme/admin-provided URL against a protocol allow-list so that
+  // javascript:, data:, vbscript: and similar payloads can never reach an href.
+  // Returns the normalized URL when safe, otherwise null.
+  function sanitizeUrl(value?: string | null): string | null {
+    if (!value) {
+      return null;
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    try {
+      const parsed = new URL(trimmed, window.location.href);
+      if (!ALLOWED_URL_PROTOCOLS.has(parsed.protocol)) {
+        return null;
+      }
+      return parsed.href;
+    } catch {
+      return null;
+    }
   }
 
   function findWidgetScript() {
