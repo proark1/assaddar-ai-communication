@@ -8,11 +8,25 @@ Admin endpoints require:
 x-admin-token: change-me-dev-admin-token
 ```
 
-## Health
+## Health & Readiness
 
 ```http
 GET /health
 ```
+
+Cheap liveness probe: `{ "ok": true, "service": "..." }`.
+
+```http
+GET /ready
+```
+
+Readiness probe that verifies database connectivity. Returns `200` with `{ "ok": true, "db": "up" }` or `503` with `{ "ok": false, "db": "down" }`.
+
+Every response includes an `x-request-id` correlation header (an inbound `x-request-id` is honoured).
+
+## Rate Limits
+
+A global per-IP limit applies (`RATE_LIMIT_MAX`, default 120/min). Stricter per-route limits protect public and auth endpoints: `POST /auth/login` 10 / 5 min, `POST /widget/chat` 30 / min, `POST /widget/leads` 10 / min, `POST /widget/readiness` 20 / min, `POST /widget/events` 60 / min. Exceeding a limit returns `429`.
 
 ## Create Tenant
 
