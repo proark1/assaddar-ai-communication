@@ -345,23 +345,10 @@ type TelephoneProvider = "easybell" | "sipgate" | "peoplefone" | "custom_sip";
 
 type TelephoneNumberType = "local" | "mobile" | "toll-free";
 
-type TwilioNumberType = TelephoneNumberType;
-
 type TwilioNumberCapabilities = {
   voice: boolean;
   sms: boolean;
   mms: boolean;
-};
-
-type TwilioAvailableNumber = {
-  phoneNumber: string;
-  friendlyName: string;
-  locality?: string | null;
-  region?: string | null;
-  isoCountry?: string | null;
-  capabilities: TwilioNumberCapabilities;
-  monthlyPrice?: string | null;
-  currency?: string | null;
 };
 
 type TwilioOwnedNumber = {
@@ -378,22 +365,6 @@ type TelephoneComplianceNotice = {
   level: string;
   title: string;
   detail: string;
-};
-
-type TwilioNumberSearchResult = {
-  webhookUrl: string;
-  pricing?: {
-    currency: string | null;
-    monthlyPrice: string | null;
-    numberType: string;
-  };
-  compliance?: TelephoneComplianceNotice;
-  numbers: TwilioAvailableNumber[];
-};
-
-type TwilioOwnedNumbersResult = {
-  webhookUrl: string;
-  numbers: TwilioOwnedNumber[];
 };
 
 type TelephoneSetupResponse = {
@@ -623,45 +594,6 @@ const defaultTheme: Required<
     readinessQualificationScore: 70,
   },
 };
-
-const starterFaqs = [
-  {
-    question: "Was macht Assaddar AI Consultancy?",
-    answer:
-      "Assaddar AI Consultancy hilft kleinen und mittleren Unternehmen dabei, sinnvolle KI- und Automatisierungsprojekte zu identifizieren, zu planen und praktisch umzusetzen. Der Fokus liegt auf klaren Prozessen, messbarem Nutzen und einer sicheren Einführung im Unternehmen.",
-    tags: ["assaddar", "services", "company"],
-  },
-  {
-    question: "Welche KI-Projekte eignen sich fuer KMU?",
-    answer:
-      "Geeignete Projekte sind zum Beispiel Kundenservice-Automatisierung, interne Wissensassistenten, Dokumenten- und E-Mail-Prozesse, Angebotsvorbereitung, Reporting, Datenaufbereitung und wiederkehrende operative Workflows. Vor der Umsetzung wird priorisiert, was realistisch, wirtschaftlich und datenschutzkonform ist.",
-    tags: ["services", "kmu", "automation"],
-  },
-  {
-    question: "Wie startet ein Beratungsprojekt?",
-    answer:
-      "Ein Projekt startet mit einem kurzen Erstgespraech, einer Analyse der aktuellen Prozesse und einer priorisierten Roadmap. Danach werden ein klarer Use Case, die benoetigten Daten, technische Grenzen, Risiken und ein pragmatischer Umsetzungsplan definiert.",
-    tags: ["process", "consultation", "lead-capture"],
-  },
-  {
-    question: "Wie werden Datenschutz und Unternehmensdaten behandelt?",
-    answer:
-      "Datenschutz und vertrauliche Unternehmensdaten muessen vor jedem KI-Einsatz geklaert werden. Assaddar AI Consultancy arbeitet mit freigegebenen Informationen, vermeidet unnoetige Datenspeicherung und beruecksichtigt DSGVO-Anforderungen, Rollen, Zugriffe und technische Schutzmassnahmen.",
-    tags: ["privacy", "dsgvo", "data"],
-  },
-  {
-    question: "Kann ein Beratungsgespraech gebucht werden?",
-    answer:
-      "Ja. Interessenten koennen ihre Kontaktdaten, das Unternehmen, den Projektbedarf und den gewuenschten Zeitrahmen hinterlassen. Das Team prueft die Anfrage und meldet sich fuer ein passendes Beratungsgespraech.",
-    tags: ["contact", "consultation", "lead-capture"],
-  },
-  {
-    question: "Gibt es feste Preise?",
-    answer:
-      "Preise haengen vom Umfang, den vorhandenen Systemen, Datenschutzanforderungen und dem gewuenschten Ergebnis ab. Nach einer kurzen Analyse kann ein passendes Angebot oder ein sinnvoller erster Projektabschnitt vorgeschlagen werden.",
-    tags: ["pricing", "budget", "offer"],
-  },
-];
 
 function normalizeBaseUrl(value: string) {
   return value.trim().replace(/\/+$/, "");
@@ -1502,18 +1434,6 @@ export default function DashboardPage() {
   const [newNumberSipRegistrar, setNewNumberSipRegistrar] = useState("");
   const [newNumberSipUsername, setNewNumberSipUsername] = useState("");
   const [newNumberSipConfigured, setNewNumberSipConfigured] = useState(false);
-  const [twilioSearchCountry, setTwilioSearchCountry] = useState("DE");
-  const [twilioNumberType, setTwilioNumberType] =
-    useState<TwilioNumberType>("local");
-  const [twilioSearchLocality, setTwilioSearchLocality] = useState("");
-  const [twilioSearchContains, setTwilioSearchContains] = useState("");
-  const [twilioNumberSearch, setTwilioNumberSearch] =
-    useState<TwilioNumberSearchResult | null>(null);
-  const [twilioOwnedNumbers, setTwilioOwnedNumbers] = useState<
-    TwilioOwnedNumber[]
-  >([]);
-  const [existingTwilioNumber, setExistingTwilioNumber] = useState("");
-  const [existingTwilioSid, setExistingTwilioSid] = useState("");
   const [forwardingProvider, setForwardingProvider] =
     useState<TelephoneProvider>("easybell");
   const [forwardingExistingNumber, setForwardingExistingNumber] = useState("");
@@ -1579,8 +1499,6 @@ export default function DashboardPage() {
   const [telephoneInstructions, setTelephoneInstructions] = useState<string[]>(
     [],
   );
-  const [telephoneCompliance, setTelephoneCompliance] =
-    useState<TelephoneComplianceNotice | null>(null);
   const [unansweredQuestions, setUnansweredQuestions] = useState<
     UnansweredQuestion[]
   >([]);
@@ -1853,16 +1771,6 @@ export default function DashboardPage() {
     return matchesSearch && matchesStatus;
   });
 
-  const filteredConversations = conversations.filter((conversation) => {
-    if (inboxFilter === "needs_human") {
-      return handoffConversationIds.has(conversation.id);
-    }
-    if (inboxFilter === "recent") {
-      const createdAt = new Date(conversation.createdAt).getTime();
-      return Date.now() - createdAt < 1000 * 60 * 60 * 24 * 7;
-    }
-    return true;
-  });
   const filteredInboxItems = inboxItems.filter((conversation) => {
     if (inboxFilter === "needs_human") {
       return (
@@ -2896,30 +2804,6 @@ export default function DashboardPage() {
     }
   }
 
-  async function importStarterKnowledge() {
-    if (!selectedTenant) {
-      return;
-    }
-
-    setBusy(true);
-    try {
-      await Promise.all(
-        starterFaqs.map((item) =>
-          apiFetch(`/admin/tenants/${selectedTenant.id}/knowledge/faqs`, {
-            method: "POST",
-            body: JSON.stringify(item),
-          }),
-        ),
-      );
-      await refreshWorkspace(selectedTenant.id);
-      setStatus(`${starterFaqs.length} consultancy FAQs imported`);
-    } catch (error) {
-      setStatus(readableError(error));
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function scanWebsiteForKnowledge() {
     if (!selectedTenant || !siteUrl) {
       return;
@@ -3025,124 +2909,6 @@ export default function DashboardPage() {
       );
       await refreshChannelConnections(selectedTenant.id);
       setStatus(`${connection.label} saved`);
-    } catch (error) {
-      setStatus(readableError(error));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function searchTwilioNumbers() {
-    if (!selectedTenant) {
-      return;
-    }
-
-    setBusy(true);
-    try {
-      const query = new URLSearchParams({
-        country: twilioSearchCountry.trim() || "DE",
-        numberType: twilioNumberType,
-        limit: "12",
-      });
-      if (twilioSearchLocality.trim()) {
-        query.set("locality", twilioSearchLocality.trim());
-      }
-      if (twilioSearchContains.trim()) {
-        query.set("contains", twilioSearchContains.trim());
-      }
-
-      const result = await apiFetch<TwilioNumberSearchResult>(
-        `/admin/tenants/${selectedTenant.id}/telephone/twilio/search?${query.toString()}`,
-      );
-      setTwilioNumberSearch(result);
-      setTelephoneCompliance(result.compliance ?? null);
-      setStatus(`${result.numbers.length} Twilio numbers found`);
-    } catch (error) {
-      setStatus(readableError(error));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function loadTwilioOwnedNumbers() {
-    if (!selectedTenant) {
-      return;
-    }
-
-    setBusy(true);
-    try {
-      const result = await apiFetch<TwilioOwnedNumbersResult>(
-        `/admin/tenants/${selectedTenant.id}/telephone/twilio/numbers`,
-      );
-      setTwilioOwnedNumbers(result.numbers);
-      setStatus(`${result.numbers.length} Twilio account numbers loaded`);
-    } catch (error) {
-      setStatus(readableError(error));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function purchaseTwilioNumber(number: TwilioAvailableNumber) {
-    if (!selectedTenant || !number.phoneNumber) {
-      return;
-    }
-    const confirmed = window.confirm(
-      `Buy ${number.phoneNumber} in Twilio and connect it to this assistant? Twilio may bill the monthly number fee immediately.`,
-    );
-    if (!confirmed) {
-      return;
-    }
-
-    setBusy(true);
-    try {
-      const result = await apiFetch<TelephoneSetupResponse>(
-        `/admin/tenants/${selectedTenant.id}/telephone/twilio/purchase`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            phoneNumber: number.phoneNumber,
-            numberType: twilioNumberType,
-            friendlyName: `${selectedTenant.name} AI phone`,
-          }),
-        },
-      );
-      if (result.number?.phoneNumber) {
-        setForwardingAiNumber(result.number.phoneNumber);
-      }
-      setTelephoneCompliance(result.compliance ?? telephoneCompliance);
-      await refreshChannelConnections(selectedTenant.id);
-      setStatus(`${number.phoneNumber} bought and connected`);
-    } catch (error) {
-      setStatus(readableError(error));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function connectExistingTwilioNumber() {
-    if (!selectedTenant || (!existingTwilioNumber && !existingTwilioSid)) {
-      return;
-    }
-
-    setBusy(true);
-    try {
-      const result = await apiFetch<TelephoneSetupResponse>(
-        `/admin/tenants/${selectedTenant.id}/telephone/twilio/connect-existing`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            phoneNumber: existingTwilioNumber || undefined,
-            phoneNumberSid: existingTwilioSid || undefined,
-            numberType: twilioNumberType,
-          }),
-        },
-      );
-      if (result.number?.phoneNumber) {
-        setForwardingAiNumber(result.number.phoneNumber);
-      }
-      await refreshChannelConnections(selectedTenant.id);
-      setStatus("Existing Twilio number connected");
     } catch (error) {
       setStatus(readableError(error));
     } finally {
@@ -7572,16 +7338,6 @@ export default function DashboardPage() {
       }
     }
     return null;
-  }
-
-  function formatMonthlyNumberPrice(
-    amount: string | null | undefined,
-    currency: string | null | undefined,
-  ) {
-    if (!amount) {
-      return "Price check";
-    }
-    return `${amount} ${currency ?? ""}/mo`.trim();
   }
 
   function canManageUsers() {

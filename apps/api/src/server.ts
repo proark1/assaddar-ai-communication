@@ -385,15 +385,6 @@ const TelephoneSettingsSchema = z.object({
     .optional(),
 });
 
-const ContactProfileSchema = z.object({
-  displayName: z.string().min(1).max(160).nullable().optional(),
-  email: z.string().email().max(240).nullable().optional(),
-  phone: z.string().min(3).max(80).nullable().optional(),
-  company: z.string().min(1).max(160).nullable().optional(),
-  identifiers: z.record(z.union([z.string(), z.array(z.string())])).optional(),
-  metadata: z.record(z.unknown()).optional(),
-});
-
 const WhatsappTemplateSchema = z.object({
   name: z
     .string()
@@ -453,7 +444,14 @@ type UpdateTenantInput = z.infer<typeof UpdateTenantSchema>;
 type AddFaqInput = z.infer<typeof AddFaqSchema>;
 type UpdateHandoffInput = z.infer<typeof UpdateHandoffSchema>;
 type ChannelConnectionInput = z.infer<typeof ChannelConnectionSchema>;
-type ContactProfileInput = z.infer<typeof ContactProfileSchema>;
+type ContactProfileInput = {
+  displayName?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  company?: string | null;
+  identifiers?: Record<string, string | string[]>;
+  metadata?: Record<string, unknown>;
+};
 type WhatsappTemplateInput = z.infer<typeof WhatsappTemplateSchema>;
 type WidgetThemeInput = z.infer<typeof WidgetThemeSchema>;
 type RoleName = z.infer<typeof RoleNameSchema>;
