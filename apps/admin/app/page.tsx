@@ -19,6 +19,7 @@ import {
   Layers,
   Link2,
   Loader2,
+  Menu,
   MessageCircle,
   MessageSquare,
   PhoneCall,
@@ -38,7 +39,15 @@ import {
   UserCheck,
   X,
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import {
+  FormEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { APP_CONFIG } from "./config";
 
 type Tenant = {
   id: string;
@@ -275,17 +284,18 @@ type AdminSession = {
     tenantId: string;
     tenantName: string;
     tenantSlug: string;
-    role: "platform_owner" | "tenant_owner" | "tenant_admin" | "operator" | "viewer";
+    role:
+      | "platform_owner"
+      | "tenant_owner"
+      | "tenant_admin"
+      | "operator"
+      | "viewer";
     status: string;
   }>;
   permissions: string[];
 };
 
-type TenantRole =
-  | "tenant_owner"
-  | "tenant_admin"
-  | "operator"
-  | "viewer";
+type TenantRole = "tenant_owner" | "tenant_admin" | "operator" | "viewer";
 
 type TenantUser = {
   id: string;
@@ -428,6 +438,14 @@ type TestAnswer = {
   handoffRecommended: boolean;
 };
 
+type ToastKind = "success" | "danger" | "info";
+
+type Toast = {
+  id: number;
+  kind: ToastKind;
+  message: string;
+};
+
 type TabKey = "home" | "leads" | "knowledge" | "channels" | "settings";
 
 type KnowledgeStatusFilter = "all" | "approved" | "draft";
@@ -442,20 +460,18 @@ type LeadPipelineStage =
   | "won"
   | "lost";
 
-const productionApiBase = "https://assaddar-api-production.up.railway.app";
-const defaultApiBase =
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? productionApiBase;
-const defaultWidgetUrl =
-  process.env.NEXT_PUBLIC_WIDGET_URL ??
-  "https://assaddar-widget-production.up.railway.app/widget.js";
-const defaultSiteUrl = "https://www.assad-dar.de/de";
+// App-wide constants are consolidated in ./config (APP_CONFIG). These aliases
+// keep the existing references throughout this file readable and unchanged.
+const defaultApiBase = APP_CONFIG.api.base;
+const defaultWidgetUrl = APP_CONFIG.api.widgetUrl;
+const defaultSiteUrl = APP_CONFIG.siteUrl;
 
 const tabs: Array<{ key: TabKey; label: string; icon: typeof BarChart3 }> = [
-  { key: "home", label: "Home", icon: BarChart3 },
-  { key: "leads", label: "Leads", icon: UserCheck },
-  { key: "knowledge", label: "Knowledge", icon: Database },
+  { key: "home", label: "Today", icon: BarChart3 },
+  { key: "leads", label: "Inbox", icon: UserCheck },
+  { key: "knowledge", label: "Answers", icon: Database },
   { key: "channels", label: "Channels", icon: Globe2 },
-  { key: "settings", label: "Settings", icon: Settings },
+  { key: "settings", label: "Setup", icon: Settings },
 ];
 
 const legacyTabMap: Record<string, TabKey> = {
@@ -489,12 +505,7 @@ const channelImplementationGuides: Partial<
   },
 };
 
-const sampleQuestions = [
-  "Can you help us automate customer support?",
-  "What kind of AI projects do you implement?",
-  "Can we book a consultation?",
-  "How do you handle data privacy?",
-];
+const sampleQuestions = APP_CONFIG.sampleQuestions;
 
 const businessKnowledgeChecks = [
   {
@@ -1260,6 +1271,172 @@ function isHandoffFilter(value: string): value is HandoffFilter {
   return ["open", "in_progress", "resolved", "all"].includes(value);
 }
 
+const FOCUSABLE_SELECTOR =
+  'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/**
+ * Accessibility helper for modal/drawer dialogs.
+ *
+ * While `active` is true it:
+ *  - moves focus into the dialog (first focusable element, falling back to the
+ *    container itself),
+ *  - traps Tab / Shift+Tab focus inside the dialog,
+ *  - closes the dialog on Escape via `onClose`,
+ *  - restores focus to the previously-focused element when it closes.
+ */
+function useDialogA11y(
+  active: boolean,
+  onClose: () => void,
+): React.RefObject<HTMLDivElement | null> {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const previousFocus = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (!active) {
+      return;
+    }
+    const container = ref.current;
+    previousFocus.current = document.activeElement as HTMLElement | null;
+
+    const focusFirst = () => {
+      if (!container) {
+        return;
+      }
+      const focusable =
+        container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR);
+      const firstFocusable = focusable[0];
+      if (firstFocusable) {
+        firstFocusable.focus();
+      } else {
+        container.focus();
+      }
+    };
+    focusFirst();
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab" || !container) {
+        return;
+      }
+      const focusable = Array.from(
+        container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR),
+      ).filter((element) => element.offsetParent !== null);
+      if (focusable.length === 0) {
+        event.preventDefault();
+        container.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (!first || !last) {
+        return;
+      }
+      const activeEl = document.activeElement;
+      if (event.shiftKey) {
+        if (activeEl === first || !container.contains(activeEl)) {
+          event.preventDefault();
+          last.focus();
+        }
+      } else if (activeEl === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      const previous = previousFocus.current;
+      if (previous && typeof previous.focus === "function") {
+        previous.focus();
+      }
+    };
+  }, [active, onClose]);
+
+  return ref;
+}
+
+/** In-memory toast queue with auto-dismiss. */
+function useToasts() {
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const timers = useRef<Record<number, ReturnType<typeof setTimeout>>>({});
+
+  const dismissToast = useCallback((id: number) => {
+    setToasts((current) => current.filter((toast) => toast.id !== id));
+    const timer = timers.current[id];
+    if (timer) {
+      clearTimeout(timer);
+      delete timers.current[id];
+    }
+  }, []);
+
+  const pushToast = useCallback(
+    (kind: ToastKind, message: string) => {
+      if (!message) {
+        return;
+      }
+      const id =
+        Date.now() +
+        Math.floor(Math.random() * 1000) +
+        Object.keys(timers.current).length;
+      setToasts((current) => [...current.slice(-3), { id, kind, message }]);
+      timers.current[id] = setTimeout(() => dismissToast(id), 4200);
+    },
+    [dismissToast],
+  );
+
+  useEffect(() => {
+    return () => {
+      Object.values(timers.current).forEach((timer) => clearTimeout(timer));
+    };
+  }, []);
+
+  return { toasts, pushToast, dismissToast };
+}
+
+function ToastStack({
+  toasts,
+  onDismiss,
+}: {
+  toasts: Toast[];
+  onDismiss: (id: number) => void;
+}) {
+  if (toasts.length === 0) {
+    return null;
+  }
+  return (
+    <div className="toastStack" aria-live="polite" aria-atomic="false">
+      {toasts.map((toast) => (
+        <div
+          className="toast"
+          key={toast.id}
+          data-kind={toast.kind}
+          role="status"
+        >
+          {toast.kind === "danger" ? (
+            <AlertCircle size={16} />
+          ) : (
+            <CheckCircle2 size={16} />
+          )}
+          <span>{toast.message}</span>
+          <button
+            type="button"
+            className="toastClose"
+            aria-label="Dismiss notification"
+            onClick={() => onDismiss(toast.id)}
+          >
+            <X size={14} />
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function DashboardPage() {
   const [deepLink] = useState<AdminDeepLink>(() => readAdminDeepLink());
   const [apiBase, setApiBase] = useState(defaultApiBase);
@@ -1343,8 +1520,7 @@ export default function DashboardPage() {
   const [forwardingAiNumber, setForwardingAiNumber] = useState("");
   const [forwardingCarrierName, setForwardingCarrierName] = useState("");
   const [forwardingConfirmed, setForwardingConfirmed] = useState(false);
-  const [sipProvider, setSipProvider] =
-    useState<TelephoneProvider>("easybell");
+  const [sipProvider, setSipProvider] = useState<TelephoneProvider>("easybell");
   const [sipCarrierName, setSipCarrierName] = useState("");
   const [sipDomain, setSipDomain] = useState("");
   const [sipRegistrar, setSipRegistrar] = useState("");
@@ -1371,9 +1547,8 @@ export default function DashboardPage() {
   >("always_on");
   const [businessHoursTimezone, setBusinessHoursTimezone] =
     useState("Europe/Berlin");
-  const [businessHoursText, setBusinessHoursText] = useState(
-    "Mo-Fr 09:00-18:00",
-  );
+  const [businessHoursText, setBusinessHoursText] =
+    useState("Mo-Fr 09:00-18:00");
   const [afterHoursAction, setAfterHoursAction] = useState<
     "answer" | "voicemail" | "callback" | "transfer"
   >("answer");
@@ -1433,7 +1608,9 @@ export default function DashboardPage() {
   const [copiedSnippet, setCopiedSnippet] = useState("");
   const [siteUrl, setSiteUrl] = useState(defaultSiteUrl);
   const [templateName, setTemplateName] = useState("continue_conversation");
-  const [templateLanguage, setTemplateLanguage] = useState("de");
+  const [templateLanguage, setTemplateLanguage] = useState<string>(
+    APP_CONFIG.defaultLanguage,
+  );
   const [templateCategory, setTemplateCategory] =
     useState<WhatsappTemplate["category"]>("utility");
   const [templateStatus, setTemplateStatus] =
@@ -1506,6 +1683,10 @@ export default function DashboardPage() {
   const [retentionDays, setRetentionDays] = useState(365);
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
+  // Mobile navigation: toggles the sidebar into a slide-in drawer on small screens.
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const { toasts, pushToast, dismissToast } = useToasts();
+  const copiedResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const normalizedApiBase = normalizeBaseUrl(apiBase);
   const selectedTenant = useMemo(
@@ -1548,6 +1729,9 @@ export default function DashboardPage() {
   );
   const selectedLead =
     leadHandoffs.find((handoff) => handoff.id === selectedLeadId) ?? null;
+  const closeLeadDrawer = useCallback(() => setSelectedLeadId(""), []);
+  // Focus trap + Escape-to-close + focus restore for the lead details drawer.
+  const leadDrawerRef = useDialogA11y(Boolean(selectedLead), closeLeadDrawer);
   const staleLeads = leadHandoffs.filter(
     (handoff) =>
       ["open", "in_progress"].includes(handoff.status) &&
@@ -1649,6 +1833,16 @@ export default function DashboardPage() {
   }
   const statusKind = statusTone(status);
 
+  // Surface every status change as a toast (inline status message is kept too).
+  // pushToast is stable (useCallback) so this effectively runs on status change.
+  useEffect(() => {
+    if (!status) {
+      return;
+    }
+    const tone = statusTone(status);
+    pushToast(tone === "neutral" ? "info" : tone, status);
+  }, [status, pushToast]);
+
   const filteredKnowledge = knowledge.filter((item) => {
     const text = getKnowledgeText(item).toLowerCase();
     const matchesSearch =
@@ -1704,13 +1898,13 @@ export default function DashboardPage() {
     (handoff) => getPipelineStage(handoff) === "won",
   ).length;
   const activeTabLabel =
-    tabs.find((tab) => tab.key === activeTab)?.label ?? "Home";
+    tabs.find((tab) => tab.key === activeTab)?.label ?? "Today";
   const activeTabDescription: Record<TabKey, string> = {
-    home: "Daily status, next actions, and launch readiness.",
-    leads: "Captured leads, customer conversations, and human handoffs.",
-    knowledge: "Approved answers, website imports, and unanswered questions.",
-    channels: "Website, telephone, WhatsApp, Messenger, and Instagram setup.",
-    settings: "Business profile, widget install, automation, and testing.",
+    home: "Daily priorities, health checks, and launch readiness.",
+    leads: "Customer conversations, captured leads, and human handoffs.",
+    knowledge: "Approved answers, website imports, and missing topics.",
+    channels: "Website chat, telephone AI, WhatsApp, Messenger, and Instagram.",
+    settings: "Business profile, widget install, automation rules, and tests.",
   };
   const nextActions = [
     openLeads.length
@@ -1876,7 +2070,10 @@ export default function DashboardPage() {
     const testCall = settingRecord(settings.testCall);
 
     setPhoneNumberOrdered(
-      settingBoolean(checklist.numberOrdered, Boolean(telephoneConnection.externalAccountId)),
+      settingBoolean(
+        checklist.numberOrdered,
+        Boolean(telephoneConnection.externalAccountId),
+      ),
     );
     setPhoneSipConfigured(settingBoolean(checklist.sipConfigured, false));
     setPhoneTestCallCompleted(
@@ -1886,10 +2083,16 @@ export default function DashboardPage() {
       ),
     );
     setPhoneFallbackSet(
-      settingBoolean(checklist.fallbackSet, Boolean(settingString(settings.fallbackNumber))),
+      settingBoolean(
+        checklist.fallbackSet,
+        Boolean(settingString(settings.fallbackNumber)),
+      ),
     );
     setPhoneDisclosureConfirmed(
-      settingBoolean(checklist.disclosureConfirmed, Boolean(settingString(gdpr.disclosureText))),
+      settingBoolean(
+        checklist.disclosureConfirmed,
+        Boolean(settingString(gdpr.disclosureText)),
+      ),
     );
 
     setTelephoneFallbackNumber(settingString(settings.fallbackNumber) ?? "");
@@ -1918,7 +2121,9 @@ export default function DashboardPage() {
     setHandoffOfficeHoursTransfer(
       settingBoolean(handoffRules.officeHoursTransfer, false),
     );
-    setHandoffRepeatedFailure(settingBoolean(handoffRules.repeatedFailure, true));
+    setHandoffRepeatedFailure(
+      settingBoolean(handoffRules.repeatedFailure, true),
+    );
     setHandoffAskBeforeTransfer(
       settingBoolean(handoffRules.askBeforeTransfer, true),
     );
@@ -3137,12 +3342,9 @@ export default function DashboardPage() {
     }
   }
 
-  function buildTelephoneSettingsPayload(
-    testStatus = telephoneTestCallStatus,
-  ) {
+  function buildTelephoneSettingsPayload(testStatus = telephoneTestCallStatus) {
     const provider = currentTelephoneProvider();
-    const testCallCompleted =
-      testStatus === "passed" || phoneTestCallCompleted;
+    const testCallCompleted = testStatus === "passed" || phoneTestCallCompleted;
     return {
       provider,
       setupChecklist: {
@@ -3460,10 +3662,21 @@ export default function DashboardPage() {
   }
 
   async function copyText(text: string, label: string) {
-    if (text) {
+    if (!text) {
+      return;
+    }
+    try {
       await navigator.clipboard.writeText(text);
+      // Track which label was copied so buttons can show a transient "Copied!"
+      // state, then clear it after a couple of seconds.
       setCopiedSnippet(label);
+      if (copiedResetTimer.current) {
+        clearTimeout(copiedResetTimer.current);
+      }
+      copiedResetTimer.current = setTimeout(() => setCopiedSnippet(""), 2000);
       setStatus(`${label} copied`);
+    } catch {
+      setStatus("Copy failed");
     }
   }
 
@@ -3507,6 +3720,21 @@ export default function DashboardPage() {
   }
 
   function renderMetrics() {
+    // First load (fetching with nothing cached yet): show shimmer placeholders
+    // instead of a row of zeros so the dashboard does not look empty/broken.
+    if (busy && !analytics && knowledge.length === 0) {
+      return (
+        <section className="metricsGrid" aria-busy="true" aria-hidden="true">
+          {Array.from({ length: 7 }).map((_, index) => (
+            <article className="metricCard skeletonCard" key={index}>
+              <span className="skeleton skeletonIcon" />
+              <span className="skeleton skeletonLabel" />
+              <span className="skeleton skeletonValue" />
+            </article>
+          ))}
+        </section>
+      );
+    }
     return (
       <section className="metricsGrid">
         <article className="metricCard">
@@ -4623,7 +4851,14 @@ export default function DashboardPage() {
 
     return (
       <div className="drawerBackdrop" role="presentation">
-        <aside className="leadDrawer" aria-label="Lead details">
+        <aside
+          className="leadDrawer"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Lead details"
+          tabIndex={-1}
+          ref={leadDrawerRef}
+        >
           <div className="drawerHeader">
             <div>
               <span>Lead detail</span>
@@ -4633,7 +4868,7 @@ export default function DashboardPage() {
               className="iconButton neutral"
               type="button"
               aria-label="Close lead details"
-              onClick={() => setSelectedLeadId("")}
+              onClick={closeLeadDrawer}
             >
               <X size={18} />
             </button>
@@ -5074,11 +5309,15 @@ export default function DashboardPage() {
                     </article>
                     <article>
                       <span>Confidence</span>
-                      <strong>{latestAnswerConfidence(conversationMessages)}</strong>
+                      <strong>
+                        {latestAnswerConfidence(conversationMessages)}
+                      </strong>
                     </article>
                     <article>
                       <span>Handoff</span>
-                      <strong>{latestHandoffState(conversationMessages)}</strong>
+                      <strong>
+                        {latestHandoffState(conversationMessages)}
+                      </strong>
                     </article>
                     <article>
                       <span>Recording</span>
@@ -5351,6 +5590,11 @@ export default function DashboardPage() {
                 className="primaryButton"
                 disabled={!currentSnippet}
                 type="button"
+                data-copied={
+                  copiedSnippet === `${titleCase(widgetPlatform)} snippet`
+                    ? "true"
+                    : "false"
+                }
                 onClick={() =>
                   copyText(
                     currentSnippet,
@@ -5358,8 +5602,17 @@ export default function DashboardPage() {
                   )
                 }
               >
-                <Copy size={16} />
-                {copiedSnippet ? "Copy again" : "Copy snippet"}
+                {copiedSnippet === `${titleCase(widgetPlatform)} snippet` ? (
+                  <>
+                    <CheckCircle2 size={16} />
+                    Copied!
+                  </>
+                ) : (
+                  <>
+                    <Copy size={16} />
+                    Copy snippet
+                  </>
+                )}
               </button>
               <button
                 className="secondaryButton"
@@ -5724,6 +5977,34 @@ export default function DashboardPage() {
           </article>
         </section>
 
+        <section className="panel channelLaunchPanel">
+          <div className="panelHeader">
+            <div className="panelTitle">
+              <ClipboardCheck size={18} />
+              <h2>Channel launch path</h2>
+            </div>
+            <span className="countPill">Recommended</span>
+          </div>
+          <div className="channelLaunchMap">
+            <article data-step="1">
+              <strong>Website first</strong>
+              <span>Embed the assistant and capture the first leads.</span>
+            </article>
+            <article data-step="2">
+              <strong>Telephone AI</strong>
+              <span>
+                Connect a provider number or SIP trunk and run test calls.
+              </span>
+            </article>
+            <article data-step="3">
+              <strong>Social inbox</strong>
+              <span>
+                Add WhatsApp, Messenger, and Instagram once workflows are clear.
+              </span>
+            </article>
+          </div>
+        </section>
+
         {renderTelephoneSetup(telephoneConnection)}
 
         <section className="panel">
@@ -5746,189 +6027,191 @@ export default function DashboardPage() {
             {channelConnections
               .filter((connection) => connection.channel !== "telephone")
               .map((connection) => {
-              const webhook =
-                connection.assistantWebhookUrl ?? connection.webhookUrl ?? "";
-              const draftValue =
-                channelAccountDrafts[connection.channel] ??
-                connection.externalAccountId ??
-                "";
-              const isWebsite = connection.channel === "website";
-              const implementationGuide =
-                channelImplementationGuides[connection.channel];
-              return (
-                <article className="channelCard" key={connection.channel}>
-                  <div className="channelCardHeader">
-                    <div>
-                      <strong>{connection.label}</strong>
-                      <span>{connection.provider}</span>
+                const webhook =
+                  connection.assistantWebhookUrl ?? connection.webhookUrl ?? "";
+                const draftValue =
+                  channelAccountDrafts[connection.channel] ??
+                  connection.externalAccountId ??
+                  "";
+                const isWebsite = connection.channel === "website";
+                const implementationGuide =
+                  channelImplementationGuides[connection.channel];
+                return (
+                  <article className="channelCard" key={connection.channel}>
+                    <div className="channelCardHeader">
+                      <div>
+                        <strong>{connection.label}</strong>
+                        <span>{connection.provider}</span>
+                      </div>
+                      <small data-status={connection.status}>
+                        {connection.status}
+                      </small>
                     </div>
-                    <small data-status={connection.status}>
-                      {connection.status}
-                    </small>
-                  </div>
 
-                  <div className="channelStepList">
-                    {getChannelSetupSteps(connection, webhook).map((step) => (
+                    <div className="channelStepList">
+                      {getChannelSetupSteps(connection, webhook).map((step) => (
+                        <article
+                          data-done={step.done ? "true" : "false"}
+                          key={step.label}
+                        >
+                          {step.done ? (
+                            <CheckCircle2 size={16} />
+                          ) : (
+                            <AlertCircle size={16} />
+                          )}
+                          <div>
+                            <strong>{step.label}</strong>
+                            <span>{step.detail}</span>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+
+                    <div className="channelStatusRows">
                       <article
-                        data-done={step.done ? "true" : "false"}
-                        key={step.label}
+                        data-ready={
+                          connection.credentialConfigured ? "true" : "false"
+                        }
                       >
-                        {step.done ? (
-                          <CheckCircle2 size={16} />
-                        ) : (
-                          <AlertCircle size={16} />
-                        )}
-                        <div>
-                          <strong>{step.label}</strong>
-                          <span>{step.detail}</span>
-                        </div>
+                        <span>Credential</span>
+                        <strong>
+                          {connection.credentialConfigured
+                            ? "Ready"
+                            : "Missing"}
+                        </strong>
                       </article>
-                    ))}
-                  </div>
-
-                  <div className="channelStatusRows">
-                    <article
-                      data-ready={
-                        connection.credentialConfigured ? "true" : "false"
-                      }
-                    >
-                      <span>Credential</span>
-                      <strong>
-                        {connection.credentialConfigured ? "Ready" : "Missing"}
-                      </strong>
-                    </article>
-                    <article
-                      data-ready={
-                        connection.externalAccountId || isWebsite
-                          ? "true"
-                          : "false"
-                      }
-                    >
-                      <span>Account ID</span>
-                      <strong>
-                        {connection.externalAccountId || isWebsite
-                          ? "Set"
-                          : "Missing"}
-                      </strong>
-                    </article>
-                  </div>
-
-                  {isWebsite ? (
-                    <button
-                      className="secondaryButton full"
-                      type="button"
-                      onClick={() => setActiveTab("settings")}
-                    >
-                      <Code2 size={15} />
-                      Open widget setup
-                    </button>
-                  ) : (
-                    <label className="field">
-                      <span>{channelAccountLabel(connection.channel)}</span>
-                      <input
-                        value={draftValue}
-                        onChange={(event) =>
-                          setChannelAccountDrafts((current) => ({
-                            ...current,
-                            [connection.channel]: event.target.value,
-                          }))
-                        }
-                      />
-                    </label>
-                  )}
-
-                  {webhook ? (
-                    <div className="webhookBox">
-                      <span>Webhook URL</span>
-                      <code>{webhook}</code>
-                      <button
-                        className="secondaryButton"
-                        type="button"
-                        onClick={() =>
-                          copyText(webhook, `${connection.label} webhook`)
+                      <article
+                        data-ready={
+                          connection.externalAccountId || isWebsite
+                            ? "true"
+                            : "false"
                         }
                       >
-                        <Copy size={15} />
-                        Copy
-                      </button>
+                        <span>Account ID</span>
+                        <strong>
+                          {connection.externalAccountId || isWebsite
+                            ? "Set"
+                            : "Missing"}
+                        </strong>
+                      </article>
                     </div>
-                  ) : null}
 
-                  <div className="channelHint">
-                    {channelSetupHint(connection)}
-                  </div>
+                    {isWebsite ? (
+                      <button
+                        className="secondaryButton full"
+                        type="button"
+                        onClick={() => setActiveTab("settings")}
+                      >
+                        <Code2 size={15} />
+                        Open widget setup
+                      </button>
+                    ) : (
+                      <label className="field">
+                        <span>{channelAccountLabel(connection.channel)}</span>
+                        <input
+                          value={draftValue}
+                          onChange={(event) =>
+                            setChannelAccountDrafts((current) => ({
+                              ...current,
+                              [connection.channel]: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                    )}
 
-                  {isWebsite ? (
-                    <a
-                      className="channelGuideLink"
-                      href="#widget-settings"
-                      onClick={(event) => {
-                        event.preventDefault();
-                        openSettingsSection("widget-settings");
-                      }}
-                    >
-                      <Code2 size={15} />
-                      <span>Implementation guide</span>
-                      <small>Widget setup</small>
-                    </a>
-                  ) : implementationGuide ? (
-                    <a
-                      className="channelGuideLink"
-                      href={implementationGuide.url}
-                      rel="noreferrer"
-                      target="_blank"
-                    >
-                      <ExternalLink size={15} />
-                      <span>Implementation guide</span>
-                      <small>{implementationGuide.label}</small>
-                    </a>
-                  ) : null}
+                    {webhook ? (
+                      <div className="webhookBox">
+                        <span>Webhook URL</span>
+                        <code>{webhook}</code>
+                        <button
+                          className="secondaryButton"
+                          type="button"
+                          onClick={() =>
+                            copyText(webhook, `${connection.label} webhook`)
+                          }
+                        >
+                          <Copy size={15} />
+                          Copy
+                        </button>
+                      </div>
+                    ) : null}
 
-                  {!isWebsite ? (
-                    <div className="rowActions">
-                      <button
-                        className="primaryButton"
-                        type="button"
-                        disabled={busy}
-                        onClick={() =>
-                          saveChannelConnection(connection, {
-                            externalAccountId: draftValue,
-                            status: "connected",
-                          })
-                        }
-                      >
-                        <Save size={15} />
-                        Save connected
-                      </button>
-                      <button
-                        className="secondaryButton"
-                        type="button"
-                        disabled={busy}
-                        onClick={() =>
-                          saveChannelConnection(connection, {
-                            status: "pending",
-                          })
-                        }
-                      >
-                        Pending
-                      </button>
-                      <button
-                        className="dangerButton"
-                        type="button"
-                        disabled={busy}
-                        onClick={() =>
-                          saveChannelConnection(connection, {
-                            status: "disabled",
-                          })
-                        }
-                      >
-                        Disable
-                      </button>
+                    <div className="channelHint">
+                      {channelSetupHint(connection)}
                     </div>
-                  ) : null}
-                </article>
-              );
-            })}
+
+                    {isWebsite ? (
+                      <a
+                        className="channelGuideLink"
+                        href="#widget-settings"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          openSettingsSection("widget-settings");
+                        }}
+                      >
+                        <Code2 size={15} />
+                        <span>Implementation guide</span>
+                        <small>Widget setup</small>
+                      </a>
+                    ) : implementationGuide ? (
+                      <a
+                        className="channelGuideLink"
+                        href={implementationGuide.url}
+                        rel="noreferrer"
+                        target="_blank"
+                      >
+                        <ExternalLink size={15} />
+                        <span>Implementation guide</span>
+                        <small>{implementationGuide.label}</small>
+                      </a>
+                    ) : null}
+
+                    {!isWebsite ? (
+                      <div className="rowActions">
+                        <button
+                          className="primaryButton"
+                          type="button"
+                          disabled={busy}
+                          onClick={() =>
+                            saveChannelConnection(connection, {
+                              externalAccountId: draftValue,
+                              status: "connected",
+                            })
+                          }
+                        >
+                          <Save size={15} />
+                          Save connected
+                        </button>
+                        <button
+                          className="secondaryButton"
+                          type="button"
+                          disabled={busy}
+                          onClick={() =>
+                            saveChannelConnection(connection, {
+                              status: "pending",
+                            })
+                          }
+                        >
+                          Pending
+                        </button>
+                        <button
+                          className="dangerButton"
+                          type="button"
+                          disabled={busy}
+                          onClick={() =>
+                            saveChannelConnection(connection, {
+                              status: "disabled",
+                            })
+                          }
+                        >
+                          Disable
+                        </button>
+                      </div>
+                    ) : null}
+                  </article>
+                );
+              })}
           </div>
         </section>
 
@@ -6016,7 +6299,10 @@ export default function DashboardPage() {
     ];
     const activeWarnings = telephoneWarnings.length
       ? telephoneWarnings
-      : buildTelephoneWarningsFromSettings(connection?.settings ?? {}, connection);
+      : buildTelephoneWarningsFromSettings(
+          connection?.settings ?? {},
+          connection,
+        );
     const checklistItems: Array<{
       label: string;
       checked: boolean;
@@ -6044,7 +6330,8 @@ export default function DashboardPage() {
       },
       {
         label: "AI disclosure confirmed",
-        checked: phoneDisclosureConfirmed || Boolean(phoneDisclosureText.trim()),
+        checked:
+          phoneDisclosureConfirmed || Boolean(phoneDisclosureText.trim()),
         onChange: setPhoneDisclosureConfirmed,
       },
     ];
@@ -6059,7 +6346,10 @@ export default function DashboardPage() {
             <PhoneCall size={18} />
             <h2>Telephone AI setup</h2>
           </div>
-          <span className="countPill" data-tone={connection?.status === "connected" ? "good" : "warn"}>
+          <span
+            className="countPill"
+            data-tone={connection?.status === "connected" ? "good" : "warn"}
+          >
             {connection?.status ?? "pending"}
           </span>
         </div>
@@ -6077,7 +6367,9 @@ export default function DashboardPage() {
             <span>Number</span>
             <strong>{currentNumber || "Not connected"}</strong>
           </article>
-          <article data-alert={connection?.status === "connected" ? "false" : "true"}>
+          <article
+            data-alert={connection?.status === "connected" ? "false" : "true"}
+          >
             <span>Call routing</span>
             <strong>
               {connection?.status === "connected" ? "Ready" : "Setup needed"}
@@ -6185,7 +6477,10 @@ export default function DashboardPage() {
                 Check
               </button>
             </div>
-            <div className="voiceEdgeStatus" data-status={voiceEdgeStatus?.status ?? "unknown"}>
+            <div
+              className="voiceEdgeStatus"
+              data-status={voiceEdgeStatus?.status ?? "unknown"}
+            >
               <strong>{voiceEdgeStatus?.status ?? "Not checked"}</strong>
               <span>
                 {voiceEdgeStatus?.url ??
@@ -6291,7 +6586,9 @@ export default function DashboardPage() {
                 <input
                   placeholder="+49301234567"
                   value={orderedPhoneNumber}
-                  onChange={(event) => setOrderedPhoneNumber(event.target.value)}
+                  onChange={(event) =>
+                    setOrderedPhoneNumber(event.target.value)
+                  }
                 />
               </label>
               <label className="field">
@@ -6370,7 +6667,9 @@ export default function DashboardPage() {
                 <input
                   placeholder="+49307654321"
                   value={forwardingAiNumber}
-                  onChange={(event) => setForwardingAiNumber(event.target.value)}
+                  onChange={(event) =>
+                    setForwardingAiNumber(event.target.value)
+                  }
                 />
               </label>
               <label className="field">
@@ -6413,7 +6712,9 @@ export default function DashboardPage() {
             <div className="providerOptionGrid">
               {providerOptions.map((provider) => (
                 <button
-                  data-selected={sipProvider === provider.value ? "true" : "false"}
+                  data-selected={
+                    sipProvider === provider.value ? "true" : "false"
+                  }
                   key={provider.value}
                   type="button"
                   onClick={() => setSipProvider(provider.value)}
@@ -6518,7 +6819,9 @@ export default function DashboardPage() {
             <input
               placeholder="+491701234567"
               value={telephoneFallbackNumber}
-              onChange={(event) => setTelephoneFallbackNumber(event.target.value)}
+              onChange={(event) =>
+                setTelephoneFallbackNumber(event.target.value)
+              }
             />
           </label>
           <label className="field">
@@ -6573,7 +6876,9 @@ export default function DashboardPage() {
                 <select
                   value={afterHoursAction}
                   onChange={(event) =>
-                    setAfterHoursAction(event.target.value as typeof afterHoursAction)
+                    setAfterHoursAction(
+                      event.target.value as typeof afterHoursAction,
+                    )
                   }
                 >
                   <option value="answer">Answer normally</option>
@@ -6686,7 +6991,9 @@ export default function DashboardPage() {
                 <span>Language</span>
                 <input
                   value={phoneVoiceLanguage}
-                  onChange={(event) => setPhoneVoiceLanguage(event.target.value)}
+                  onChange={(event) =>
+                    setPhoneVoiceLanguage(event.target.value)
+                  }
                 />
               </label>
               <label className="field">
@@ -6694,7 +7001,9 @@ export default function DashboardPage() {
                 <select
                   value={phoneSpeakingStyle}
                   onChange={(event) =>
-                    setPhoneSpeakingStyle(event.target.value as typeof phoneSpeakingStyle)
+                    setPhoneSpeakingStyle(
+                      event.target.value as typeof phoneSpeakingStyle,
+                    )
                   }
                 >
                   <option value="professional">Professional</option>
@@ -6731,7 +7040,9 @@ export default function DashboardPage() {
             <input
               placeholder="+491701234567"
               value={telephoneTestCallNumber}
-              onChange={(event) => setTelephoneTestCallNumber(event.target.value)}
+              onChange={(event) =>
+                setTelephoneTestCallNumber(event.target.value)
+              }
             />
           </label>
           <label className="field">
@@ -6739,7 +7050,9 @@ export default function DashboardPage() {
             <input
               placeholder="Answered, transcript saved, fallback checked..."
               value={telephoneTestCallNotes}
-              onChange={(event) => setTelephoneTestCallNotes(event.target.value)}
+              onChange={(event) =>
+                setTelephoneTestCallNotes(event.target.value)
+              }
             />
           </label>
           <div className="rowActions">
@@ -7079,7 +7392,7 @@ export default function DashboardPage() {
       custom_sip: "Custom SIP",
       twilio: "Twilio",
     };
-    return provider ? labels[provider] ?? provider : "Not selected";
+    return provider ? (labels[provider] ?? provider) : "Not selected";
   }
 
   function normalizeTelephoneProviderUi(
@@ -7176,7 +7489,12 @@ export default function DashboardPage() {
     const gdpr = settingRecord(settings.gdpr);
     const testCall = settingRecord(settings.testCall);
     const warnings: TelephoneSetupWarning[] = [];
-    if (!settingBoolean(checklist.numberOrdered, Boolean(connection?.externalAccountId))) {
+    if (
+      !settingBoolean(
+        checklist.numberOrdered,
+        Boolean(connection?.externalAccountId),
+      )
+    ) {
       warnings.push({
         level: "warn",
         title: "Number not confirmed",
@@ -7273,7 +7591,9 @@ export default function DashboardPage() {
     const role = adminSession?.memberships?.find(
       (membership) => membership.tenantId === selectedTenant?.id,
     )?.role;
-    return role ? tenantRoleRank(role) >= tenantRoleRank("tenant_admin") : false;
+    return role
+      ? tenantRoleRank(role) >= tenantRoleRank("tenant_admin")
+      : false;
   }
 
   function tenantRoleRank(role: string) {
@@ -7838,9 +8158,7 @@ export default function DashboardPage() {
                   <input
                     type="password"
                     value={newUserPassword}
-                    onChange={(event) =>
-                      setNewUserPassword(event.target.value)
-                    }
+                    onChange={(event) => setNewUserPassword(event.target.value)}
                     placeholder="Optional for invite-only users"
                   />
                 </label>
@@ -7944,11 +8262,11 @@ export default function DashboardPage() {
           <div className="quickActionGrid">
             <button type="button" onClick={() => setActiveTab("leads")}>
               <UserCheck size={16} />
-              Leads
+              Inbox
             </button>
             <button type="button" onClick={() => setActiveTab("knowledge")}>
               <Database size={16} />
-              Knowledge
+              Answers
             </button>
             <button type="button" onClick={() => setActiveTab("channels")}>
               <Globe2 size={16} />
@@ -7956,7 +8274,7 @@ export default function DashboardPage() {
             </button>
             <button type="button" onClick={() => setActiveTab("settings")}>
               <Settings size={16} />
-              Settings
+              Setup
             </button>
           </div>
         </section>
@@ -8093,13 +8411,40 @@ export default function DashboardPage() {
   if (!connectionAttempted && !tenants.length) {
     return (
       <main className="authShell">
+        <section className="authIntro">
+          <span className="eyebrow">Assaddar AI Communication</span>
+          <h1>Run every customer conversation from one clear workspace.</h1>
+          <p>
+            Website chat, phone calls, social messaging, lead handoffs, approved
+            answers, and automation stay connected for the project owner and
+            operators.
+          </p>
+          <div className="authIntroGrid">
+            <article>
+              <PhoneCall size={16} />
+              <span>Telephone AI</span>
+            </article>
+            <article>
+              <MessageCircle size={16} />
+              <span>Omnichannel inbox</span>
+            </article>
+            <article>
+              <Database size={16} />
+              <span>Approved knowledge</span>
+            </article>
+          </div>
+          <a className="secondaryButton linkButton" href="/landing">
+            <ExternalLink size={16} />
+            View product page
+          </a>
+        </section>
         <section className="authPanel">
           <div className="brand large">
             <span className="brandMark">
               <Bot size={22} />
             </span>
             <div>
-              <strong>Assaddar AI</strong>
+              <strong>{APP_CONFIG.brand.name}</strong>
               <span>Consultancy assistant admin</span>
             </div>
           </div>
@@ -8151,145 +8496,151 @@ export default function DashboardPage() {
             </form>
           ) : (
             <>
-          <div className="segmented authModeSwitch">
-            <button
-              data-active={authMode === "login" ? "true" : "false"}
-              type="button"
-              onClick={() => setAuthMode("login")}
-            >
-              User login
-            </button>
-            <button
-              data-active={authMode === "admin_token" ? "true" : "false"}
-              type="button"
-              onClick={() => setAuthMode("admin_token")}
-            >
-              Admin token
-            </button>
-          </div>
-
-          {authMode === "login" ? (
-            <form className="authForm" onSubmit={loginWithPassword}>
-              <label className="field">
-                <span>Email</span>
-                <input
-                  type="email"
-                  value={loginEmail}
-                  onChange={(event) => setLoginEmail(event.target.value)}
-                  autoComplete="email"
-                  autoFocus
-                />
-              </label>
-              <label className="field">
-                <span>Password</span>
-                <div className="inputIcon">
-                  <KeyRound size={16} />
-                  <input
-                    type="password"
-                    value={loginPassword}
-                    onChange={(event) => setLoginPassword(event.target.value)}
-                    autoComplete="current-password"
-                  />
-                </div>
-              </label>
-              {showAdvancedConnection ? (
-                <label className="field">
-                  <span>API base</span>
-                  <input
-                    value={apiBase}
-                    onChange={(event) => setApiBase(event.target.value)}
-                  />
-                </label>
-              ) : null}
-              <button
-                className="primaryButton full"
-                disabled={busy || !loginEmail || !loginPassword}
-              >
-                {busy ? (
-                  <Loader2 className="spin" size={16} />
-                ) : (
-                  <ShieldCheck size={16} />
-                )}
-                Login
-              </button>
-              <button
-                className="textToggle"
-                type="button"
-                onClick={() => setShowAdvancedConnection((current) => !current)}
-              >
-                {showAdvancedConnection ? "Hide advanced" : "Advanced"}
-              </button>
-              {status ? (
-                <span className="status authStatus" data-tone={statusKind}>
-                  {statusKind === "danger" ? (
-                    <AlertCircle size={16} />
-                  ) : (
-                    <CheckCircle2 size={16} />
-                  )}
-                  {status}
-                </span>
-              ) : null}
-            </form>
-          ) : (
-          <form
-            className="authForm"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void refreshTenants();
-            }}
-          >
-            <label className="field">
-              <span>Admin token</span>
-              <div className="inputIcon">
-                <KeyRound size={16} />
-                <input
-                  type="password"
-                  value={adminToken}
-                  onChange={(event) => setAdminToken(event.target.value)}
-                  autoComplete="off"
-                  autoFocus
-                />
+              <div className="segmented authModeSwitch">
+                <button
+                  data-active={authMode === "login" ? "true" : "false"}
+                  type="button"
+                  onClick={() => setAuthMode("login")}
+                >
+                  User login
+                </button>
+                <button
+                  data-active={authMode === "admin_token" ? "true" : "false"}
+                  type="button"
+                  onClick={() => setAuthMode("admin_token")}
+                >
+                  Admin token
+                </button>
               </div>
-            </label>
-            {showAdvancedConnection ? (
-              <label className="field">
-                <span>API base</span>
-                <input
-                  value={apiBase}
-                  onChange={(event) => setApiBase(event.target.value)}
-                />
-              </label>
-            ) : null}
-            <button
-              className="primaryButton full"
-              disabled={busy || !adminToken}
-            >
-              {busy ? (
-                <Loader2 className="spin" size={16} />
+
+              {authMode === "login" ? (
+                <form className="authForm" onSubmit={loginWithPassword}>
+                  <label className="field">
+                    <span>Email</span>
+                    <input
+                      type="email"
+                      value={loginEmail}
+                      onChange={(event) => setLoginEmail(event.target.value)}
+                      autoComplete="email"
+                      autoFocus
+                    />
+                  </label>
+                  <label className="field">
+                    <span>Password</span>
+                    <div className="inputIcon">
+                      <KeyRound size={16} />
+                      <input
+                        type="password"
+                        value={loginPassword}
+                        onChange={(event) =>
+                          setLoginPassword(event.target.value)
+                        }
+                        autoComplete="current-password"
+                      />
+                    </div>
+                  </label>
+                  {showAdvancedConnection ? (
+                    <label className="field">
+                      <span>API base</span>
+                      <input
+                        value={apiBase}
+                        onChange={(event) => setApiBase(event.target.value)}
+                      />
+                    </label>
+                  ) : null}
+                  <button
+                    className="primaryButton full"
+                    disabled={busy || !loginEmail || !loginPassword}
+                  >
+                    {busy ? (
+                      <Loader2 className="spin" size={16} />
+                    ) : (
+                      <ShieldCheck size={16} />
+                    )}
+                    Login
+                  </button>
+                  <button
+                    className="textToggle"
+                    type="button"
+                    onClick={() =>
+                      setShowAdvancedConnection((current) => !current)
+                    }
+                  >
+                    {showAdvancedConnection ? "Hide advanced" : "Advanced"}
+                  </button>
+                  {status ? (
+                    <span className="status authStatus" data-tone={statusKind}>
+                      {statusKind === "danger" ? (
+                        <AlertCircle size={16} />
+                      ) : (
+                        <CheckCircle2 size={16} />
+                      )}
+                      {status}
+                    </span>
+                  ) : null}
+                </form>
               ) : (
-                <ShieldCheck size={16} />
+                <form
+                  className="authForm"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void refreshTenants();
+                  }}
+                >
+                  <label className="field">
+                    <span>Admin token</span>
+                    <div className="inputIcon">
+                      <KeyRound size={16} />
+                      <input
+                        type="password"
+                        value={adminToken}
+                        onChange={(event) => setAdminToken(event.target.value)}
+                        autoComplete="off"
+                        autoFocus
+                      />
+                    </div>
+                  </label>
+                  {showAdvancedConnection ? (
+                    <label className="field">
+                      <span>API base</span>
+                      <input
+                        value={apiBase}
+                        onChange={(event) => setApiBase(event.target.value)}
+                      />
+                    </label>
+                  ) : null}
+                  <button
+                    className="primaryButton full"
+                    disabled={busy || !adminToken}
+                  >
+                    {busy ? (
+                      <Loader2 className="spin" size={16} />
+                    ) : (
+                      <ShieldCheck size={16} />
+                    )}
+                    Enter admin
+                  </button>
+                  <button
+                    className="textToggle"
+                    type="button"
+                    onClick={() =>
+                      setShowAdvancedConnection((current) => !current)
+                    }
+                  >
+                    {showAdvancedConnection ? "Hide advanced" : "Advanced"}
+                  </button>
+                  {status ? (
+                    <span className="status authStatus" data-tone={statusKind}>
+                      {statusKind === "danger" ? (
+                        <AlertCircle size={16} />
+                      ) : (
+                        <CheckCircle2 size={16} />
+                      )}
+                      {status}
+                    </span>
+                  ) : null}
+                </form>
               )}
-              Enter admin
-            </button>
-            <button
-              className="textToggle"
-              type="button"
-              onClick={() => setShowAdvancedConnection((current) => !current)}
-            >
-              {showAdvancedConnection ? "Hide advanced" : "Advanced"}
-            </button>
-            {status ? (
-              <span className="status authStatus" data-tone={statusKind}>
-                {statusKind === "danger" ? (
-                  <AlertCircle size={16} />
-                ) : (
-                  <CheckCircle2 size={16} />
-                )}
-                {status}
-              </span>
-            ) : null}
-          </form>
-          )}
             </>
           )}
         </section>
@@ -8298,22 +8649,38 @@ export default function DashboardPage() {
   }
 
   return (
-    <main className="shell">
-      <aside className="sidebar">
+    <main className="shell" data-sidebar-open={sidebarOpen ? "true" : "false"}>
+      {sidebarOpen ? (
+        <button
+          type="button"
+          className="sidebarOverlay"
+          aria-label="Close navigation"
+          onClick={() => setSidebarOpen(false)}
+        />
+      ) : null}
+      <aside className="sidebar" id="primary-sidebar">
         <div className="brand">
           <span className="brandMark">
             <Bot size={20} />
           </span>
           <div>
-            <strong>Assaddar AI</strong>
+            <strong>{APP_CONFIG.brand.name}</strong>
             <span>Communication Admin</span>
           </div>
+          <button
+            type="button"
+            className="iconButton neutral sidebarClose"
+            aria-label="Close navigation"
+            onClick={() => setSidebarOpen(false)}
+          >
+            <X size={18} />
+          </button>
         </div>
 
         <section className="sidebarSection">
           <div className="sectionTitle">
             <Globe2 size={16} />
-            <span>Connection</span>
+            <span>Access</span>
           </div>
 
           <label className="field">
@@ -8386,6 +8753,11 @@ export default function DashboardPage() {
               Logout
             </button>
           ) : null}
+
+          <a className="sidebarProductLink" href="/landing">
+            <ExternalLink size={15} />
+            Product page
+          </a>
         </section>
 
         <section className="sidebarSection grow">
@@ -8405,7 +8777,10 @@ export default function DashboardPage() {
                       : "tenantButton"
                   }
                   key={tenant.id}
-                  onClick={() => setSelectedTenantId(tenant.id)}
+                  onClick={() => {
+                    setSelectedTenantId(tenant.id);
+                    setSidebarOpen(false);
+                  }}
                 >
                   <Building2 size={16} />
                   <span>{tenant.name}</span>
@@ -8448,12 +8823,27 @@ export default function DashboardPage() {
 
       <section className="workspace">
         <header className="topbar">
+          <button
+            type="button"
+            className="iconButton neutral menuButton"
+            aria-label="Open navigation"
+            aria-controls="primary-sidebar"
+            aria-expanded={sidebarOpen ? "true" : "false"}
+            onClick={() => setSidebarOpen(true)}
+          >
+            <Menu size={20} />
+          </button>
           <div className="titleGroup">
             <span className="eyebrow">{activeTabLabel}</span>
             <h1>{selectedTenant?.name ?? "Launch setup"}</h1>
             <p>{activeTabDescription[activeTab]}</p>
           </div>
-          <span className="status" data-tone={statusKind}>
+          <span
+            className="status"
+            data-tone={statusKind}
+            role="status"
+            aria-live="polite"
+          >
             {statusKind === "danger" ? (
               <AlertCircle size={16} />
             ) : (
@@ -8486,33 +8876,60 @@ export default function DashboardPage() {
       {renderLeadDetailDrawer()}
 
       {confirmDeleteItem ? (
-        <div className="modalBackdrop" role="presentation">
-          <section className="modalPanel" role="dialog" aria-modal="true">
-            <div className="panelTitle">
-              <Trash2 size={18} />
-              <h2>Delete knowledge</h2>
-            </div>
-            <p>{getQuestion(confirmDeleteItem)}</p>
-            <div className="rowActions">
-              <button
-                className="secondaryButton"
-                type="button"
-                onClick={() => setConfirmDeleteItem(null)}
-              >
-                Cancel
-              </button>
-              <button
-                className="dangerButton"
-                type="button"
-                disabled={busy}
-                onClick={() => deleteKnowledge(confirmDeleteItem)}
-              >
-                Delete
-              </button>
-            </div>
-          </section>
-        </div>
+        <DeleteKnowledgeModal
+          item={confirmDeleteItem}
+          busy={busy}
+          onCancel={() => setConfirmDeleteItem(null)}
+          onConfirm={() => deleteKnowledge(confirmDeleteItem)}
+        />
       ) : null}
+
+      <ToastStack toasts={toasts} onDismiss={dismissToast} />
     </main>
+  );
+}
+
+function DeleteKnowledgeModal({
+  item,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  item: KnowledgeItem;
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const dialogRef = useDialogA11y(true, onCancel);
+  return (
+    <div className="modalBackdrop" role="presentation">
+      <section
+        className="modalPanel"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Delete knowledge"
+        tabIndex={-1}
+        ref={dialogRef}
+      >
+        <div className="panelTitle">
+          <Trash2 size={18} />
+          <h2>Delete knowledge</h2>
+        </div>
+        <p>{getQuestion(item)}</p>
+        <div className="rowActions">
+          <button className="secondaryButton" type="button" onClick={onCancel}>
+            Cancel
+          </button>
+          <button
+            className="dangerButton"
+            type="button"
+            disabled={busy}
+            onClick={onConfirm}
+          >
+            Delete
+          </button>
+        </div>
+      </section>
+    </div>
   );
 }
