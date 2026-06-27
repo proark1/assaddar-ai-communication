@@ -1,4 +1,5 @@
 import { config } from "dotenv";
+import { createEmbeddingProvider } from "@assaddar/core";
 import { createDbClient, TenantRepository } from "@assaddar/db";
 import { loadEnv } from "./env";
 import { buildServer, type BuildServerOptions } from "./server";
@@ -9,23 +10,27 @@ async function main() {
   const env = loadEnv();
   const client = createDbClient();
   const store = new TenantRepository(client.db);
+  const embeddingProvider = createEmbeddingProvider(process.env);
   const serverOptions: BuildServerOptions = {
     store,
     adminToken: env.ADMIN_API_TOKEN,
-    allowedOrigins: env.WIDGET_ALLOWED_ORIGINS.split(",").map((origin) => origin.trim()),
+    allowedOrigins: env.WIDGET_ALLOWED_ORIGINS.split(",").map((origin) =>
+      origin.trim(),
+    ),
     metaVerifyToken: env.META_VERIFY_TOKEN,
     metaGraphApiVersion: env.META_GRAPH_API_VERSION,
     adminUser: {
       email: env.ADMIN_USER_EMAIL,
       name: env.ADMIN_USER_NAME,
-      role: env.ADMIN_USER_ROLE
-    }
+      role: env.ADMIN_USER_ROLE,
+    },
   };
   if (env.ADMIN_PUBLIC_URL) {
     serverOptions.adminPublicUrl = env.ADMIN_PUBLIC_URL;
   }
   if (env.LEAD_NOTIFICATION_WEBHOOK_URL) {
-    serverOptions.leadNotificationWebhookUrl = env.LEAD_NOTIFICATION_WEBHOOK_URL;
+    serverOptions.leadNotificationWebhookUrl =
+      env.LEAD_NOTIFICATION_WEBHOOK_URL;
   }
   if (env.LEAD_NOTIFICATION_EMAIL_TO) {
     serverOptions.leadNotificationEmailTo = env.LEAD_NOTIFICATION_EMAIL_TO;
@@ -42,7 +47,7 @@ async function main() {
         : {}),
       ...(env.LEAD_NOTIFICATION_SMTP_PASSWORD
         ? { password: env.LEAD_NOTIFICATION_SMTP_PASSWORD }
-        : {})
+        : {}),
     };
   }
   if (env.WHATSAPP_ACCESS_TOKEN) {
@@ -58,6 +63,12 @@ async function main() {
     serverOptions.twilioAccountSid = env.TWILIO_ACCOUNT_SID;
     serverOptions.twilioAuthToken = env.TWILIO_AUTH_TOKEN;
   }
+  if (embeddingProvider) {
+    serverOptions.embedder = async (text) => {
+      const [vector] = await embeddingProvider.embed([text]);
+      return vector ?? null;
+    };
+  }
 
   const app = await buildServer(serverOptions);
 
@@ -70,7 +81,7 @@ async function main() {
 
   await app.listen({
     host: env.API_HOST,
-    port: env.API_PORT
+    port: env.API_PORT,
   });
 }
 

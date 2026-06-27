@@ -21,8 +21,14 @@ export const TENANT_SCOPED_TABLES = [
 export type TenantScopedTable = (typeof TENANT_SCOPED_TABLES)[number];
 
 export function assertTenantId(tenantId: string): string {
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(tenantId)) {
-    throw new Error("A valid tenant_id is required for tenant-scoped data access.");
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      tenantId,
+    )
+  ) {
+    throw new Error(
+      "A valid tenant_id is required for tenant-scoped data access.",
+    );
   }
 
   return tenantId;

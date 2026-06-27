@@ -7,7 +7,7 @@ export const ChannelSchema = z.enum([
   "messenger",
   "tiktok",
   "telephone",
-  "admin_test"
+  "admin_test",
 ]);
 
 export type Channel = z.infer<typeof ChannelSchema>;
@@ -19,7 +19,7 @@ export const InboundMessageSchema = z.object({
   externalUserId: z.string().min(1).max(256).optional(),
   text: z.string().min(1).max(4000),
   locale: z.string().min(2).max(16).optional(),
-  metadata: z.record(z.unknown()).default({})
+  metadata: z.record(z.unknown()).default({}),
 });
 
 export type InboundMessage = z.infer<typeof InboundMessageSchema>;
@@ -107,7 +107,21 @@ export type AnswerResult = {
 
 export type AnswerDataStore = {
   getTenantPolicy(tenantId: string): Promise<TenantPolicy>;
-  searchKnowledge(tenantId: string, query: string, limit: number): Promise<KnowledgeChunk[]>;
+  searchKnowledge(
+    tenantId: string,
+    query: string,
+    limit: number,
+  ): Promise<KnowledgeChunk[]>;
+  /**
+   * Optional semantic search over stored embeddings. Returns chunks already
+   * scored by vector similarity (0..1). When absent, the engine uses keyword
+   * retrieval only.
+   */
+  searchKnowledgeByEmbedding?(
+    tenantId: string,
+    embedding: number[],
+    limit: number,
+  ): Promise<RetrievedChunk[]>;
 };
 
 export type HandoffInput = {

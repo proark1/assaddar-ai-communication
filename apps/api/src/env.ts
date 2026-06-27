@@ -17,7 +17,9 @@ export const EnvSchema = z.object({
   TWILIO_AUTH_TOKEN: z.string().optional(),
   ADMIN_USER_EMAIL: z.string().email().default("owner@assad-dar.de"),
   ADMIN_USER_NAME: z.string().default("Assad Dar"),
-  ADMIN_USER_ROLE: z.enum(["owner", "admin", "operator", "viewer"]).default("owner"),
+  ADMIN_USER_ROLE: z
+    .enum(["owner", "admin", "operator", "viewer"])
+    .default("owner"),
   LEAD_NOTIFICATION_WEBHOOK_URL: z.string().url().optional(),
   LEAD_NOTIFICATION_EMAIL_TO: z.string().email().optional(),
   LEAD_NOTIFICATION_EMAIL_FROM: z.string().email().optional(),

@@ -1,18 +1,31 @@
-import type { ChannelAdapter, DeliveryResult, NormalizedInboundEvent, OutboundMessage } from "./types";
+import type {
+  ChannelAdapter,
+  DeliveryResult,
+  NormalizedInboundEvent,
+  OutboundMessage,
+} from "./types";
 
 export class TwilioVoiceAdapter implements ChannelAdapter {
   readonly channel = "telephone" as const;
   readonly provider = "twilio";
 
-  normalizeInbound(payload: unknown, tenantId: string): NormalizedInboundEvent[] {
+  normalizeInbound(
+    payload: unknown,
+    tenantId: string,
+  ): NormalizedInboundEvent[] {
     if (!isRecord(payload)) {
       return [];
     }
 
-    const speechResult = typeof payload.SpeechResult === "string" ? payload.SpeechResult : undefined;
-    const digits = typeof payload.Digits === "string" ? payload.Digits : undefined;
+    const speechResult =
+      typeof payload.SpeechResult === "string"
+        ? payload.SpeechResult
+        : undefined;
+    const digits =
+      typeof payload.Digits === "string" ? payload.Digits : undefined;
     const from = typeof payload.From === "string" ? payload.From : undefined;
-    const callSid = typeof payload.CallSid === "string" ? payload.CallSid : undefined;
+    const callSid =
+      typeof payload.CallSid === "string" ? payload.CallSid : undefined;
     const text = digits === "0" ? "human_transfer_requested" : speechResult;
     if (!text) {
       return [];
@@ -23,7 +36,7 @@ export class TwilioVoiceAdapter implements ChannelAdapter {
       channel: this.channel,
       provider: this.provider,
       text,
-      raw: payload
+      raw: payload,
     };
 
     if (typeof payload.To === "string") {
@@ -44,7 +57,7 @@ export class TwilioVoiceAdapter implements ChannelAdapter {
   async sendMessage(_message: OutboundMessage): Promise<DeliveryResult> {
     return {
       status: "sent",
-      detail: "Telephone replies are rendered as TwiML by the voice runtime."
+      detail: "Telephone replies are rendered as TwiML by the voice runtime.",
     };
   }
 }
@@ -57,7 +70,7 @@ export type TwiMLVoiceOptions = {
 
 export function createTwiMLSay(
   message: string,
-  options: TwiMLVoiceOptions = {}
+  options: TwiMLVoiceOptions = {},
 ): string {
   const actionUrl = options.actionUrl ?? "/twilio/voice";
   const language = options.language ?? "de-DE";
@@ -67,7 +80,7 @@ export function createTwiMLSay(
 
 export function createTwiMLGather(
   prompt: string,
-  options: TwiMLVoiceOptions = {}
+  options: TwiMLVoiceOptions = {},
 ): string {
   const actionUrl = options.actionUrl ?? "/twilio/voice";
   const language = options.language ?? "de-DE";
@@ -77,7 +90,7 @@ export function createTwiMLGather(
 
 export function createTwiMLDial(
   phoneNumber: string,
-  options: TwiMLVoiceOptions = {}
+  options: TwiMLVoiceOptions = {},
 ): string {
   const language = options.language ?? "de-DE";
   const voice = options.voice ?? "alice";

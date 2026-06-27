@@ -11,7 +11,7 @@ async function main() {
 
   const sql = postgres(connectionString, {
     max: 1,
-    transform: postgres.camel
+    transform: postgres.camel,
   });
 
   try {
@@ -44,7 +44,9 @@ async function main() {
     console.log(`  user: ${connection?.userName}`);
     console.log(`  postgres: ${connection?.serverVersion}`);
     console.log(`  pgvector available: ${vector?.available ? "yes" : "no"}`);
-    console.log(`  pgvector installed: ${vector?.installedVersion ?? "not yet"}`);
+    console.log(
+      `  pgvector installed: ${vector?.installedVersion ?? "not yet"}`,
+    );
   } finally {
     await sql.end();
   }

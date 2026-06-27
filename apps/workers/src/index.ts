@@ -1,8 +1,14 @@
 import { config } from "dotenv";
 import { Worker } from "bullmq";
+import { createEmbeddingProvider } from "@assaddar/core";
+import { createDbClient, TenantRepository } from "@assaddar/db";
 import { jobSchemas, type WorkerJobName } from "./jobs";
 
 config({ path: new URL("../../../.env", import.meta.url) });
+
+const dbClient = createDbClient();
+const repository = new TenantRepository(dbClient.db);
+const embeddingProvider = createEmbeddingProvider(process.env);
 
 const redisUrl = process.env.REDIS_URL ?? "redis://localhost:6379";
 const parsedRedisUrl = new URL(redisUrl);
@@ -11,8 +17,10 @@ const connection = {
   port: Number(parsedRedisUrl.port || 6379),
   username: parsedRedisUrl.username || undefined,
   password: parsedRedisUrl.password || undefined,
-  db: parsedRedisUrl.pathname ? Number(parsedRedisUrl.pathname.slice(1) || 0) : 0,
-  maxRetriesPerRequest: null
+  db: parsedRedisUrl.pathname
+    ? Number(parsedRedisUrl.pathname.slice(1) || 0)
+    : 0,
+  maxRetriesPerRequest: null,
 };
 
 const worker = new Worker(
@@ -30,31 +38,67 @@ const worker = new Worker(
         return {
           status: "skipped",
           reason: "Object storage parser provider not configured.",
-          payload
+          payload,
         };
-      case "embeddings.generate":
-        return {
-          status: "skipped",
-          reason: "Embedding provider not configured.",
-          payload
+      case "embeddings.generate": {
+        if (!embeddingProvider) {
+          return {
+            status: "skipped",
+            reason: "Embedding provider not configured (set OPENAI_API_KEY).",
+            payload,
+          };
+        }
+        const embedPayload = payload as {
+          tenantId: string;
+          chunkIds: string[];
         };
+        const chunks = await repository.listChunksForEmbedding(
+          embedPayload.tenantId,
+          embedPayload.chunkIds,
+        );
+        if (chunks.length === 0) {
+          return { status: "ok", embedded: 0, payload };
+        }
+        const inputs = chunks.map((chunk) =>
+          [chunk.title, chunk.content]
+            .filter(Boolean)
+            .join("\n")
+            .slice(0, 8000),
+        );
+        const vectors = await embeddingProvider.embed(inputs);
+        let embedded = 0;
+        for (let index = 0; index < chunks.length; index += 1) {
+          const vector = vectors[index];
+          const chunk = chunks[index];
+          if (!vector || !chunk) {
+            continue;
+          }
+          await repository.setChunkEmbedding(
+            embedPayload.tenantId,
+            chunk.id,
+            vector,
+          );
+          embedded += 1;
+        }
+        return { status: "ok", embedded, payload };
+      }
       case "webhook.process":
         return {
           status: "skipped",
           reason: "Channel credential mapping not configured.",
-          payload
+          payload,
         };
       case "usage.meter":
         return {
           status: "ok",
-          payload
+          payload,
         };
     }
   },
   {
     connection,
-    concurrency: 5
-  }
+    concurrency: 5,
+  },
 );
 
 worker.on("completed", (job) => {
@@ -67,4 +111,5 @@ worker.on("failed", (job, error) => {
 
 process.on("SIGTERM", async () => {
   await worker.close();
+  await dbClient.close();
 });

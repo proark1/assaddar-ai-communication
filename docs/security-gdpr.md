@@ -22,16 +22,26 @@
 - The MVP answer engine is extractive and deterministic.
 - It does not answer from general model knowledge.
 - It does not train shared models on customer data.
+- Retrieval is keyword-based by default. Setting `OPENAI_API_KEY` enables optional hybrid keyword + semantic retrieval (pgvector); only the chunk text being embedded is sent to the embedding provider, and the engine degrades to keyword-only on any provider failure.
 - Future LLM providers must receive only the retrieved tenant context required for the answer.
 - Logs should avoid storing raw provider secrets or unnecessary personal data.
 
 ## Abuse And Cost Controls
 
-- Fastify rate limits are enabled globally.
+- Fastify rate limits are enabled globally (configurable via `RATE_LIMIT_MAX` / `RATE_LIMIT_WINDOW`).
+- Stricter per-route limits protect the public and auth surface: `POST /auth/login` (10 / 5 min, brute-force throttle), `POST /widget/chat` (30 / min), `POST /widget/leads` (10 / min), `POST /widget/readiness` (20 / min), `POST /widget/events` (60 / min).
 - The widget adds client-side throttling.
 - Tenants have message length limits.
 - Usage events log credits and metadata by tenant/channel.
 - Blocked topics prevent common off-topic and high-risk prompts before retrieval.
+
+## Sessions And Logging
+
+- Login returns a generic `Invalid email or password.` and never reveals whether an account exists.
+- Expired sessions are pruned on a background interval and on demand (`deleteExpiredSessions`), so the session table does not grow unbounded.
+- Request logs redact `x-admin-token`, `authorization`, `cookie`, and `set-cookie`.
+- Every response carries an `x-request-id` correlation id (honours an inbound `x-request-id`) for cross-service tracing.
+- `GET /health` is a cheap liveness probe; `GET /ready` verifies database connectivity and returns `503` when the database is unreachable.
 
 ## Retention And Subject Rights
 

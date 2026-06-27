@@ -18,8 +18,9 @@ async function main() {
           primaryColor: "#155eef",
           backgroundColor: "#ffffff",
           textColor: "#172033",
-          openingMessage: "Hi, I can answer questions from Demo Business knowledge."
-        }
+          openingMessage:
+            "Hi, I can answer questions from Demo Business knowledge.",
+        },
       }));
 
     const knowledge = await repo.listKnowledge(tenant.id);
@@ -27,17 +28,19 @@ async function main() {
       await repo.addFaq(tenant.id, {
         question: "What are your opening hours?",
         answer: "Demo Business is open Monday to Friday from 09:00 to 18:00.",
-        tags: ["opening-hours", "faq"]
+        tags: ["opening-hours", "faq"],
       });
       await repo.addFaq(tenant.id, {
         question: "Which services do you offer?",
-        answer: "Demo Business offers AI communication setup, website chatbot integration, WhatsApp automation planning, and voice AI prototypes.",
-        tags: ["services", "faq"]
+        answer:
+          "Demo Business offers AI communication setup, website chatbot integration, WhatsApp automation planning, and voice AI prototypes.",
+        tags: ["services", "faq"],
       });
       await repo.addFaq(tenant.id, {
         question: "How can a customer reach a human?",
-        answer: "Customers can leave a message in chat, and the team will follow up by email or phone.",
-        tags: ["handoff", "faq"]
+        answer:
+          "Customers can leave a message in chat, and the team will follow up by email or phone.",
+        tags: ["handoff", "faq"],
       });
     }
 

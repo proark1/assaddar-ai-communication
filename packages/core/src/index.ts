@@ -1,3 +1,4 @@
+export * from "./embeddings";
 export * from "./engine";
 export * from "./policy";
 export * from "./text";

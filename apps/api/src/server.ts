@@ -26,6 +26,7 @@ import tls from "node:tls";
 import { promisify } from "node:util";
 import { z } from "zod";
 import { openApiDocument } from "./openapi";
+import { AppError } from "./errors";
 
 const scryptAsync = promisify(scrypt);
 
@@ -256,8 +257,16 @@ const PurchaseTwilioNumberSchema = z.object({
   phoneNumber: E164PhoneNumberSchema,
   numberType: TwilioNumberTypeSchema.default("local"),
   friendlyName: z.string().trim().min(1).max(120).optional(),
-  bundleSid: z.string().trim().regex(/^BU[0-9a-fA-F]{32}$/).optional(),
-  addressSid: z.string().trim().regex(/^AD[0-9a-fA-F]{32}$/).optional(),
+  bundleSid: z
+    .string()
+    .trim()
+    .regex(/^BU[0-9a-fA-F]{32}$/)
+    .optional(),
+  addressSid: z
+    .string()
+    .trim()
+    .regex(/^AD[0-9a-fA-F]{32}$/)
+    .optional(),
 });
 
 const ConnectExistingTwilioNumberSchema = z
@@ -349,7 +358,12 @@ const TelephoneSettingsSchema = z.object({
       disclosureText: z.string().trim().min(1).max(500).optional(),
       recordingEnabled: z.boolean().default(false),
       storeTranscripts: z.boolean().default(true),
-      transcriptRetentionDays: z.coerce.number().int().min(1).max(3650).default(90),
+      transcriptRetentionDays: z.coerce
+        .number()
+        .int()
+        .min(1)
+        .max(3650)
+        .default(90),
     })
     .optional(),
   voiceQuality: z
@@ -509,6 +523,8 @@ export type PlatformStore = AnswerDataStore &
     }): Promise<unknown>;
     getAuthSession(tokenHash: string): Promise<StoreAuthSession | null>;
     deleteUserSession(tokenHash: string): Promise<void>;
+    deleteExpiredSessions(now?: Date): Promise<number>;
+    ping(): Promise<boolean>;
     getTenantMembership(
       userId: string,
       tenantId: string,
@@ -652,6 +668,11 @@ export type BuildServerOptions = {
   messengerPageAccessToken?: string;
   twilioAccountSid?: string;
   twilioAuthToken?: string;
+  /**
+   * Optional query embedder. When supplied, the answer engine runs hybrid
+   * keyword + semantic retrieval. Omitted in keyword-only mode.
+   */
+  embedder?: (text: string) => Promise<number[] | null>;
 };
 
 type LeadNotificationPayload = {
@@ -690,9 +711,24 @@ export async function buildServer(
   options: BuildServerOptions,
 ): Promise<FastifyInstance> {
   const app = Fastify({
+    // Honour an inbound correlation id (e.g. from a gateway/load balancer) so
+    // logs can be traced across services; otherwise Fastify generates one.
+    requestIdHeader: "x-request-id",
     logger: {
       level: process.env.LOG_LEVEL ?? "info",
+      // Never write credentials into logs.
+      redact: [
+        'req.headers["x-admin-token"]',
+        "req.headers.authorization",
+        "req.headers.cookie",
+        'res.headers["set-cookie"]',
+      ],
     },
+  });
+
+  // Surface the correlation id on responses so clients/operators can quote it.
+  app.addHook("onSend", async (request, reply) => {
+    reply.header("x-request-id", request.id);
   });
 
   const allowedOrigins = options.allowedOrigins ?? [];
@@ -711,14 +747,34 @@ export async function buildServer(
     },
   });
 
+  const globalRateLimitMax = Number(process.env.RATE_LIMIT_MAX ?? 120);
   await app.register(rateLimit, {
-    max: 120,
-    timeWindow: "1 minute",
+    max: Number.isFinite(globalRateLimitMax) ? globalRateLimitMax : 120,
+    timeWindow: process.env.RATE_LIMIT_WINDOW ?? "1 minute",
+  });
+
+  // Periodically drop expired sessions so the table does not grow unbounded.
+  // Unref'd so it never keeps the process alive on its own.
+  const sessionCleanupMs = 60 * 60 * 1000;
+  const sessionCleanupTimer = setInterval(() => {
+    void options.store
+      .deleteExpiredSessions()
+      .then((removed) => {
+        if (removed > 0) {
+          app.log.info({ removed }, "Pruned expired sessions");
+        }
+      })
+      .catch((error) => app.log.error(error, "Session cleanup failed"));
+  }, sessionCleanupMs);
+  sessionCleanupTimer.unref?.();
+  app.addHook("onClose", async () => {
+    clearInterval(sessionCleanupTimer);
   });
 
   const engine = createAnswerEngine({
     dataStore: options.store,
     handoffStore: options.store,
+    ...(options.embedder ? { embedder: options.embedder } : {}),
   });
   const websiteAdapter = new WebsiteAdapter();
   const metaAdapters: Record<
@@ -744,42 +800,66 @@ export async function buildServer(
     ),
   };
 
+  // Liveness probe: cheap, never touches dependencies.
   app.get("/health", async () => ({
     ok: true,
     service: "assaddar-ai-communication-api",
   }));
 
+  // Readiness probe: verifies the database is reachable. Returns 503 when not,
+  // so orchestrators can hold traffic until the dependency recovers.
+  app.get("/ready", async (_request, reply) => {
+    const dbUp = await options.store.ping();
+    if (!dbUp) {
+      return reply.code(503).send({
+        ok: false,
+        service: "assaddar-ai-communication-api",
+        db: "down",
+      });
+    }
+    return { ok: true, service: "assaddar-ai-communication-api", db: "up" };
+  });
+
   app.get("/openapi.json", async () => openApiDocument);
 
-  app.post("/auth/login", async (request, reply) => {
-    const body = LoginSchema.parse(request.body);
-    const user = await options.store.findUserByEmailForAuth(body.email);
-    if (
-      !user ||
-      user.status !== "active" ||
-      !user.passwordHash ||
-      !(await verifyPassword(body.password, user.passwordHash))
-    ) {
-      return reply.code(401).send({ error: "Invalid email or password." });
-    }
+  app.post(
+    "/auth/login",
+    {
+      config: {
+        // Throttle credential stuffing / brute-force attempts per source IP.
+        rateLimit: { max: 10, timeWindow: "5 minutes" },
+      },
+    },
+    async (request, reply) => {
+      const body = LoginSchema.parse(request.body);
+      const user = await options.store.findUserByEmailForAuth(body.email);
+      if (
+        !user ||
+        user.status !== "active" ||
+        !user.passwordHash ||
+        !(await verifyPassword(body.password, user.passwordHash))
+      ) {
+        return reply.code(401).send({ error: "Invalid email or password." });
+      }
 
-    const token = createSessionToken();
-    const expiresAt = new Date(Date.now() + sessionDurationMs());
-    await options.store.createUserSession({
-      userId: user.id,
-      tokenHash: hashSecret(token),
-      expiresAt,
-      userAgent: request.headers["user-agent"] ?? null,
-      ipAddress: request.ip,
-    });
-    setSessionCookie(reply, token, expiresAt);
+      const token = createSessionToken();
+      const expiresAt = new Date(Date.now() + sessionDurationMs());
+      await options.store.createUserSession({
+        userId: user.id,
+        tokenHash: hashSecret(token),
+        expiresAt,
+        userAgent: request.headers["user-agent"] ?? null,
+        ipAddress: request.ip,
+      });
+      setSessionCookie(reply, token, expiresAt);
 
-    const session = await options.store.getAuthSession(hashSecret(token));
-    if (!session) {
-      return reply.code(500).send({ error: "Failed to create session." });
-    }
-    return buildUserSessionPayload(session);
-  });
+      const session = await options.store.getAuthSession(hashSecret(token));
+      if (!session) {
+        return reply.code(500).send({ error: "Failed to create session." });
+      }
+      return buildUserSessionPayload(session);
+    },
+  );
 
   app.post("/auth/logout", async (request, reply) => {
     const token = getSessionToken(request);
@@ -914,9 +994,10 @@ export async function buildServer(
         role: body.role,
         tokenHash: hashSecret(token),
         expiresAt: new Date(Date.now() + inviteDurationMs()),
-        invitedByUserId: getRequestAuth(request).kind === "user"
-          ? getRequestAuth(request).user.id
-          : null,
+        invitedByUserId:
+          getRequestAuth(request).kind === "user"
+            ? getRequestAuth(request).user.id
+            : null,
       });
       return reply.code(201).send({
         invite,
@@ -1196,12 +1277,7 @@ export async function buildServer(
         body.orderedNumber && body.sipConfigured ? "connected" : "pending";
       const externalAccountId =
         body.orderedNumber ??
-        [
-          body.provider,
-          body.requestedCountry,
-          body.areaCode,
-          body.locality,
-        ]
+        [body.provider, body.requestedCountry, body.areaCode, body.locality]
           .filter(Boolean)
           .join(":");
       const connection = await options.store.upsertChannelConnection(tenantId, {
@@ -1356,7 +1432,8 @@ export async function buildServer(
       const current = connections
         .map((connection) => asRecord(connection))
         .find((connection) => connection.channel === "telephone");
-      const provider = body.provider ?? normalizeTelephoneProvider(current?.provider);
+      const provider =
+        body.provider ?? normalizeTelephoneProvider(current?.provider);
       const currentSettings = asRecord(current?.settings);
       const voiceBridgeUrl = buildTelephoneVoiceBridgeUrl(options, tenant);
       const sipTarget = buildTelephoneSipTarget(tenant);
@@ -1775,356 +1852,393 @@ export async function buildServer(
     return config;
   });
 
-  app.post("/widget/events", async (request, reply) => {
-    const body = WidgetEventSchema.parse(request.body);
-    const tenant = await options.store.getTenantByPublicId(body.assistantId);
-    if (!tenant) {
-      return reply.code(404).send({ error: "Assistant not found." });
-    }
-
-    await options.store.logUsage({
-      tenantId: tenant.id,
-      channel: "website",
-      eventType: body.eventType,
-      credits: 0,
-      metadata: {
-        conversationId: body.conversationId,
-        visitorId: body.visitorId,
-        pageUrl: body.pageUrl,
-        ...(body.metadata ?? {}),
+  app.post(
+    "/widget/events",
+    {
+      config: {
+        rateLimit: { max: 60, timeWindow: "1 minute" },
       },
-    });
+    },
+    async (request, reply) => {
+      const body = WidgetEventSchema.parse(request.body);
+      const tenant = await options.store.getTenantByPublicId(body.assistantId);
+      if (!tenant) {
+        return reply.code(404).send({ error: "Assistant not found." });
+      }
 
-    return reply.code(202).send({ received: true });
-  });
+      await options.store.logUsage({
+        tenantId: tenant.id,
+        channel: "website",
+        eventType: body.eventType,
+        credits: 0,
+        metadata: {
+          conversationId: body.conversationId,
+          visitorId: body.visitorId,
+          pageUrl: body.pageUrl,
+          ...(body.metadata ?? {}),
+        },
+      });
 
-  app.post("/widget/chat", async (request, reply) => {
-    const body = WidgetChatSchema.parse(request.body);
-    const tenant = await options.store.getTenantByPublicId(body.assistantId);
-    if (!tenant) {
-      return reply.code(404).send({ error: "Assistant not found." });
-    }
+      return reply.code(202).send({ received: true });
+    },
+  );
 
-    const [event] = websiteAdapter.normalizeInbound(
-      {
-        message: body.message,
-        conversationId: body.conversationId,
-        visitorId: body.visitorId,
+  app.post(
+    "/widget/chat",
+    {
+      config: {
+        // Stricter than the global limit so one visitor cannot drain a
+        // tenant's answer budget.
+        rateLimit: { max: 30, timeWindow: "1 minute" },
       },
-      tenant.id,
-    );
-    if (!event) {
-      return reply.code(400).send({ error: "No message event found." });
-    }
+    },
+    async (request, reply) => {
+      const body = WidgetChatSchema.parse(request.body);
+      const tenant = await options.store.getTenantByPublicId(body.assistantId);
+      if (!tenant) {
+        return reply.code(404).send({ error: "Assistant not found." });
+      }
 
-    const conversationInput: Parameters<
-      PlatformStore["findOrCreateConversation"]
-    >[0] = {
-      tenantId: tenant.id,
-      channel: "website",
-      locale: body.locale ?? tenant.defaultLocale,
-    };
-    if (body.conversationId) {
-      conversationInput.publicConversationId = body.conversationId;
-    }
-    if (body.visitorId) {
-      conversationInput.externalUserId = body.visitorId;
-    }
+      const [event] = websiteAdapter.normalizeInbound(
+        {
+          message: body.message,
+          conversationId: body.conversationId,
+          visitorId: body.visitorId,
+        },
+        tenant.id,
+      );
+      if (!event) {
+        return reply.code(400).send({ error: "No message event found." });
+      }
 
-    const conversation =
-      await options.store.findOrCreateConversation(conversationInput);
+      const conversationInput: Parameters<
+        PlatformStore["findOrCreateConversation"]
+      >[0] = {
+        tenantId: tenant.id,
+        channel: "website",
+        locale: body.locale ?? tenant.defaultLocale,
+      };
+      if (body.conversationId) {
+        conversationInput.publicConversationId = body.conversationId;
+      }
+      if (body.visitorId) {
+        conversationInput.externalUserId = body.visitorId;
+      }
 
-    await options.store.addMessage({
-      tenantId: tenant.id,
-      conversationId: conversation.id,
-      channel: "website",
-      direction: "inbound",
-      role: "user",
-      content: event.text,
-    });
+      const conversation =
+        await options.store.findOrCreateConversation(conversationInput);
 
-    const answer = await engine.answer(
-      InboundMessageSchema.parse({
+      await options.store.addMessage({
         tenantId: tenant.id,
         conversationId: conversation.id,
         channel: "website",
-        externalUserId: body.visitorId,
-        text: event.text,
-        locale: body.locale ?? tenant.defaultLocale,
-        metadata: {},
-      }),
-    );
+        direction: "inbound",
+        role: "user",
+        content: event.text,
+      });
 
-    await options.store.addMessage({
-      tenantId: tenant.id,
-      conversationId: conversation.id,
-      channel: "website",
-      direction: "outbound",
-      role: "assistant",
-      content: answer.text,
-      trace: { answer },
-    });
+      const answer = await engine.answer(
+        InboundMessageSchema.parse({
+          tenantId: tenant.id,
+          conversationId: conversation.id,
+          channel: "website",
+          externalUserId: body.visitorId,
+          text: event.text,
+          locale: body.locale ?? tenant.defaultLocale,
+          metadata: {},
+        }),
+      );
 
-    await options.store.logUsage({
-      tenantId: tenant.id,
-      channel: "website",
-      eventType: answer.status,
-      credits: answer.usage.estimatedCredits,
-      metadata: {
-        intent: answer.intent,
-        confidence: answer.confidence,
-      },
-    });
-
-    return {
-      conversationId: conversation.publicId,
-      status: answer.status,
-      reply: answer.text,
-      citations: answer.citations,
-      handoffRecommended: answer.handoffRecommended,
-    };
-  });
-
-  app.post("/widget/leads", async (request, reply) => {
-    const body = WidgetLeadSchema.parse(request.body);
-    const tenant = await options.store.getTenantByPublicId(body.assistantId);
-    if (!tenant) {
-      return reply.code(404).send({ error: "Assistant not found." });
-    }
-    const theme = tenant.theme ?? {};
-    const automation = getAutomationSettings(theme);
-    const autoQualified = shouldAutoQualifyLeadDetails(body.fields, automation);
-    const pipelineStage = autoQualified ? "qualified" : "new";
-
-    const conversationInput: Parameters<
-      PlatformStore["findOrCreateConversation"]
-    >[0] = {
-      tenantId: tenant.id,
-      channel: "website",
-      locale: tenant.defaultLocale,
-    };
-    if (body.conversationId) {
-      conversationInput.publicConversationId = body.conversationId;
-    }
-    if (body.visitorId) {
-      conversationInput.externalUserId = body.visitorId;
-    }
-
-    const conversation =
-      await options.store.findOrCreateConversation(conversationInput);
-    const message = formatLeadCaptureMessage(body.fields, body.pageUrl);
-    await options.store.enrichConversationContact({
-      tenantId: tenant.id,
-      conversationId: conversation.id,
-      channel: "website",
-      externalUserId: body.visitorId ?? null,
-      contact: contactProfileFromFields(body.fields, {
-        pageUrl: body.pageUrl,
-        source: "lead_capture",
-      }),
-    });
-
-    await options.store.addMessage({
-      tenantId: tenant.id,
-      conversationId: conversation.id,
-      channel: "website",
-      direction: "inbound",
-      role: "user",
-      content: message,
-      trace: {
-        type: "lead_capture",
-        fields: body.fields,
-        pageUrl: body.pageUrl,
-      },
-    });
-
-    const handoff = await options.store.createHandoff({
-      tenantId: tenant.id,
-      conversationId: conversation.id,
-      channel: "website",
-      reason: "lead_capture",
-      message,
-      metadata: {
-        pipelineStage,
-        ...(autoQualified
-          ? {
-              automationReason: "lead_details",
-              pipelineUpdatedAt: new Date().toISOString(),
-            }
-          : {}),
-      },
-    });
-    const handoffId = getStringProperty(handoff, "id");
-
-    if (automation.ownerLeadEmailEnabled) {
-      await notifyLead(options, {
+      await options.store.addMessage({
         tenantId: tenant.id,
-        tenantName: tenant.name,
-        type: "lead_capture",
-        conversationId: conversation.publicId,
-        message,
-        fields: body.fields,
-        ...(handoffId ? { handoffId } : {}),
-        ...(body.pageUrl ? { pageUrl: body.pageUrl } : {}),
+        conversationId: conversation.id,
+        channel: "website",
+        direction: "outbound",
+        role: "assistant",
+        content: answer.text,
+        trace: { answer },
       });
-    }
 
-    if (automation.visitorConfirmationEmailEnabled) {
-      const bookingUrl = getBookingUrl(theme);
-      await notifyVisitorConfirmation(options, {
-        tenantName: tenant.name,
-        type: "lead_capture",
-        fields: body.fields,
-        ...(body.pageUrl ? { pageUrl: body.pageUrl } : {}),
-        ...(bookingUrl ? { bookingUrl } : {}),
-      });
-    }
-
-    await options.store.logUsage({
-      tenantId: tenant.id,
-      channel: "website",
-      eventType: "lead_capture",
-      credits: 1,
-      metadata: {
-        fields: Object.keys(body.fields),
-        pageUrl: body.pageUrl,
-        pipelineStage,
-        autoQualified,
-      },
-    });
-
-    return reply.code(201).send({
-      conversationId: conversation.publicId,
-      status: "captured",
-    });
-  });
-
-  app.post("/widget/readiness", async (request, reply) => {
-    const body = WidgetReadinessSchema.parse(request.body);
-    const tenant = await options.store.getTenantByPublicId(body.assistantId);
-    if (!tenant) {
-      return reply.code(404).send({ error: "Assistant not found." });
-    }
-    const theme = tenant.theme ?? {};
-    const automation = getAutomationSettings(theme);
-
-    const conversationInput: Parameters<
-      PlatformStore["findOrCreateConversation"]
-    >[0] = {
-      tenantId: tenant.id,
-      channel: "website",
-      locale: tenant.defaultLocale,
-    };
-    if (body.conversationId) {
-      conversationInput.publicConversationId = body.conversationId;
-    }
-    if (body.visitorId) {
-      conversationInput.externalUserId = body.visitorId;
-    }
-
-    const conversation =
-      await options.store.findOrCreateConversation(conversationInput);
-    const score = scoreReadiness(body.answers);
-    const message = formatReadinessMessage(body.answers, score, body.pageUrl);
-    await options.store.enrichConversationContact({
-      tenantId: tenant.id,
-      conversationId: conversation.id,
-      channel: "website",
-      externalUserId: body.visitorId ?? null,
-      contact: contactProfileFromFields(body.answers, {
-        pageUrl: body.pageUrl,
-        source: "readiness_assessment",
-        score,
-      }),
-    });
-    const autoQualified =
-      automation.autoQualifyReadinessEnabled &&
-      score >= automation.readinessQualificationScore;
-    const pipelineStage = autoQualified ? "qualified" : "new";
-
-    await options.store.addMessage({
-      tenantId: tenant.id,
-      conversationId: conversation.id,
-      channel: "website",
-      direction: "inbound",
-      role: "user",
-      content: message,
-      trace: {
-        type: "readiness_assessment",
-        answers: body.answers,
-        score,
-        pageUrl: body.pageUrl,
-      },
-    });
-
-    const handoff = await options.store.createHandoff({
-      tenantId: tenant.id,
-      conversationId: conversation.id,
-      channel: "website",
-      reason: "readiness_assessment",
-      message,
-      metadata: {
-        pipelineStage,
-        score,
-        ...(autoQualified
-          ? {
-              automationReason: "readiness_score",
-              pipelineUpdatedAt: new Date().toISOString(),
-            }
-          : {}),
-      },
-    });
-    const handoffId = getStringProperty(handoff, "id");
-
-    await options.store.logUsage({
-      tenantId: tenant.id,
-      channel: "website",
-      eventType: "readiness_assessment",
-      credits: 1,
-      metadata: {
-        score,
-        fields: Object.keys(body.answers),
-        pageUrl: body.pageUrl,
-        pipelineStage,
-        autoQualified,
-      },
-    });
-
-    if (automation.ownerLeadEmailEnabled) {
-      await notifyLead(options, {
+      await options.store.logUsage({
         tenantId: tenant.id,
-        tenantName: tenant.name,
-        type: "readiness_assessment",
+        channel: "website",
+        eventType: answer.status,
+        credits: answer.usage.estimatedCredits,
+        metadata: {
+          intent: answer.intent,
+          confidence: answer.confidence,
+        },
+      });
+
+      return {
         conversationId: conversation.publicId,
+        status: answer.status,
+        reply: answer.text,
+        citations: answer.citations,
+        handoffRecommended: answer.handoffRecommended,
+      };
+    },
+  );
+
+  app.post(
+    "/widget/leads",
+    {
+      config: {
+        rateLimit: { max: 10, timeWindow: "1 minute" },
+      },
+    },
+    async (request, reply) => {
+      const body = WidgetLeadSchema.parse(request.body);
+      const tenant = await options.store.getTenantByPublicId(body.assistantId);
+      if (!tenant) {
+        return reply.code(404).send({ error: "Assistant not found." });
+      }
+      const theme = tenant.theme ?? {};
+      const automation = getAutomationSettings(theme);
+      const autoQualified = shouldAutoQualifyLeadDetails(
+        body.fields,
+        automation,
+      );
+      const pipelineStage = autoQualified ? "qualified" : "new";
+
+      const conversationInput: Parameters<
+        PlatformStore["findOrCreateConversation"]
+      >[0] = {
+        tenantId: tenant.id,
+        channel: "website",
+        locale: tenant.defaultLocale,
+      };
+      if (body.conversationId) {
+        conversationInput.publicConversationId = body.conversationId;
+      }
+      if (body.visitorId) {
+        conversationInput.externalUserId = body.visitorId;
+      }
+
+      const conversation =
+        await options.store.findOrCreateConversation(conversationInput);
+      const message = formatLeadCaptureMessage(body.fields, body.pageUrl);
+      await options.store.enrichConversationContact({
+        tenantId: tenant.id,
+        conversationId: conversation.id,
+        channel: "website",
+        externalUserId: body.visitorId ?? null,
+        contact: contactProfileFromFields(body.fields, {
+          pageUrl: body.pageUrl,
+          source: "lead_capture",
+        }),
+      });
+
+      await options.store.addMessage({
+        tenantId: tenant.id,
+        conversationId: conversation.id,
+        channel: "website",
+        direction: "inbound",
+        role: "user",
+        content: message,
+        trace: {
+          type: "lead_capture",
+          fields: body.fields,
+          pageUrl: body.pageUrl,
+        },
+      });
+
+      const handoff = await options.store.createHandoff({
+        tenantId: tenant.id,
+        conversationId: conversation.id,
+        channel: "website",
+        reason: "lead_capture",
         message,
-        fields: body.answers,
-        ...(handoffId ? { handoffId } : {}),
-        score,
-        ...(body.pageUrl ? { pageUrl: body.pageUrl } : {}),
+        metadata: {
+          pipelineStage,
+          ...(autoQualified
+            ? {
+                automationReason: "lead_details",
+                pipelineUpdatedAt: new Date().toISOString(),
+              }
+            : {}),
+        },
       });
-    }
+      const handoffId = getStringProperty(handoff, "id");
 
-    if (automation.visitorConfirmationEmailEnabled) {
-      const bookingUrl = getBookingUrl(theme);
-      await notifyVisitorConfirmation(options, {
-        tenantName: tenant.name,
-        type: "readiness_assessment",
-        fields: body.answers,
-        score,
-        ...(body.pageUrl ? { pageUrl: body.pageUrl } : {}),
-        ...(bookingUrl ? { bookingUrl } : {}),
+      if (automation.ownerLeadEmailEnabled) {
+        await notifyLead(options, {
+          tenantId: tenant.id,
+          tenantName: tenant.name,
+          type: "lead_capture",
+          conversationId: conversation.publicId,
+          message,
+          fields: body.fields,
+          ...(handoffId ? { handoffId } : {}),
+          ...(body.pageUrl ? { pageUrl: body.pageUrl } : {}),
+        });
+      }
+
+      if (automation.visitorConfirmationEmailEnabled) {
+        const bookingUrl = getBookingUrl(theme);
+        await notifyVisitorConfirmation(options, {
+          tenantName: tenant.name,
+          type: "lead_capture",
+          fields: body.fields,
+          ...(body.pageUrl ? { pageUrl: body.pageUrl } : {}),
+          ...(bookingUrl ? { bookingUrl } : {}),
+        });
+      }
+
+      await options.store.logUsage({
+        tenantId: tenant.id,
+        channel: "website",
+        eventType: "lead_capture",
+        credits: 1,
+        metadata: {
+          fields: Object.keys(body.fields),
+          pageUrl: body.pageUrl,
+          pipelineStage,
+          autoQualified,
+        },
       });
-    }
 
-    return reply.code(201).send({
-      conversationId: conversation.publicId,
-      status: "captured",
-      score,
-      recommendation: readinessRecommendation(score),
-      qualified: autoQualified,
-      bookingUrl: getBookingUrl(theme),
-    });
-  });
+      return reply.code(201).send({
+        conversationId: conversation.publicId,
+        status: "captured",
+      });
+    },
+  );
+
+  app.post(
+    "/widget/readiness",
+    {
+      config: {
+        rateLimit: { max: 20, timeWindow: "1 minute" },
+      },
+    },
+    async (request, reply) => {
+      const body = WidgetReadinessSchema.parse(request.body);
+      const tenant = await options.store.getTenantByPublicId(body.assistantId);
+      if (!tenant) {
+        return reply.code(404).send({ error: "Assistant not found." });
+      }
+      const theme = tenant.theme ?? {};
+      const automation = getAutomationSettings(theme);
+
+      const conversationInput: Parameters<
+        PlatformStore["findOrCreateConversation"]
+      >[0] = {
+        tenantId: tenant.id,
+        channel: "website",
+        locale: tenant.defaultLocale,
+      };
+      if (body.conversationId) {
+        conversationInput.publicConversationId = body.conversationId;
+      }
+      if (body.visitorId) {
+        conversationInput.externalUserId = body.visitorId;
+      }
+
+      const conversation =
+        await options.store.findOrCreateConversation(conversationInput);
+      const score = scoreReadiness(body.answers);
+      const message = formatReadinessMessage(body.answers, score, body.pageUrl);
+      await options.store.enrichConversationContact({
+        tenantId: tenant.id,
+        conversationId: conversation.id,
+        channel: "website",
+        externalUserId: body.visitorId ?? null,
+        contact: contactProfileFromFields(body.answers, {
+          pageUrl: body.pageUrl,
+          source: "readiness_assessment",
+          score,
+        }),
+      });
+      const autoQualified =
+        automation.autoQualifyReadinessEnabled &&
+        score >= automation.readinessQualificationScore;
+      const pipelineStage = autoQualified ? "qualified" : "new";
+
+      await options.store.addMessage({
+        tenantId: tenant.id,
+        conversationId: conversation.id,
+        channel: "website",
+        direction: "inbound",
+        role: "user",
+        content: message,
+        trace: {
+          type: "readiness_assessment",
+          answers: body.answers,
+          score,
+          pageUrl: body.pageUrl,
+        },
+      });
+
+      const handoff = await options.store.createHandoff({
+        tenantId: tenant.id,
+        conversationId: conversation.id,
+        channel: "website",
+        reason: "readiness_assessment",
+        message,
+        metadata: {
+          pipelineStage,
+          score,
+          ...(autoQualified
+            ? {
+                automationReason: "readiness_score",
+                pipelineUpdatedAt: new Date().toISOString(),
+              }
+            : {}),
+        },
+      });
+      const handoffId = getStringProperty(handoff, "id");
+
+      await options.store.logUsage({
+        tenantId: tenant.id,
+        channel: "website",
+        eventType: "readiness_assessment",
+        credits: 1,
+        metadata: {
+          score,
+          fields: Object.keys(body.answers),
+          pageUrl: body.pageUrl,
+          pipelineStage,
+          autoQualified,
+        },
+      });
+
+      if (automation.ownerLeadEmailEnabled) {
+        await notifyLead(options, {
+          tenantId: tenant.id,
+          tenantName: tenant.name,
+          type: "readiness_assessment",
+          conversationId: conversation.publicId,
+          message,
+          fields: body.answers,
+          ...(handoffId ? { handoffId } : {}),
+          score,
+          ...(body.pageUrl ? { pageUrl: body.pageUrl } : {}),
+        });
+      }
+
+      if (automation.visitorConfirmationEmailEnabled) {
+        const bookingUrl = getBookingUrl(theme);
+        await notifyVisitorConfirmation(options, {
+          tenantName: tenant.name,
+          type: "readiness_assessment",
+          fields: body.answers,
+          score,
+          ...(body.pageUrl ? { pageUrl: body.pageUrl } : {}),
+          ...(bookingUrl ? { bookingUrl } : {}),
+        });
+      }
+
+      return reply.code(201).send({
+        conversationId: conversation.publicId,
+        status: "captured",
+        score,
+        recommendation: readinessRecommendation(score),
+        qualified: autoQualified,
+        bookingUrl: getBookingUrl(theme),
+      });
+    },
+  );
 
   app.get("/webhooks/meta/:channel", async (request, reply) => {
     const { channel } = ParamsMetaChannelSchema.parse(request.params);
@@ -2217,6 +2331,10 @@ export async function buildServer(
         error: "Validation failed.",
         issues: error.issues,
       });
+    }
+
+    if (error instanceof AppError) {
+      return reply.code(error.statusCode).send(error.toResponse());
     }
 
     _request.log.error(error);
@@ -2439,11 +2557,7 @@ function parseCookieHeader(header: string | undefined) {
   return cookies;
 }
 
-function setSessionCookie(
-  reply: FastifyReply,
-  token: string,
-  expiresAt: Date,
-) {
+function setSessionCookie(reply: FastifyReply, token: string, expiresAt: Date) {
   reply.header(
     "set-cookie",
     buildCookieHeader(sessionCookieName, token, {
@@ -2783,7 +2897,9 @@ function normalizeTwilioCapabilities(
   };
 }
 
-function twilioInventoryType(numberType: z.infer<typeof TwilioNumberTypeSchema>) {
+function twilioInventoryType(
+  numberType: z.infer<typeof TwilioNumberTypeSchema>,
+) {
   if (numberType === "mobile") {
     return "Mobile";
   }
@@ -3196,7 +3312,9 @@ function buildChannelConnectionDashboard(input: {
     item("telephone", telephoneProvider, "Telephone AI", {
       credentialConfigured:
         telephoneProvider === "twilio"
-          ? Boolean(input.options.twilioAccountSid && input.options.twilioAuthToken)
+          ? Boolean(
+              input.options.twilioAccountSid && input.options.twilioAuthToken,
+            )
           : true,
       webhookUrl: assistantId
         ? `${voiceBase}/voice/turn?assistantId=${assistantId}`

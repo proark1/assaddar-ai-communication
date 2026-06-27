@@ -25,7 +25,7 @@ const STOP_WORDS = new Set([
   "to",
   "we",
   "you",
-  "your"
+  "your",
 ]);
 
 const GERMAN_STOP_WORDS = [
@@ -77,7 +77,7 @@ const GERMAN_STOP_WORDS = [
   "wie",
   "wir",
   "wo",
-  "zu"
+  "zu",
 ];
 
 for (const word of GERMAN_STOP_WORDS) {
@@ -107,7 +107,10 @@ function normalizeForTokenization(value: string): string {
     .replace(/[\u0300-\u036f]/g, "");
 }
 
-export function containsPhrase(haystack: string, phrases: string[]): string | null {
+export function containsPhrase(
+  haystack: string,
+  phrases: string[],
+): string | null {
   const normalizedHaystack = normalizeText(haystack).toLowerCase();
   for (const phrase of phrases) {
     const normalizedPhrase = normalizeText(phrase).toLowerCase();

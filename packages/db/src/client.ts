@@ -10,19 +10,21 @@ export type DatabaseClient = {
   close: () => Promise<void>;
 };
 
-export function createDbClient(connectionString = process.env.DATABASE_URL): DatabaseClient {
+export function createDbClient(
+  connectionString = process.env.DATABASE_URL,
+): DatabaseClient {
   if (!connectionString) {
     throw new Error("DATABASE_URL is required.");
   }
 
   const sql = postgres(connectionString, {
     max: 10,
-    transform: postgres.camel
+    transform: postgres.camel,
   });
 
   return {
     sql,
     db: drizzle(sql, { schema }),
-    close: () => sql.end()
+    close: () => sql.end(),
   };
 }

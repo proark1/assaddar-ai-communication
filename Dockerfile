@@ -14,4 +14,8 @@ RUN pnpm build
 
 ENV NODE_ENV=production
 
+# Run as the unprivileged `node` user that ships with the base image.
+RUN chown -R node:node /app
+USER node
+
 CMD ["node", "scripts/start-service.mjs"]

@@ -24,9 +24,13 @@ async function main() {
       )
     `;
 
-    const appliedRows = await sql<{ version: string }[]>`select version from schema_migrations`;
+    const appliedRows = await sql<
+      { version: string }[]
+    >`select version from schema_migrations`;
     const applied = new Set(appliedRows.map((row) => row.version));
-    const files = (await readdir(migrationsDir)).filter((file) => file.endsWith(".sql")).sort();
+    const files = (await readdir(migrationsDir))
+      .filter((file) => file.endsWith(".sql"))
+      .sort();
 
     for (const file of files) {
       if (applied.has(file)) {
