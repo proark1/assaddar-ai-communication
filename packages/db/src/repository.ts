@@ -64,6 +64,7 @@ import {
   normalizePhone,
   normalizeRoleName,
   normalizeTemplateName,
+  retentionCutoff,
   roleDescription,
   titleCase,
 } from "./repository-helpers";
@@ -71,6 +72,7 @@ import {
 export {
   createPublicAssistantId,
   createPublicConversationId,
+  retentionCutoff,
   setTenantSession,
 } from "./repository-helpers";
 
@@ -2203,35 +2205,133 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     };
   }
 
+  /**
+   * GDPR data-subject export: every tenant-owned record we hold, scoped to the
+   * tenant. The shape is additive — existing keys are preserved so callers that
+   * only read `conversations`/`contacts` keep working — but it now also includes
+   * conversation messages (the obvious previous omission) plus the other
+   * tenant-scoped personal-data tables (deliveries, contacts already present,
+   * WhatsApp templates) so the export is actually complete.
+   */
   async exportTenantData(tenantId: string) {
     assertTenantId(tenantId);
-    const [tenant, knowledge, tenantConversations, handoffs, tenantContacts] =
-      await Promise.all([
-        this.getTenant(tenantId),
-        this.listKnowledge(tenantId),
-        this.db
-          .select()
-          .from(conversations)
-          .where(eq(conversations.tenantId, tenantId)),
-        this.db
-          .select()
-          .from(handoffRequests)
-          .where(eq(handoffRequests.tenantId, tenantId)),
-        this.listContacts(tenantId),
-      ]);
+    const [
+      tenant,
+      knowledge,
+      tenantConversations,
+      tenantMessages,
+      handoffs,
+      tenantContacts,
+      deliveries,
+      templates,
+    ] = await Promise.all([
+      this.getTenant(tenantId),
+      this.listKnowledge(tenantId),
+      this.db
+        .select()
+        .from(conversations)
+        .where(eq(conversations.tenantId, tenantId)),
+      // Messages were previously omitted entirely — the bulk of the personal
+      // data in a conversation. Exported tenant-scoped and ordered.
+      this.db
+        .select()
+        .from(messages)
+        .where(eq(messages.tenantId, tenantId))
+        .orderBy(messages.createdAt),
+      this.db
+        .select()
+        .from(handoffRequests)
+        .where(eq(handoffRequests.tenantId, tenantId)),
+      this.listContacts(tenantId),
+      this.db
+        .select()
+        .from(messageDeliveries)
+        .where(eq(messageDeliveries.tenantId, tenantId)),
+      this.listWhatsappTemplates(tenantId),
+    ]);
 
     return {
       tenant,
       knowledge,
       conversations: tenantConversations,
+      messages: tenantMessages,
       handoffRequests: handoffs,
       contacts: tenantContacts,
+      messageDeliveries: deliveries,
+      whatsappTemplates: templates,
     };
   }
 
   async deleteTenantData(tenantId: string) {
     assertTenantId(tenantId);
     await this.db.delete(tenants).where(eq(tenants.id, tenantId));
+  }
+
+  /**
+   * Retention enforcement: delete conversation history for a single tenant that
+   * is older than the tenant's retention window. DESTRUCTIVE — handled with
+   * deliberate caution:
+   *
+   *  - Tenant-scoped: every delete is filtered by `tenantId`, so one tenant can
+   *    never touch another's rows.
+   *  - Conservative eligibility: only conversations whose `createdAt` is
+   *    strictly before the cutoff (`now - retentionDays`) are removed. The
+   *    cutoff is computed by {@link retentionCutoff}, which returns `null` for a
+   *    missing/zero/negative `retentionDays` — in that case we delete NOTHING
+   *    and return 0, so a misconfigured tenant cannot lose data.
+   *  - Scoped to conversation data only: messages, conversation_contacts and
+   *    answer_feedback are removed automatically by the existing ON DELETE
+   *    CASCADE foreign keys when their parent conversation is deleted. Records
+   *    that merely reference a conversation with ON DELETE SET NULL (handoff
+   *    requests, message deliveries, calls) are intentionally NOT deleted here —
+   *    they may carry independent lifecycle/audit meaning. Knowledge, contacts,
+   *    tenant settings, audit logs and users are all left untouched.
+   *
+   * `retentionDays` defaults to the tenant's configured value but can be passed
+   * explicitly for testing. Returns the number of conversations deleted.
+   */
+  async deleteTenantDataOlderThanRetention(
+    tenantId: string,
+    options: { now?: Date; retentionDays?: number } = {},
+  ): Promise<{ cutoff: Date | null; deletedConversations: number }> {
+    assertTenantId(tenantId);
+    const tenant = await this.getTenant(tenantId);
+    if (!tenant) {
+      throw new Error("Tenant not found.");
+    }
+
+    const retentionDays = options.retentionDays ?? tenant.retentionDays;
+    const cutoff = retentionCutoff(retentionDays, options.now ?? new Date());
+    // No valid retention window configured: do not delete anything.
+    if (!cutoff) {
+      return { cutoff: null, deletedConversations: 0 };
+    }
+
+    const removed = await this.db
+      .delete(conversations)
+      .where(
+        and(
+          eq(conversations.tenantId, tenantId),
+          lt(conversations.createdAt, cutoff),
+        ),
+      )
+      .returning({ id: conversations.id });
+
+    if (removed.length > 0) {
+      await this.audit(
+        tenantId,
+        "retention.conversations.pruned",
+        "tenant",
+        tenantId,
+        {
+          retentionDays,
+          cutoff: cutoff.toISOString(),
+          deletedConversations: removed.length,
+        },
+      );
+    }
+
+    return { cutoff, deletedConversations: removed.length };
   }
 
   private async resolveContactForConversation(input: {

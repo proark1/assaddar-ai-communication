@@ -21,15 +21,28 @@ export const UsageMeteringJobSchema = z.object({
   eventId: z.string().uuid(),
 });
 
+/**
+ * Internal maintenance jobs scheduled as BullMQ repeatable jobs by the workers
+ * service itself (not produced by the API). They carry no per-tenant payload —
+ * they sweep across all tenants — so the schemas just allow an empty object.
+ */
+export const EmbeddingBackfillJobSchema = z.object({}).passthrough();
+
+export const RetentionCleanupJobSchema = z.object({}).passthrough();
+
 export type WorkerJobName =
   | "file.parse"
   | "embeddings.generate"
   | "webhook.process"
-  | "usage.meter";
+  | "usage.meter"
+  | "embeddings.backfill"
+  | "retention.cleanup";
 
 export const jobSchemas = {
   "file.parse": FileParsingJobSchema,
   "embeddings.generate": EmbeddingJobSchema,
   "webhook.process": WebhookProcessingJobSchema,
   "usage.meter": UsageMeteringJobSchema,
+  "embeddings.backfill": EmbeddingBackfillJobSchema,
+  "retention.cleanup": RetentionCleanupJobSchema,
 } satisfies Record<WorkerJobName, z.ZodTypeAny>;

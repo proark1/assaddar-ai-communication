@@ -24,6 +24,24 @@ import type {
 const DEFAULT_REFUSAL =
   "I don't have that information in the approved business knowledge. I can take a message or connect you with the team.";
 
+/**
+ * Process-wide tally of semantic-search failures. Previously these errors were
+ * swallowed silently; exposing a counter lets ops surface (and alarm on) a
+ * degraded embedding provider without changing the graceful fallback. Reset is
+ * only intended for tests.
+ */
+let semanticSearchFailureCount = 0;
+
+/** Read the number of semantic-search failures observed since startup/reset. */
+export function getSemanticSearchFailureCount(): number {
+  return semanticSearchFailureCount;
+}
+
+/** Reset the failure counter. Intended for tests. */
+export function resetSemanticSearchFailureCount(): void {
+  semanticSearchFailureCount = 0;
+}
+
 export type AnswerEngineOptions = {
   dataStore: AnswerDataStore;
   handoffStore?: HandoffStore;
@@ -35,6 +53,12 @@ export type AnswerEngineOptions = {
    * keyword-only retrieval for that request.
    */
   embedder?: (text: string) => Promise<number[] | null>;
+  /**
+   * Optional hook invoked when semantic retrieval throws. Lets callers wire the
+   * failure into their own logging/metrics. The engine always logs a warning
+   * and falls back to keyword-only retrieval regardless of this callback.
+   */
+  onSemanticSearchError?: (error: unknown, tenantId: string) => void;
 };
 
 export class AnswerEngine {
@@ -42,12 +66,14 @@ export class AnswerEngine {
   private readonly handoffStore: HandoffStore | undefined;
   private readonly retrievalLimit: number;
   private readonly embedder: AnswerEngineOptions["embedder"];
+  private readonly onSemanticSearchError: AnswerEngineOptions["onSemanticSearchError"];
 
   constructor(options: AnswerEngineOptions) {
     this.dataStore = options.dataStore;
     this.handoffStore = options.handoffStore;
     this.retrievalLimit = options.retrievalLimit ?? 8;
     this.embedder = options.embedder;
+    this.onSemanticSearchError = options.onSemanticSearchError;
   }
 
   async answer(input: InboundMessage): Promise<AnswerResult> {
@@ -207,8 +233,18 @@ export class AnswerEngine {
         embedding,
         this.retrievalLimit,
       );
-    } catch {
-      // Semantic search is best-effort; fall back to keyword retrieval.
+    } catch (error) {
+      // Semantic search is best-effort and still falls back to keyword
+      // retrieval, but the failure must no longer be silent: increment the
+      // process-wide counter, log a warning with context, and surface it to the
+      // optional callback so ops can detect a degraded embedding provider.
+      semanticSearchFailureCount += 1;
+      console.warn(
+        `[answer-engine] semantic search failed for tenant ${tenantId}; ` +
+          `falling back to keyword retrieval (failures so far: ${semanticSearchFailureCount})`,
+        error,
+      );
+      this.onSemanticSearchError?.(error, tenantId);
       return [];
     }
   }

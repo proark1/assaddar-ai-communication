@@ -194,6 +194,32 @@ export function createPublicConversationId() {
   return `conv_${crypto.randomUUID().replaceAll("-", "").slice(0, 24)}`;
 }
 
+/**
+ * Compute the retention cutoff: tenant-owned data created strictly before this
+ * instant is eligible for deletion. Pure and side-effect free so the eligibility
+ * arithmetic can be unit-tested without a live database.
+ *
+ * Conservative by design:
+ *  - `retentionDays` must be a finite integer >= 1; anything else (0, negative,
+ *    NaN, undefined) returns `null`, meaning "retention disabled — delete
+ *    nothing". This prevents a misconfigured `retention_days` from wiping data.
+ */
+export function retentionCutoff(
+  retentionDays: number | null | undefined,
+  now: Date = new Date(),
+): Date | null {
+  if (
+    typeof retentionDays !== "number" ||
+    !Number.isFinite(retentionDays) ||
+    !Number.isInteger(retentionDays) ||
+    retentionDays < 1
+  ) {
+    return null;
+  }
+  const millisPerDay = 24 * 60 * 60 * 1000;
+  return new Date(now.getTime() - retentionDays * millisPerDay);
+}
+
 export async function setTenantSession(db: Database, tenantId: string) {
   assertTenantId(tenantId);
   await db.execute(

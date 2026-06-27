@@ -1,10 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   cosineSimilarity,
   createAnswerEngine,
   createDefaultTenantPolicy,
   createEmbeddingProvider,
+  getSemanticSearchFailureCount,
   mergeRankedChunks,
+  resetSemanticSearchFailureCount,
   type AnswerDataStore,
   type KnowledgeChunk,
   type RetrievedChunk,
@@ -149,5 +151,51 @@ describe("AnswerEngine hybrid retrieval", () => {
 
     expect(result.status).toBe("answered");
     expect(result.text).toContain("credit cards");
+  });
+
+  it("surfaces semantic-search failures instead of swallowing them", async () => {
+    resetSemanticSearchFailureCount();
+    const before = getSemanticSearchFailureCount();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const onSemanticSearchError = vi.fn();
+
+    const store: AnswerDataStore = {
+      async getTenantPolicy(tenantId) {
+        return permissivePolicy(tenantId, ["credit", "cards", "payment"]);
+      },
+      async searchKnowledge() {
+        return [chunk("kw-1", "We accept credit cards and PayPal.")];
+      },
+      async searchKnowledgeByEmbedding() {
+        throw new Error("vector store unavailable");
+      },
+    };
+
+    const engine = createAnswerEngine({
+      dataStore: store,
+      embedder: async () => [0.1, 0.2, 0.3],
+      onSemanticSearchError,
+    });
+
+    const result = await engine.answer({
+      tenantId: tenant,
+      channel: "website",
+      text: "credit cards",
+      metadata: {},
+    });
+
+    // Still answers from keyword retrieval (graceful fallback preserved).
+    expect(result.status).toBe("answered");
+    expect(result.text).toContain("credit cards");
+    // ...but the failure is now visible, not silent.
+    expect(getSemanticSearchFailureCount()).toBe(before + 1);
+    expect(warnSpy).toHaveBeenCalled();
+    expect(onSemanticSearchError).toHaveBeenCalledTimes(1);
+    expect(onSemanticSearchError).toHaveBeenCalledWith(
+      expect.any(Error),
+      tenant,
+    );
+
+    warnSpy.mockRestore();
   });
 });
