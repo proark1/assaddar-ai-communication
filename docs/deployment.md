@@ -165,3 +165,9 @@ For an end-to-end API check against a deployed API:
 ```bash
 API_BASE_URL=https://your-api-domain pnpm smoke:api
 ```
+
+## Observability
+
+The API exposes Prometheus metrics at `GET /metrics` (text exposition format v0.0.4, dependency-free). Scrape it from inside the private network — it is intentionally unauthenticated and exposes only aggregate, low-cardinality series (`http_requests_total`, `http_request_duration_seconds`, `errors_total`, plus process gauges). See [api.md](api.md#metrics) for the full series list and the route-template labelling that keeps tenant ids out of metrics.
+
+Unexpected 500s are funnelled through a `captureException` seam (`apps/api/src/observability.ts`) that logs them structurally and counts them in `errors_total`. To wire up error reporting, install `@sentry/node` and forward to it from that seam when `SENTRY_DSN` is set.

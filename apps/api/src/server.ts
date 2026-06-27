@@ -29,6 +29,8 @@ import { promisify } from "node:util";
 import { z } from "zod";
 import { openApiDocument } from "./openapi";
 import { AppError } from "./errors";
+import { MetricsRegistry, METRICS_CONTENT_TYPE } from "./metrics";
+import { captureException } from "./observability";
 import {
   ParamsTenantSchema,
   ParamsKnowledgeSchema,
@@ -399,6 +401,29 @@ export async function buildServer(
     },
   });
 
+  // Process-wide metrics registry. Dependency-free Prometheus exposition; see
+  // ./metrics and the GET /metrics route below.
+  const metrics = new MetricsRegistry();
+
+  // Record request count and latency on every response. We label by the route
+  // *template* (e.g. `/admin/tenants/:tenantId`) rather than the raw URL, so a
+  // tenant id or other path param can never explode label cardinality or leak
+  // tenant data into the metrics. Unmatched routes (404s) collapse to a single
+  // `<unmatched>` series for the same reason.
+  app.addHook("onResponse", async (request, reply) => {
+    // Fastify 5 exposes the matched route template on `routeOptions.url`
+    // (the older `routerPath` was removed). Unmatched routes have none.
+    const route = request.routeOptions?.url ?? "<unmatched>";
+    const method = request.method;
+    const status = String(reply.statusCode);
+    metrics.httpRequestsTotal.inc({ method, route, status });
+    // reply.elapsedTime is milliseconds; the histogram is in seconds.
+    metrics.httpRequestDuration.observe(
+      { method, route },
+      reply.elapsedTime / 1000,
+    );
+  });
+
   // Surface the correlation id on responses so clients/operators can quote it,
   // and apply conservative security headers to every response. These are safe
   // for a JSON API and do not interfere with CORS (which sets its own
@@ -503,6 +528,18 @@ export async function buildServer(
       });
     }
     return { ok: true, service: "assaddar-ai-communication-api", db: "up" };
+  });
+
+  // Prometheus scrape endpoint. Left UNAUTHENTICATED on purpose: this is the
+  // conventional setup for a metrics endpoint scraped over a private network
+  // (cluster network policy / firewall), and many scrape agents do not send an
+  // admin token. It exposes only aggregate, low-cardinality counters/gauges —
+  // no tenant data, request bodies, or secrets — so it is safe to expose this
+  // way. If this API is ever scraped over an untrusted network, put it behind
+  // the gateway/network policy rather than guarding it with the admin token.
+  app.get("/metrics", async (_request, reply) => {
+    reply.header("Content-Type", METRICS_CONTENT_TYPE);
+    return metrics.render();
   });
 
   app.get("/openapi.json", async () => openApiDocument);
@@ -2033,7 +2070,13 @@ export async function buildServer(
       return reply.code(error.statusCode).send(error.toResponse());
     }
 
-    _request.log.error(error);
+    // Unexpected 500: funnel through the error-capture seam so it is logged
+    // structurally, counted in `errors_total`, and ready to forward to a real
+    // reporter (e.g. Sentry) later. See ./observability.
+    captureException(_request.log, metrics, error, {
+      route: _request.routeOptions?.url,
+      method: _request.method,
+    });
     return reply.code(500).send({
       error: "Internal server error.",
     });

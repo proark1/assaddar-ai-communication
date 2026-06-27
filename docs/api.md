@@ -24,6 +24,29 @@ Readiness probe that verifies database connectivity. Returns `200` with `{ "ok":
 
 Every response includes an `x-request-id` correlation header (an inbound `x-request-id` is honoured).
 
+## Metrics
+
+```http
+GET /metrics
+```
+
+Prometheus metrics in text exposition format v0.0.4 (`Content-Type: text/plain; version=0.0.4`). Dependency-free — implemented in-process, no `prom-client`.
+
+Exposed series:
+
+- `http_requests_total{method,route,status}` — request counter.
+- `http_request_duration_seconds{method,route}` — request-latency histogram (`_bucket`/`_sum`/`_count`).
+- `errors_total{kind}` — captured (unhandled) 500-class errors, by error kind.
+- `process_uptime_seconds`, `process_resident_memory_bytes` — process gauges.
+
+Routes are labelled by their **template** (e.g. `/admin/tenants/:tenantId`), never the raw URL, so path params (tenant ids, etc.) cannot blow up label cardinality or leak into metrics. Unmatched routes collapse to `route="<unmatched>"`.
+
+This endpoint is **unauthenticated** by design — the conventional setup for a metrics endpoint scraped over a private network (cluster network policy / firewall). It exposes only aggregate, low-cardinality counters/gauges, never tenant data or secrets. If it must be reachable over an untrusted network, restrict it at the gateway/network layer rather than the admin token.
+
+### Error reporting (Sentry seam)
+
+Unexpected 500s flow through a `captureException` seam (`apps/api/src/observability.ts`) that logs the error structurally and increments `errors_total`. To enable Sentry: install `@sentry/node` and forward to it inside `captureException` when `SENTRY_DSN` is set — no call sites change.
+
 ## Rate Limits
 
 A global per-IP limit applies (`RATE_LIMIT_MAX`, default 120/min). Stricter per-route limits protect public and auth endpoints: `POST /auth/login` 10 / 5 min, `POST /widget/chat` 30 / min, `POST /widget/leads` 10 / min, `POST /widget/readiness` 20 / min, `POST /widget/events` 60 / min. Exceeding a limit returns `429`.
