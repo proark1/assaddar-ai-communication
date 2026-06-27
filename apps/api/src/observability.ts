@@ -2,15 +2,13 @@
  * Error-capture seam.
  *
  * `captureException` is the single place the API funnels unexpected errors
- * through. Today it (a) logs the error in structured form via the app/request
- * logger and (b) bumps the `errors_total` metric. It is written so a real
- * error reporter can be dropped in later without touching call sites.
- *
- * To enable Sentry, install @sentry/node and forward here when SENTRY_DSN is
- * set — e.g. initialise the SDK once at startup and call
- * `Sentry.captureException(error, { extra: context })` below, guarded by the
- * env flag. No call site needs to change.
+ * through. It (a) logs the error in structured form via the app/request logger,
+ * (b) bumps the `errors_total` metric, and (c) forwards to Sentry when
+ * SENTRY_DSN is set (the SDK is initialised once at startup in `index.ts`,
+ * also gated on the DSN). When the DSN is unset, the Sentry forward is skipped
+ * and behaviour is unchanged. No call site needs to change.
  */
+import * as Sentry from "@sentry/node";
 import type { FastifyBaseLogger } from "fastify";
 import type { MetricsRegistry } from "./metrics";
 
@@ -47,9 +45,14 @@ export function captureException(
   // caller-supplied context fields.
   logger.error({ err: error, ...(context ?? {}) }, "Unhandled error captured");
 
-  // To enable Sentry, install @sentry/node and forward here when SENTRY_DSN is
-  // set, e.g.:
-  //   if (process.env.SENTRY_DSN) {
-  //     Sentry.captureException(error, { extra: context });
-  //   }
+  // Forward to Sentry only when a DSN is configured; otherwise the SDK was never
+  // initialised and this is a no-op anyway. Gated so behaviour is unchanged when
+  // SENTRY_DSN is unset. Attach the caller context as `extra` when present.
+  if (process.env.SENTRY_DSN) {
+    if (context) {
+      Sentry.captureException(error, { extra: context });
+    } else {
+      Sentry.captureException(error);
+    }
+  }
 }

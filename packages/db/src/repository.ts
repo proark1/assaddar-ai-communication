@@ -686,8 +686,9 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       : null;
   }
 
-  async listTenantUsers(tenantId: string) {
+  async listTenantUsers(tenantId: string, options?: PaginationOptions) {
     assertTenantId(tenantId);
+    const { limit, offset } = resolvePagination(options);
     return this.db
       .select({
         id: users.id,
@@ -703,7 +704,9 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       .innerJoin(users, eq(users.id, memberships.userId))
       .innerJoin(roles, eq(roles.id, memberships.roleId))
       .where(eq(memberships.tenantId, tenantId))
-      .orderBy(users.email);
+      .orderBy(users.email)
+      .limit(limit)
+      .offset(offset);
   }
 
   async upsertTenantUser(tenantId: string, input: UpsertTenantUserInput) {
@@ -955,8 +958,9 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     return { source, document, chunk };
   }
 
-  async listKnowledge(tenantId: string) {
+  async listKnowledge(tenantId: string, options?: PaginationOptions) {
     assertTenantId(tenantId);
+    const { limit, offset } = resolvePagination(options);
     return this.db
       .select({
         id: knowledgeChunks.id,
@@ -972,7 +976,9 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       })
       .from(knowledgeChunks)
       .where(eq(knowledgeChunks.tenantId, tenantId))
-      .orderBy(desc(knowledgeChunks.createdAt));
+      .orderBy(desc(knowledgeChunks.createdAt))
+      .limit(limit)
+      .offset(offset);
   }
 
   async updateFaq(

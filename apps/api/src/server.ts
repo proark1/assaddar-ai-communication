@@ -166,7 +166,10 @@ export type PlatformStore = AnswerDataStore &
       userId: string,
       tenantId: string,
     ): Promise<StoreTenantMembership | null>;
-    listTenantUsers(tenantId: string): Promise<unknown[]>;
+    listTenantUsers(
+      tenantId: string,
+      options?: PaginationOptions,
+    ): Promise<unknown[]>;
     upsertTenantUser(
       tenantId: string,
       input: {
@@ -199,7 +202,10 @@ export type PlatformStore = AnswerDataStore &
       input: AddFaqInput,
     ): Promise<unknown>;
     deleteKnowledge(tenantId: string, knowledgeId: string): Promise<void>;
-    listKnowledge(tenantId: string): Promise<unknown[]>;
+    listKnowledge(
+      tenantId: string,
+      options?: PaginationOptions,
+    ): Promise<unknown[]>;
     listConversations(
       tenantId: string,
       options?: PaginationOptions,
@@ -673,7 +679,8 @@ export async function buildServer(
     { preHandler: requireTenantAccess(options) },
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
-      return options.store.listTenantUsers(tenantId);
+      const pagination = PaginationQuerySchema.parse(request.query);
+      return options.store.listTenantUsers(tenantId, pagination);
     },
   );
 
@@ -1221,7 +1228,8 @@ export async function buildServer(
     { preHandler: requireTenantAccess(options) },
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
-      return options.store.listKnowledge(tenantId);
+      const pagination = PaginationQuerySchema.parse(request.query);
+      return options.store.listKnowledge(tenantId, pagination);
     },
   );
 

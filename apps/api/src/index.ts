@@ -1,4 +1,5 @@
 import { config } from "dotenv";
+import * as Sentry from "@sentry/node";
 import { createEmbeddingProvider } from "@assaddar/core";
 import { createDbClient, TenantRepository } from "@assaddar/db";
 import { loadEnv } from "./env";
@@ -6,7 +7,25 @@ import { buildServer, type BuildServerOptions } from "./server";
 
 config({ path: new URL("../../../.env", import.meta.url) });
 
+/**
+ * Initialise Sentry only when SENTRY_DSN is set; otherwise this is a no-op and
+ * error reporting stays inert (no behaviour change).
+ */
+function initSentry() {
+  // Read the DSN from the environment; never hardcode it.
+  const dsn = process.env.SENTRY_DSN;
+  if (!dsn) {
+    return;
+  }
+  Sentry.init({
+    dsn,
+    environment: process.env.NODE_ENV,
+    tracesSampleRate: 0,
+  });
+}
+
 async function main() {
+  initSentry();
   const env = loadEnv();
   const client = createDbClient();
   const store = new TenantRepository(client.db);

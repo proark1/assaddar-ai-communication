@@ -1,4 +1,5 @@
 import { config } from "dotenv";
+import * as Sentry from "@sentry/node";
 import {
   createTwiMLDial,
   createTwiMLGather,
@@ -14,6 +15,25 @@ import type { FastifyRequest } from "fastify";
 import { z } from "zod";
 
 config({ path: new URL("../../../.env", import.meta.url) });
+
+/**
+ * Initialise Sentry only when SENTRY_DSN is set; otherwise this is a no-op and
+ * error reporting stays inert (no behaviour change).
+ */
+function initSentry() {
+  // Read the DSN from the environment; never hardcode it.
+  const dsn = process.env.SENTRY_DSN;
+  if (!dsn) {
+    return;
+  }
+  Sentry.init({
+    dsn,
+    environment: process.env.NODE_ENV,
+    tracesSampleRate: 0,
+  });
+}
+
+initSentry();
 
 const VoiceQuerySchema = z.object({
   assistantId: z.string().min(8),
@@ -345,6 +365,10 @@ app.post("/twilio/voice", async (request, reply) => {
 
 app.setErrorHandler(async (error, request, reply) => {
   request.log.error(error);
+  // Forward to Sentry only when a DSN is configured (otherwise a no-op).
+  if (process.env.SENTRY_DSN) {
+    Sentry.captureException(error);
+  }
   return reply.type("text/xml").send(
     createTwiMLSay("I cannot answer right now. Please try again later.", {
       language: twilioVoiceLanguage,

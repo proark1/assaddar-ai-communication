@@ -1,4 +1,5 @@
 import { config } from "dotenv";
+import * as Sentry from "@sentry/node";
 import { Queue, Worker, type JobsOptions } from "bullmq";
 import { createEmbeddingProvider } from "@assaddar/core";
 import { createDbClient, TenantRepository } from "@assaddar/db";
@@ -6,6 +7,25 @@ import { backfillMissingEmbeddings } from "./backfill-embeddings";
 import { jobSchemas, type WorkerJobName } from "./jobs";
 
 config({ path: new URL("../../../.env", import.meta.url) });
+
+/**
+ * Initialise Sentry only when SENTRY_DSN is set; otherwise this is a no-op and
+ * error reporting stays inert (no behaviour change).
+ */
+function initSentry() {
+  // Read the DSN from the environment; never hardcode it.
+  const dsn = process.env.SENTRY_DSN;
+  if (!dsn) {
+    return;
+  }
+  Sentry.init({
+    dsn,
+    environment: process.env.NODE_ENV,
+    tracesSampleRate: 0,
+  });
+}
+
+initSentry();
 
 const QUEUE_NAME = "assaddar-platform";
 
@@ -263,6 +283,10 @@ worker.on("failed", (job, error) => {
       `(attempt ${job?.attemptsMade ?? 0}/${job?.opts?.attempts ?? 0})`,
     error,
   );
+  // Forward to Sentry only when a DSN is configured (otherwise a no-op).
+  if (process.env.SENTRY_DSN) {
+    Sentry.captureException(error);
+  }
 });
 
 worker.on("error", (error) => {
