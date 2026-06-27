@@ -4,11 +4,13 @@ import {
   createTwiMLGather,
   createTwiMLSay,
   TwilioVoiceAdapter,
+  verifyTwilioSignature,
 } from "@assaddar/channels";
 import { createAnswerEngine, InboundMessageSchema } from "@assaddar/core";
 import { createDbClient, TenantRepository } from "@assaddar/db";
 import formBody from "@fastify/formbody";
 import Fastify from "fastify";
+import type { FastifyRequest } from "fastify";
 import { z } from "zod";
 
 config({ path: new URL("../../../.env", import.meta.url) });
@@ -32,6 +34,74 @@ const port = Number(process.env.VOICE_PORT ?? process.env.PORT ?? 4100);
 const transferPhoneNumber = process.env.TWILIO_TRANSFER_PHONE_NUMBER;
 const twilioVoiceLanguage = process.env.TWILIO_VOICE_LANGUAGE ?? "de-DE";
 const twilioVoiceName = process.env.TWILIO_VOICE_NAME ?? "alice";
+const twilioAuthToken = process.env.TWILIO_AUTH_TOKEN;
+
+/**
+ * Reconstruct the externally-visible URL Twilio used when it signed the
+ * request. Twilio computes the signature over the public URL, so behind a
+ * proxy/load balancer we must honour `x-forwarded-proto` / `x-forwarded-host`
+ * rather than the internal scheme/host Fastify sees.
+ */
+function buildPublicUrl(request: FastifyRequest): string {
+  const headerValue = (name: string): string | undefined => {
+    const value = request.headers[name];
+    return Array.isArray(value) ? value[0] : value;
+  };
+  const forwardedProto = headerValue("x-forwarded-proto");
+  const proto = (forwardedProto ?? request.protocol).split(",")[0]!.trim();
+  const forwardedHost = headerValue("x-forwarded-host");
+  const host = (forwardedHost ?? headerValue("host") ?? "")
+    .split(",")[0]!
+    .trim();
+  return `${proto}://${host}${request.url}`;
+}
+
+/**
+ * Verify the `X-Twilio-Signature` on an inbound Twilio webhook.
+ *
+ * Safe fallback: if no auth token is configured (dev/local), log a warning and
+ * skip verification. When the token IS configured, a missing/invalid signature
+ * is rejected before any work happens.
+ *
+ * @returns true when the request may proceed, false when it was rejected (the
+ * reply has already been sent with HTTP 403).
+ */
+function ensureValidTwilioSignature(
+  request: FastifyRequest,
+  reply: { code(statusCode: number): { send(payload: unknown): unknown } },
+): boolean {
+  if (!twilioAuthToken) {
+    request.log.warn(
+      "TWILIO_AUTH_TOKEN is not set; skipping Twilio webhook signature verification.",
+    );
+    return true;
+  }
+
+  const signature = request.headers["x-twilio-signature"];
+  const signatureHeader = Array.isArray(signature) ? signature[0] : signature;
+  const params =
+    request.body && typeof request.body === "object"
+      ? (request.body as Record<string, string>)
+      : {};
+
+  const valid = verifyTwilioSignature(
+    buildPublicUrl(request),
+    params,
+    signatureHeader,
+    twilioAuthToken,
+  );
+
+  if (!valid) {
+    request.log.warn(
+      { url: request.url },
+      "Rejected Twilio webhook with missing or invalid X-Twilio-Signature.",
+    );
+    reply.code(403).send({ error: "Invalid Twilio signature." });
+    return false;
+  }
+
+  return true;
+}
 const client = createDbClient();
 const store = new TenantRepository(client.db);
 const engine = createAnswerEngine({
@@ -146,6 +216,10 @@ app.post("/voice/turn", async (request, reply) => {
 });
 
 app.post("/twilio/voice", async (request, reply) => {
+  if (!ensureValidTwilioSignature(request, reply)) {
+    return reply;
+  }
+
   const query = VoiceQuerySchema.safeParse(request.query);
   const actionUrl = query.success
     ? `/twilio/voice?assistantId=${encodeURIComponent(query.data.assistantId)}`
