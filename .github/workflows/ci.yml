@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   checks:
     name: Lint, Test, Typecheck, Build
@@ -18,14 +22,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
+      # pnpm must be on PATH before setup-node so its built-in pnpm cache works.
+      - name: Enable pnpm
+        run: corepack enable
+
       - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
           node-version: 22
-          package-manager-cache: false
-
-      - name: Enable pnpm
-        run: corepack enable
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -76,14 +82,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
+      # pnpm must be on PATH before setup-node so its built-in pnpm cache works.
+      - name: Enable pnpm
+        run: corepack enable
+
       - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
           node-version: 22
-          package-manager-cache: false
-
-      - name: Enable pnpm
-        run: corepack enable
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

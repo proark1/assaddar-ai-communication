@@ -1,0 +1,27 @@
+# CODEOWNERS
+#
+# Owners are requested for review automatically when matching files change.
+# Order matters: the LAST matching pattern wins for a given file.
+# See: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owner for everything in the repo.
+*                           @proark1
+
+# CI / infra / tooling
+/.github/                   @proark1
+/Dockerfile                 @proark1
+/pnpm-workspace.yaml        @proark1
+/vitest.workspace.ts        @proark1
+
+# Database: migrations, client, and seeds are sensitive — always review.
+/packages/db/               @proark1
+
+# Channel integrations (WhatsApp, Messenger, Meta webhooks, etc.).
+/packages/channels/         @proark1
+
+# Security-sensitive code (webhook signature verification, etc.).
+/packages/channels/src/security.ts   @proark1
+
+# API surface: auth, env handling, and the public server.
+/apps/api/src/env.ts        @proark1
+/apps/api/src/server.ts     @proark1
