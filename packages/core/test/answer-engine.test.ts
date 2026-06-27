@@ -4,7 +4,7 @@ import {
   createDefaultTenantPolicy,
   type AnswerDataStore,
   type KnowledgeChunk,
-  type TenantPolicy
+  type TenantPolicy,
 } from "../src";
 
 const tenantA = "11111111-1111-4111-8111-111111111111";
@@ -13,7 +13,7 @@ const tenantB = "22222222-2222-4222-8222-222222222222";
 class MemoryAnswerStore implements AnswerDataStore {
   constructor(
     private readonly policies: Record<string, TenantPolicy>,
-    private readonly chunks: KnowledgeChunk[]
+    private readonly chunks: KnowledgeChunk[],
   ) {}
 
   async getTenantPolicy(tenantId: string) {
@@ -25,7 +25,11 @@ class MemoryAnswerStore implements AnswerDataStore {
   }
 }
 
-function faqChunk(tenantId: string, question: string, answer: string): KnowledgeChunk {
+function faqChunk(
+  tenantId: string,
+  question: string,
+  answer: string,
+): KnowledgeChunk {
   return {
     id: crypto.randomUUID(),
     tenantId,
@@ -34,7 +38,7 @@ function faqChunk(tenantId: string, question: string, answer: string): Knowledge
     title: question,
     content: `Question: ${question}\nAnswer: ${answer}`,
     tags: ["faq"],
-    metadata: { question, answer }
+    metadata: { question, answer },
   };
 }
 
@@ -43,17 +47,23 @@ describe("AnswerEngine", () => {
     const engine = createAnswerEngine({
       dataStore: new MemoryAnswerStore(
         {
-          [tenantA]: createDefaultTenantPolicy(tenantA)
+          [tenantA]: createDefaultTenantPolicy(tenantA),
         },
-        [faqChunk(tenantA, "What are your opening hours?", "We are open Monday to Friday from 09:00 to 18:00.")]
-      )
+        [
+          faqChunk(
+            tenantA,
+            "What are your opening hours?",
+            "We are open Monday to Friday from 09:00 to 18:00.",
+          ),
+        ],
+      ),
     });
 
     const result = await engine.answer({
       tenantId: tenantA,
       channel: "website",
       text: "When are you open?",
-      metadata: {}
+      metadata: {},
     });
 
     expect(result.status).toBe("answered");
@@ -67,17 +77,17 @@ describe("AnswerEngine", () => {
         {
           [tenantA]: {
             ...createDefaultTenantPolicy(tenantA),
-            defaultLocale: "de"
-          }
+            defaultLocale: "de",
+          },
         },
         [
           faqChunk(
             tenantA,
             "Was ist die ASDAR Method?",
-            "Die ASDAR Method ist ein strukturierter Ansatz: Analysieren, Strukturieren, Digitalisieren, Automatisieren und Realisieren."
-          )
-        ]
-      )
+            "Die ASDAR Method ist ein strukturierter Ansatz: Analysieren, Strukturieren, Digitalisieren, Automatisieren und Realisieren.",
+          ),
+        ],
+      ),
     });
 
     const result = await engine.answer({
@@ -85,7 +95,7 @@ describe("AnswerEngine", () => {
       channel: "website",
       text: "Was ist die ASDAR Method?",
       locale: "de",
-      metadata: {}
+      metadata: {},
     });
 
     expect(result.status).toBe("answered");
@@ -97,17 +107,23 @@ describe("AnswerEngine", () => {
     const engine = createAnswerEngine({
       dataStore: new MemoryAnswerStore(
         {
-          [tenantA]: createDefaultTenantPolicy(tenantA)
+          [tenantA]: createDefaultTenantPolicy(tenantA),
         },
-        [faqChunk(tenantA, "What are your opening hours?", "We are open Monday to Friday.")]
-      )
+        [
+          faqChunk(
+            tenantA,
+            "What are your opening hours?",
+            "We are open Monday to Friday.",
+          ),
+        ],
+      ),
     });
 
     const result = await engine.answer({
       tenantId: tenantA,
       channel: "website",
       text: "Do you offer emergency roof repairs?",
-      metadata: {}
+      metadata: {},
     });
 
     expect(result.status).toBe("handoff");
@@ -119,17 +135,23 @@ describe("AnswerEngine", () => {
     const engine = createAnswerEngine({
       dataStore: new MemoryAnswerStore(
         {
-          [tenantA]: createDefaultTenantPolicy(tenantA)
+          [tenantA]: createDefaultTenantPolicy(tenantA),
         },
-        [faqChunk(tenantA, "What is your company address?", "We are at Example Street 1.")]
-      )
+        [
+          faqChunk(
+            tenantA,
+            "What is your company address?",
+            "We are at Example Street 1.",
+          ),
+        ],
+      ),
     });
 
     const result = await engine.answer({
       tenantId: tenantA,
       channel: "website",
       text: "What is the capital of France?",
-      metadata: {}
+      metadata: {},
     });
 
     expect(result.status).toBe("handoff");
@@ -141,20 +163,28 @@ describe("AnswerEngine", () => {
       dataStore: new MemoryAnswerStore(
         {
           [tenantA]: createDefaultTenantPolicy(tenantA),
-          [tenantB]: createDefaultTenantPolicy(tenantB)
+          [tenantB]: createDefaultTenantPolicy(tenantB),
         },
         [
-          faqChunk(tenantA, "What are your prices?", "Tenant A pricing starts at 100 EUR."),
-          faqChunk(tenantB, "What are your prices?", "Tenant B pricing starts at 900 EUR.")
-        ]
-      )
+          faqChunk(
+            tenantA,
+            "What are your prices?",
+            "Tenant A pricing starts at 100 EUR.",
+          ),
+          faqChunk(
+            tenantB,
+            "What are your prices?",
+            "Tenant B pricing starts at 900 EUR.",
+          ),
+        ],
+      ),
     });
 
     const result = await engine.answer({
       tenantId: tenantA,
       channel: "website",
       text: "What are your prices?",
-      metadata: {}
+      metadata: {},
     });
 
     expect(result.status).toBe("answered");

@@ -30,6 +30,8 @@ describe("tenant scope helpers", () => {
   });
 
   it("generates row-level policy names consistently", () => {
-    expect(tenantPolicyName("knowledge_chunks")).toBe("knowledge_chunks_tenant_isolation");
+    expect(tenantPolicyName("knowledge_chunks")).toBe(
+      "knowledge_chunks_tenant_isolation",
+    );
   });
 });

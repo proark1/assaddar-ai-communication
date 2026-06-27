@@ -20,14 +20,15 @@ export const DEFAULT_ALLOWED_INTENTS: AllowedIntent[] = [
       "heute",
       "morgen",
       "wochenende",
-      "feiertag"
+      "feiertag",
     ],
     examples: ["When are you open?", "Are you open on Saturday?"],
-    enabled: true
+    enabled: true,
   },
   {
     name: "company_information",
-    description: "Questions about the company, team, policies, or general business profile.",
+    description:
+      "Questions about the company, team, policies, or general business profile.",
     keywords: [
       "company",
       "business",
@@ -43,14 +44,15 @@ export const DEFAULT_ALLOWED_INTENTS: AllowedIntent[] = [
       "dar",
       "erfahrung",
       "sprachen",
-      "sprache"
+      "sprache",
     ],
     examples: ["Tell me about your company.", "Who are you?"],
-    enabled: true
+    enabled: true,
   },
   {
     name: "services",
-    description: "Questions about services, products, availability, booking, or offers.",
+    description:
+      "Questions about services, products, availability, booking, or offers.",
     keywords: [
       "service",
       "services",
@@ -75,10 +77,10 @@ export const DEFAULT_ALLOWED_INTENTS: AllowedIntent[] = [
       "prozesse",
       "asdar",
       "analyse",
-      "roadmap"
+      "roadmap",
     ],
     examples: ["Do you offer repairs?", "Can I book an appointment?"],
-    enabled: true
+    enabled: true,
   },
   {
     name: "prices",
@@ -97,14 +99,15 @@ export const DEFAULT_ALLOWED_INTENTS: AllowedIntent[] = [
       "kosten",
       "honorar",
       "angebot",
-      "rechnung"
+      "rechnung",
     ],
     examples: ["How much does it cost?", "Do you publish prices?"],
-    enabled: true
+    enabled: true,
   },
   {
     name: "locations",
-    description: "Questions about addresses, service areas, directions, and locations.",
+    description:
+      "Questions about addresses, service areas, directions, and locations.",
     keywords: [
       "location",
       "locations",
@@ -119,10 +122,10 @@ export const DEFAULT_ALLOWED_INTENTS: AllowedIntent[] = [
       "region",
       "gebiet",
       "anfahrt",
-      "moenchengladbach"
+      "moenchengladbach",
     ],
     examples: ["Where are you located?", "Which areas do you serve?"],
-    enabled: true
+    enabled: true,
   },
   {
     name: "faq",
@@ -155,10 +158,10 @@ export const DEFAULT_ALLOWED_INTENTS: AllowedIntent[] = [
       "sprachen",
       "erfahrung",
       "kontakt",
-      "termin"
+      "termin",
     ],
     examples: ["Can you help with this?", "What documents do I need?"],
-    enabled: true
+    enabled: true,
   },
   {
     name: "handoff",
@@ -180,26 +183,40 @@ export const DEFAULT_ALLOWED_INTENTS: AllowedIntent[] = [
       "kontakt",
       "termin",
       "nachricht",
-      "melden"
+      "melden",
     ],
     examples: ["Can a person call me?", "I want to contact support."],
-    enabled: true
-  }
+    enabled: true,
+  },
 ];
 
 export const DEFAULT_BLOCKED_TOPICS: BlockedTopic[] = [
   {
     name: "general_knowledge",
-    terms: ["capital of", "homework", "essay", "write code", "programming help", "random question"],
+    terms: [
+      "capital of",
+      "homework",
+      "essay",
+      "write code",
+      "programming help",
+      "random question",
+    ],
     response: "I can only answer questions about this business.",
-    enabled: true
+    enabled: true,
   },
   {
     name: "medical_legal_financial_advice",
-    terms: ["diagnose", "legal advice", "investment advice", "tax advice", "prescription"],
-    response: "I cannot provide that kind of advice. I can help with approved business information or pass a message to the team.",
-    enabled: true
-  }
+    terms: [
+      "diagnose",
+      "legal advice",
+      "investment advice",
+      "tax advice",
+      "prescription",
+    ],
+    response:
+      "I cannot provide that kind of advice. I can help with approved business information or pass a message to the team.",
+    enabled: true,
+  },
 ];
 
 export function createDefaultTenantPolicy(tenantId: string): TenantPolicy {
@@ -214,7 +231,7 @@ export function createDefaultTenantPolicy(tenantId: string): TenantPolicy {
     escalation: {
       enabled: true,
       contactLabel: "team",
-      createHandoffRequest: true
-    }
+      createHandoffRequest: true,
+    },
   };
 }

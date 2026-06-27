@@ -1,9 +1,14 @@
 import {
   createDefaultTenantPolicy,
   DEFAULT_ALLOWED_INTENTS,
-  DEFAULT_BLOCKED_TOPICS
+  DEFAULT_BLOCKED_TOPICS,
 } from "./policy";
-import { containsPhrase, normalizeText, stableKeywordScore, tokenOverlapScore } from "./text";
+import {
+  containsPhrase,
+  normalizeText,
+  stableKeywordScore,
+  tokenOverlapScore,
+} from "./text";
 import type {
   AllowedIntent,
   AnswerDataStore,
@@ -13,7 +18,7 @@ import type {
   InboundMessage,
   KnowledgeChunk,
   RetrievedChunk,
-  TenantPolicy
+  TenantPolicy,
 } from "./types";
 
 const DEFAULT_REFUSAL =
@@ -23,27 +28,45 @@ export type AnswerEngineOptions = {
   dataStore: AnswerDataStore;
   handoffStore?: HandoffStore;
   retrievalLimit?: number;
+  /**
+   * Optional query embedder. When provided alongside a data store that supports
+   * `searchKnowledgeByEmbedding`, retrieval becomes hybrid (keyword + semantic).
+   * Returning `null` (e.g. transient provider failure) degrades gracefully to
+   * keyword-only retrieval for that request.
+   */
+  embedder?: (text: string) => Promise<number[] | null>;
 };
 
 export class AnswerEngine {
   private readonly dataStore: AnswerDataStore;
   private readonly handoffStore: HandoffStore | undefined;
   private readonly retrievalLimit: number;
+  private readonly embedder: AnswerEngineOptions["embedder"];
 
   constructor(options: AnswerEngineOptions) {
     this.dataStore = options.dataStore;
     this.handoffStore = options.handoffStore;
     this.retrievalLimit = options.retrievalLimit ?? 8;
+    this.embedder = options.embedder;
   }
 
   async answer(input: InboundMessage): Promise<AnswerResult> {
     const trace: AnswerTraceStep[] = [];
     const normalized = normalizeText(input.text);
-    trace.push({ step: "normalize", outcome: normalized ? "passed" : "failed" });
+    trace.push({
+      step: "normalize",
+      outcome: normalized ? "passed" : "failed",
+    });
 
     const policy = await this.loadPolicy(input.tenantId);
     if (normalized.length > policy.maxMessageLength) {
-      return this.refuse(input, policy, trace, "message_length", "Message is too long for this assistant.");
+      return this.refuse(
+        input,
+        policy,
+        trace,
+        "message_length",
+        "Message is too long for this assistant.",
+      );
     }
 
     const blockedTopic = findBlockedTopic(normalized, policy.blockedTopics);
@@ -51,7 +74,7 @@ export class AnswerEngine {
       trace.push({
         step: "blocked_topic",
         outcome: "failed",
-        detail: blockedTopic.name
+        detail: blockedTopic.name,
       });
 
       return this.refuse(
@@ -59,35 +82,86 @@ export class AnswerEngine {
         policy,
         trace,
         blockedTopic.name,
-        blockedTopic.response ?? "I can only answer questions about this business."
+        blockedTopic.response ??
+          "I can only answer questions about this business.",
       );
     }
     trace.push({ step: "blocked_topic", outcome: "passed" });
 
     const intent = classifyIntent(normalized, policy.allowedIntents);
     if (!intent.allowed) {
-      trace.push({ step: "intent_policy", outcome: "failed", detail: intent.name });
-      return this.refuse(input, policy, trace, "intent_not_allowed", DEFAULT_REFUSAL);
+      trace.push({
+        step: "intent_policy",
+        outcome: "failed",
+        detail: intent.name,
+      });
+      return this.refuse(
+        input,
+        policy,
+        trace,
+        "intent_not_allowed",
+        DEFAULT_REFUSAL,
+      );
     }
-    trace.push({ step: "intent_policy", outcome: "passed", detail: intent.name });
+    trace.push({
+      step: "intent_policy",
+      outcome: "passed",
+      detail: intent.name,
+    });
 
-    const chunks = await this.dataStore.searchKnowledge(input.tenantId, normalized, this.retrievalLimit);
-    const rankedChunks = rankChunks(normalized, chunks);
+    const chunks = await this.dataStore.searchKnowledge(
+      input.tenantId,
+      normalized,
+      this.retrievalLimit,
+    );
+    const keywordRanked = rankChunks(normalized, chunks);
+    const semanticRanked = await this.semanticSearch(
+      input.tenantId,
+      normalized,
+    );
+    const rankedChunks = mergeRankedChunks(keywordRanked, semanticRanked);
+    if (semanticRanked.length > 0) {
+      trace.push({
+        step: "semantic_retrieval",
+        outcome: "passed",
+        detail: String(semanticRanked.length),
+      });
+    }
     const bestChunk = rankedChunks[0];
     if (!bestChunk || bestChunk.score < policy.confidenceThreshold) {
       trace.push({
         step: "retrieve_knowledge",
         outcome: "failed",
-        detail: bestChunk ? String(bestChunk.score) : "no_chunks"
+        detail: bestChunk ? String(bestChunk.score) : "no_chunks",
       });
-      return this.refuse(input, policy, trace, "knowledge_not_found", DEFAULT_REFUSAL);
+      return this.refuse(
+        input,
+        policy,
+        trace,
+        "knowledge_not_found",
+        DEFAULT_REFUSAL,
+      );
     }
-    trace.push({ step: "retrieve_knowledge", outcome: "passed", detail: String(bestChunk.score) });
+    trace.push({
+      step: "retrieve_knowledge",
+      outcome: "passed",
+      detail: String(bestChunk.score),
+    });
 
     const answer = extractGroundedAnswer(bestChunk);
     if (!answer) {
-      trace.push({ step: "validate_answer", outcome: "failed", detail: "empty_grounded_answer" });
-      return this.refuse(input, policy, trace, "answer_validation_failed", DEFAULT_REFUSAL);
+      trace.push({
+        step: "validate_answer",
+        outcome: "failed",
+        detail: "empty_grounded_answer",
+      });
+      return this.refuse(
+        input,
+        policy,
+        trace,
+        "answer_validation_failed",
+        DEFAULT_REFUSAL,
+      );
     }
 
     trace.push({ step: "generate_grounded_answer", outcome: "passed" });
@@ -96,7 +170,7 @@ export class AnswerEngine {
     const citation: AnswerResult["citations"][number] = {
       chunkId: bestChunk.id,
       documentId: bestChunk.documentId,
-      sourceId: bestChunk.sourceId
+      sourceId: bestChunk.sourceId,
     };
     if (bestChunk.title) {
       citation.title = bestChunk.title;
@@ -112,8 +186,31 @@ export class AnswerEngine {
       citations: [citation],
       handoffRecommended: false,
       usage: estimateUsage(normalized, answer),
-      trace
+      trace,
     };
+  }
+
+  private async semanticSearch(
+    tenantId: string,
+    normalized: string,
+  ): Promise<RetrievedChunk[]> {
+    if (!this.embedder || !this.dataStore.searchKnowledgeByEmbedding) {
+      return [];
+    }
+    try {
+      const embedding = await this.embedder(normalized);
+      if (!embedding || embedding.length === 0) {
+        return [];
+      }
+      return await this.dataStore.searchKnowledgeByEmbedding(
+        tenantId,
+        embedding,
+        this.retrievalLimit,
+      );
+    } catch {
+      // Semantic search is best-effort; fall back to keyword retrieval.
+      return [];
+    }
   }
 
   private async loadPolicy(tenantId: string): Promise<TenantPolicy> {
@@ -124,7 +221,7 @@ export class AnswerEngine {
       allowedIntents: storedPolicy.allowedIntents.length
         ? storedPolicy.allowedIntents
         : DEFAULT_ALLOWED_INTENTS,
-      blockedTopics: [...DEFAULT_BLOCKED_TOPICS, ...storedPolicy.blockedTopics]
+      blockedTopics: [...DEFAULT_BLOCKED_TOPICS, ...storedPolicy.blockedTopics],
     };
   }
 
@@ -133,21 +230,29 @@ export class AnswerEngine {
     policy: TenantPolicy,
     trace: AnswerTraceStep[],
     reason: string,
-    message: string
+    message: string,
   ): Promise<AnswerResult> {
     const handoffRecommended = policy.escalation.enabled;
-    if (handoffRecommended && policy.escalation.createHandoffRequest && this.handoffStore) {
+    if (
+      handoffRecommended &&
+      policy.escalation.createHandoffRequest &&
+      this.handoffStore
+    ) {
       const handoffInput = {
         tenantId: input.tenantId,
         channel: input.channel,
         reason,
-        message: input.text
+        message: input.text,
       };
       if (input.conversationId) {
         Object.assign(handoffInput, { conversationId: input.conversationId });
       }
       await this.handoffStore.createHandoff(handoffInput);
-      trace.push({ step: "handoff_request", outcome: "passed", detail: reason });
+      trace.push({
+        step: "handoff_request",
+        outcome: "passed",
+        detail: reason,
+      });
     }
 
     return {
@@ -161,7 +266,7 @@ export class AnswerEngine {
       handoffRecommended,
       handoffReason: reason,
       usage: estimateUsage(input.text, message),
-      trace
+      trace,
     };
   }
 }
@@ -172,7 +277,7 @@ export function createAnswerEngine(options: AnswerEngineOptions): AnswerEngine {
 
 export function classifyIntent(
   message: string,
-  allowedIntents: AllowedIntent[]
+  allowedIntents: AllowedIntent[],
 ): { allowed: boolean; name: string; score: number } {
   const enabledIntents = allowedIntents.filter((intent) => intent.enabled);
   let best = { allowed: false, name: "unknown", score: 0 };
@@ -180,7 +285,7 @@ export function classifyIntent(
   for (const intent of enabledIntents) {
     const score = Math.max(
       stableKeywordScore(message, intent.keywords),
-      stableKeywordScore(message, intent.examples)
+      stableKeywordScore(message, intent.examples),
     );
     if (score > best.score) {
       best = { allowed: true, name: intent.name, score };
@@ -194,24 +299,56 @@ export function classifyIntent(
   return best;
 }
 
-export function rankChunks(query: string, chunks: KnowledgeChunk[]): RetrievedChunk[] {
+export function rankChunks(
+  query: string,
+  chunks: KnowledgeChunk[],
+): RetrievedChunk[] {
   return chunks
     .map((chunk) => {
       const metadataQuestion =
-        typeof chunk.metadata.question === "string" ? ` ${chunk.metadata.question}` : "";
-      const metadataAnswer = typeof chunk.metadata.answer === "string" ? ` ${chunk.metadata.answer}` : "";
+        typeof chunk.metadata.question === "string"
+          ? ` ${chunk.metadata.question}`
+          : "";
+      const metadataAnswer =
+        typeof chunk.metadata.answer === "string"
+          ? ` ${chunk.metadata.answer}`
+          : "";
       const content = `${chunk.title ?? ""} ${chunk.content}${metadataQuestion}${metadataAnswer} ${chunk.tags.join(" ")}`;
       return {
         ...chunk,
-        score: Math.min(1, tokenOverlapScore(query, content))
+        score: Math.min(1, tokenOverlapScore(query, content)),
       };
     })
     .filter((chunk) => chunk.score > 0)
     .sort((a, b) => b.score - a.score);
 }
 
+/**
+ * Combine keyword and semantic candidates into a single ranked list. A chunk's
+ * score is the strongest signal from either method, so semantically-similar
+ * chunks that share no keywords still surface, and vice versa.
+ */
+export function mergeRankedChunks(
+  keyword: RetrievedChunk[],
+  semantic: RetrievedChunk[],
+): RetrievedChunk[] {
+  const byId = new Map<string, RetrievedChunk>();
+  for (const chunk of [...keyword, ...semantic]) {
+    const existing = byId.get(chunk.id);
+    if (!existing) {
+      byId.set(chunk.id, chunk);
+    } else if (chunk.score > existing.score) {
+      byId.set(chunk.id, { ...existing, score: chunk.score });
+    }
+  }
+  return [...byId.values()].sort((a, b) => b.score - a.score);
+}
+
 export function extractGroundedAnswer(chunk: KnowledgeChunk): string {
-  if (typeof chunk.metadata.answer === "string" && chunk.metadata.answer.trim()) {
+  if (
+    typeof chunk.metadata.answer === "string" &&
+    chunk.metadata.answer.trim()
+  ) {
     return chunk.metadata.answer.trim();
   }
 
@@ -223,8 +360,13 @@ export function extractGroundedAnswer(chunk: KnowledgeChunk): string {
   return chunk.content.trim();
 }
 
-function findBlockedTopic(message: string, blockedTopics: TenantPolicy["blockedTopics"]) {
-  return blockedTopics.find((topic) => topic.enabled && containsPhrase(message, topic.terms));
+function findBlockedTopic(
+  message: string,
+  blockedTopics: TenantPolicy["blockedTopics"],
+) {
+  return blockedTopics.find(
+    (topic) => topic.enabled && containsPhrase(message, topic.terms),
+  );
 }
 
 function applyTone(answer: string, policy: TenantPolicy): string {
@@ -246,6 +388,6 @@ function estimateUsage(input: string, output: string) {
   return {
     inputCharacters,
     outputCharacters,
-    estimatedCredits: Math.ceil((inputCharacters + outputCharacters) / 1000)
+    estimatedCredits: Math.ceil((inputCharacters + outputCharacters) / 1000),
   };
 }

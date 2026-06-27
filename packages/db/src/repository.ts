@@ -6,10 +6,21 @@ import type {
   HandoffInput,
   HandoffStore,
   KnowledgeChunk,
+  RetrievedChunk,
   TenantPolicy,
 } from "@assaddar/core";
 import { createDefaultTenantPolicy, rankChunks } from "@assaddar/core";
-import { and, desc, eq, or, sql, type SQL } from "drizzle-orm";
+import {
+  and,
+  desc,
+  eq,
+  inArray,
+  isNotNull,
+  lt,
+  or,
+  sql,
+  type SQL,
+} from "drizzle-orm";
 import type { Database } from "./client";
 import {
   allowedIntents,
@@ -483,6 +494,29 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       .where(eq(userSessions.tokenHash, tokenHash));
   }
 
+  /** Lightweight connectivity probe for health checks. */
+  async ping(): Promise<boolean> {
+    try {
+      await this.db.execute(sql`select 1`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Remove sessions whose expiry has passed so the table does not grow
+   * unbounded. Called opportunistically on login and on a background interval.
+   * Returns the number of rows removed.
+   */
+  async deleteExpiredSessions(now = new Date()): Promise<number> {
+    const removed = await this.db
+      .delete(userSessions)
+      .where(lt(userSessions.expiresAt, now))
+      .returning({ id: userSessions.id });
+    return removed.length;
+  }
+
   async listTenantsForUser(userId: string) {
     const rows = await this.db
       .select({ tenant: tenants })
@@ -649,10 +683,7 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     };
   }
 
-  async createTenantInvite(
-    tenantId: string,
-    input: CreateTenantInviteInput,
-  ) {
+  async createTenantInvite(tenantId: string, input: CreateTenantInviteInput) {
     assertTenantId(tenantId);
     const email = normalizeEmail(input.email);
     if (!email) {
@@ -675,10 +706,16 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       throw new Error("Failed to create invite.");
     }
 
-    await this.audit(tenantId, "tenant_invite.created", "tenant_invite", invite.id, {
-      email,
-      role: input.role,
-    });
+    await this.audit(
+      tenantId,
+      "tenant_invite.created",
+      "tenant_invite",
+      invite.id,
+      {
+        email,
+        role: input.role,
+      },
+    );
 
     return invite;
   }
@@ -1049,6 +1086,115 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
         return chunk;
       }),
     ).slice(0, limit);
+  }
+
+  /**
+   * Semantic retrieval over stored embeddings using pgvector cosine distance.
+   * Scores are normalised to 0..1 (1 = identical). Returns nothing when no
+   * approved chunk has an embedding yet.
+   */
+  async searchKnowledgeByEmbedding(
+    tenantId: string,
+    embedding: number[],
+    limit: number,
+  ): Promise<RetrievedChunk[]> {
+    assertTenantId(tenantId);
+    if (embedding.length === 0) {
+      return [];
+    }
+    const literal = `[${embedding.join(",")}]`;
+    const distance = sql<number>`${knowledgeChunks.embedding} <=> ${literal}::vector`;
+    const rows = await this.db
+      .select({
+        id: knowledgeChunks.id,
+        tenantId: knowledgeChunks.tenantId,
+        documentId: knowledgeChunks.documentId,
+        sourceId: knowledgeChunks.sourceId,
+        title: knowledgeChunks.title,
+        content: knowledgeChunks.content,
+        tags: knowledgeChunks.tags,
+        metadata: knowledgeChunks.metadata,
+        distance,
+      })
+      .from(knowledgeChunks)
+      .where(
+        and(
+          eq(knowledgeChunks.tenantId, tenantId),
+          eq(knowledgeChunks.status, "approved"),
+          isNotNull(knowledgeChunks.embedding),
+        ),
+      )
+      .orderBy(distance)
+      .limit(Math.max(limit, 1));
+
+    return rows.map((row) => {
+      const chunk: RetrievedChunk = {
+        id: row.id,
+        tenantId: row.tenantId,
+        documentId: row.documentId,
+        sourceId: row.sourceId,
+        content: row.content,
+        tags: row.tags,
+        metadata: row.metadata,
+        score: Math.max(0, Math.min(1, 1 - Number(row.distance))),
+      };
+      if (row.title) {
+        chunk.title = row.title;
+      }
+      return chunk;
+    });
+  }
+
+  /** Persist a computed embedding for a single approved chunk. */
+  async setChunkEmbedding(
+    tenantId: string,
+    chunkId: string,
+    embedding: number[],
+  ): Promise<void> {
+    assertTenantId(tenantId);
+    await this.db
+      .update(knowledgeChunks)
+      .set({ embedding, updatedAt: sql`now()` })
+      .where(
+        and(
+          eq(knowledgeChunks.tenantId, tenantId),
+          eq(knowledgeChunks.id, chunkId),
+        ),
+      );
+  }
+
+  /** Fetch chunk text for embedding generation (worker backfill). */
+  async listChunksForEmbedding(
+    tenantId: string,
+    chunkIds: string[],
+  ): Promise<Array<Pick<KnowledgeChunk, "id" | "title" | "content">>> {
+    assertTenantId(tenantId);
+    if (chunkIds.length === 0) {
+      return [];
+    }
+    const rows = await this.db
+      .select({
+        id: knowledgeChunks.id,
+        title: knowledgeChunks.title,
+        content: knowledgeChunks.content,
+      })
+      .from(knowledgeChunks)
+      .where(
+        and(
+          eq(knowledgeChunks.tenantId, tenantId),
+          inArray(knowledgeChunks.id, chunkIds),
+        ),
+      );
+    return rows.map((row) => {
+      const chunk: Pick<KnowledgeChunk, "id" | "title" | "content"> = {
+        id: row.id,
+        content: row.content,
+      };
+      if (row.title) {
+        chunk.title = row.title;
+      }
+      return chunk;
+    });
   }
 
   async findOrCreateConversation(input: {
@@ -2044,8 +2190,10 @@ function normalizeRoleName(value: string): RoleName {
 function roleDescription(name: RoleName) {
   const descriptions: Record<RoleName, string> = {
     platform_owner: "Can manage all tenants and platform settings.",
-    tenant_owner: "Can manage the tenant, users, channels, knowledge, and leads.",
-    tenant_admin: "Can configure tenant settings, channels, knowledge, and leads.",
+    tenant_owner:
+      "Can manage the tenant, users, channels, knowledge, and leads.",
+    tenant_admin:
+      "Can configure tenant settings, channels, knowledge, and leads.",
     operator: "Can manage leads, conversations, and handoffs.",
     viewer: "Can view tenant data without changing settings.",
   };
