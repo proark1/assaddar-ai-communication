@@ -43,10 +43,14 @@ try {
   process.exitCode = 1;
 } finally {
   if (child) {
-    child.kill("SIGTERM");
-    await waitForExit(child);
+    await stopApi(child);
   }
 }
+
+// The API runs under `tsx`, which keeps an esbuild service child alive. Those
+// children inherit our stdio pipes, so even after stopApi the event loop can
+// have lingering handles. Exit explicitly so the step never hangs.
+process.exit(process.exitCode ?? 0);
 
 async function smokeApi(baseUrl, token) {
   const health = await fetchJson(`${baseUrl}/health`);
@@ -115,6 +119,9 @@ function startApi() {
     cwd: rootDir,
     env: process.env,
     stdio: ["ignore", "pipe", "pipe"],
+    // Own process group so we can signal the whole tree (pnpm -> tsx -> esbuild
+    // -> server) on teardown instead of just the pnpm wrapper.
+    detached: true,
   });
 
   const logBuffer = [];
@@ -132,6 +139,21 @@ function startApi() {
     }
   });
   return childProcess;
+}
+
+async function stopApi(childProcess) {
+  try {
+    // Negative PID targets the process group leader created by detached:true,
+    // tearing down tsx/esbuild/server together rather than orphaning them.
+    process.kill(-childProcess.pid, "SIGTERM");
+  } catch {
+    try {
+      childProcess.kill("SIGTERM");
+    } catch {
+      // already gone
+    }
+  }
+  await waitForExit(childProcess);
 }
 
 async function isHealthy(baseUrl) {
