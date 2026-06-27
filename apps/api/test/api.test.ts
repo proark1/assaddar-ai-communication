@@ -90,7 +90,12 @@ class MemoryPlatformStore
     id: string;
     tenantId: string;
     userId: string;
-    role: "platform_owner" | "tenant_owner" | "tenant_admin" | "operator" | "viewer";
+    role:
+      | "platform_owner"
+      | "tenant_owner"
+      | "tenant_admin"
+      | "operator"
+      | "viewer";
     status: string;
     createdAt: Date;
     updatedAt: Date;
@@ -107,7 +112,12 @@ class MemoryPlatformStore
     id: string;
     tenantId: string;
     email: string;
-    roleName: "platform_owner" | "tenant_owner" | "tenant_admin" | "operator" | "viewer";
+    roleName:
+      | "platform_owner"
+      | "tenant_owner"
+      | "tenant_admin"
+      | "operator"
+      | "viewer";
     tokenHash: string;
     status: string;
     expiresAt: Date;
@@ -259,9 +269,7 @@ class MemoryPlatformStore
         status: user.status,
       },
       memberships: this.memberships
-        .filter(
-          (item) => item.userId === user.id && item.status === "active",
-        )
+        .filter((item) => item.userId === user.id && item.status === "active")
         .map((item) => {
           const tenant = this.tenants.find(
             (candidate) => candidate.id === item.tenantId,
@@ -281,6 +289,18 @@ class MemoryPlatformStore
     this.sessions = this.sessions.filter(
       (session) => session.tokenHash !== tokenHash,
     );
+  }
+
+  async deleteExpiredSessions(now = new Date()) {
+    const before = this.sessions.length;
+    this.sessions = this.sessions.filter(
+      (session) => session.expiresAt.getTime() > now.getTime(),
+    );
+    return before - this.sessions.length;
+  }
+
+  async ping() {
+    return true;
   }
 
   async getTenantMembership(userId: string, tenantId: string) {
@@ -324,7 +344,12 @@ class MemoryPlatformStore
     input: {
       email: string;
       name: string;
-      role: "platform_owner" | "tenant_owner" | "tenant_admin" | "operator" | "viewer";
+      role:
+        | "platform_owner"
+        | "tenant_owner"
+        | "tenant_admin"
+        | "operator"
+        | "viewer";
       passwordHash?: string | null;
     },
   ) {
@@ -376,7 +401,12 @@ class MemoryPlatformStore
     tenantId: string,
     input: {
       email: string;
-      role: "platform_owner" | "tenant_owner" | "tenant_admin" | "operator" | "viewer";
+      role:
+        | "platform_owner"
+        | "tenant_owner"
+        | "tenant_admin"
+        | "operator"
+        | "viewer";
       tokenHash: string;
       expiresAt: Date;
     },
@@ -1632,7 +1662,10 @@ describe("API", () => {
   it("searches Twilio inventory for available AI phone numbers", async () => {
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.includes("pricing.twilio.com") || url.includes("/v1/PhoneNumbers")) {
+      if (
+        url.includes("pricing.twilio.com") ||
+        url.includes("/v1/PhoneNumbers")
+      ) {
         return new Response(
           JSON.stringify({
             price_unit: "EUR",
