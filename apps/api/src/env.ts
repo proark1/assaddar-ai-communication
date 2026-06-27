@@ -8,6 +8,7 @@ export const EnvSchema = z.object({
     .string()
     .default("http://localhost:5174,http://localhost:3000"),
   META_VERIFY_TOKEN: z.string().default("change-me-meta-verify-token"),
+  META_APP_SECRET: z.string().optional(),
   META_GRAPH_API_VERSION: z.string().default("v25.0"),
   ADMIN_PUBLIC_URL: z.string().url().optional(),
   WHATSAPP_ACCESS_TOKEN: z.string().optional(),
@@ -32,9 +33,33 @@ export const EnvSchema = z.object({
 
 export type Env = z.infer<typeof EnvSchema>;
 
+const DEFAULT_ADMIN_API_TOKEN = "change-me-dev-admin-token";
+const DEFAULT_META_VERIFY_TOKEN = "change-me-meta-verify-token";
+
 export function loadEnv(env = process.env): Env {
-  return EnvSchema.parse({
+  const parsed = EnvSchema.parse({
     ...env,
     API_PORT: env.API_PORT ?? env.PORT,
   });
+
+  // Refuse to boot in production with the placeholder secrets still in place;
+  // these would otherwise leave admin auth and webhook verification wide open.
+  if (env.NODE_ENV === "production") {
+    const insecureDefaults: string[] = [];
+    if (parsed.ADMIN_API_TOKEN === DEFAULT_ADMIN_API_TOKEN) {
+      insecureDefaults.push("ADMIN_API_TOKEN");
+    }
+    if (parsed.META_VERIFY_TOKEN === DEFAULT_META_VERIFY_TOKEN) {
+      insecureDefaults.push("META_VERIFY_TOKEN");
+    }
+    if (insecureDefaults.length > 0) {
+      throw new Error(
+        `Refusing to start in production with default development secrets: ${insecureDefaults.join(
+          ", ",
+        )}. Set secure values for these environment variables.`,
+      );
+    }
+  }
+
+  return parsed;
 }

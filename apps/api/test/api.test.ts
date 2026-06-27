@@ -9,6 +9,7 @@ import {
   type KnowledgeChunk,
   type TenantPolicy,
 } from "@assaddar/core";
+import { createHmac } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildServer, type PlatformStore } from "../src/server";
 
@@ -2426,6 +2427,149 @@ describe("API", () => {
       assignedTo: "Assad",
     });
 
+    await app.close();
+  });
+
+  it("rejects Meta webhooks with an invalid signature when the app secret is configured", async () => {
+    const store = new MemoryPlatformStore();
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+      metaAppSecret: "app-secret",
+    });
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+    await store.upsertChannelConnection(tenant.id, {
+      channel: "whatsapp",
+      provider: "meta-whatsapp-cloud",
+      externalAccountId: "phone-number-1",
+      status: "connected",
+    });
+
+    const rawBody = JSON.stringify({
+      entry: [
+        {
+          changes: [
+            {
+              value: {
+                metadata: { phone_number_id: "phone-number-1" },
+                messages: [{ from: "491701234567", text: { body: "Hi" } }],
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    const missing = await app.inject({
+      method: "POST",
+      url: "/webhooks/meta/whatsapp",
+      headers: { "content-type": "application/json" },
+      payload: rawBody,
+    });
+    expect(missing.statusCode).toBe(401);
+
+    const tampered = await app.inject({
+      method: "POST",
+      url: "/webhooks/meta/whatsapp",
+      headers: {
+        "content-type": "application/json",
+        "x-hub-signature-256": "sha256=deadbeef",
+      },
+      payload: rawBody,
+    });
+    expect(tampered.statusCode).toBe(401);
+    expect(store.conversations).toHaveLength(0);
+
+    await app.close();
+  });
+
+  it("accepts Meta webhooks with a valid signature when the app secret is configured", async () => {
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ messages: [{ id: "wamid.1" }] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    ) as typeof fetch;
+    const store = new MemoryPlatformStore();
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+      metaAppSecret: "app-secret",
+      whatsappAccessToken: "whatsapp-token",
+    });
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+    await store.addFaq(tenant.id, {
+      question: "What do you do?",
+      answer: "We implement practical AI automation.",
+      tags: ["faq"],
+    });
+    await store.upsertChannelConnection(tenant.id, {
+      channel: "whatsapp",
+      provider: "meta-whatsapp-cloud",
+      externalAccountId: "phone-number-1",
+      status: "connected",
+    });
+
+    const rawBody = JSON.stringify({
+      entry: [
+        {
+          changes: [
+            {
+              value: {
+                metadata: { phone_number_id: "phone-number-1" },
+                messages: [
+                  { from: "491701234567", text: { body: "What do you do?" } },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const signature = `sha256=${createHmac("sha256", "app-secret")
+      .update(Buffer.from(rawBody, "utf8"))
+      .digest("hex")}`;
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/webhooks/meta/whatsapp",
+      headers: {
+        "content-type": "application/json",
+        "x-hub-signature-256": signature,
+      },
+      payload: rawBody,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json<{ routed: number }>().routed).toBe(1);
+    await app.close();
+  });
+
+  it("sets security headers on responses", async () => {
+    const store = new MemoryPlatformStore();
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+    });
+
+    const response = await app.inject({ method: "GET", url: "/health" });
+
+    expect(response.headers["x-content-type-options"]).toBe("nosniff");
+    expect(response.headers["x-frame-options"]).toBe("DENY");
+    expect(response.headers["referrer-policy"]).toBe("no-referrer");
+    expect(response.headers["content-security-policy"]).toContain(
+      "frame-ancestors 'none'",
+    );
     await app.close();
   });
 });

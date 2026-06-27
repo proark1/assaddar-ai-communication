@@ -1,6 +1,7 @@
 import {
   MetaMessengerAdapter,
   type NormalizedInboundEvent,
+  verifyMetaSignature,
   WhatsAppCloudAdapter,
   WebsiteAdapter,
   type ChannelAdapter,
@@ -22,6 +23,7 @@ import Fastify, {
 import { Buffer } from "node:buffer";
 import { createHash, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
 import net from "node:net";
+import { Readable } from "node:stream";
 import tls from "node:tls";
 import { promisify } from "node:util";
 import { z } from "zod";
@@ -289,6 +291,12 @@ export type BuildServerOptions = {
   leadNotificationEmailSender?: (email: LeadNotificationEmail) => Promise<void>;
   adminPublicUrl?: string;
   metaVerifyToken?: string;
+  /**
+   * Meta app secret used to verify the `X-Hub-Signature-256` header on inbound
+   * webhooks. When omitted, signature verification is skipped (a warning is
+   * logged) so existing/dev setups keep working.
+   */
+  metaAppSecret?: string;
   metaGraphApiVersion?: string;
   whatsappAccessToken?: string;
   messengerPageAccessToken?: string;
@@ -333,6 +341,10 @@ const defaultAutomationSettings: AutomationSettings = {
 const defaultAdminPublicUrl =
   "https://assaddar-admin-production.up.railway.app";
 
+// Inbound webhook routes stash the raw (pre-parse) body on the request so the
+// signature can be verified over the exact bytes Meta signed.
+type RequestWithRawBody = FastifyRequest & { rawBody?: Buffer };
+
 export async function buildServer(
   options: BuildServerOptions,
 ): Promise<FastifyInstance> {
@@ -352,9 +364,21 @@ export async function buildServer(
     },
   });
 
-  // Surface the correlation id on responses so clients/operators can quote it.
+  // Surface the correlation id on responses so clients/operators can quote it,
+  // and apply conservative security headers to every response. These are safe
+  // for a JSON API and do not interfere with CORS (which sets its own
+  // Access-Control-* headers) or with the existing response bodies.
   app.addHook("onSend", async (request, reply) => {
     reply.header("x-request-id", request.id);
+    reply.header("X-Content-Type-Options", "nosniff");
+    reply.header("X-Frame-Options", "DENY");
+    reply.header("Referrer-Policy", "no-referrer");
+    // The API serves JSON/plain-text only and never renders HTML, so a locked
+    // down CSP that forbids any embedded/active content is appropriate.
+    reply.header(
+      "Content-Security-Policy",
+      "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+    );
   });
 
   const allowedOrigins = options.allowedOrigins ?? [];
@@ -1899,57 +1923,101 @@ export async function buildServer(
     return reply.type("text/plain").send(challenge);
   });
 
-  app.post("/webhooks/meta/:channel", async (request, reply) => {
-    const { channel } = ParamsMetaChannelSchema.parse(request.params);
-    const query = MetaWebhookQuerySchema.parse(request.query);
-    const adapter = metaAdapters[channel];
-    const providerAccountId = extractMetaProviderAccountId(
-      channel,
-      request.body,
-    );
-    const tenant = query.assistantId
-      ? await options.store.getTenantByPublicId(query.assistantId)
-      : providerAccountId
-        ? await options.store.getTenantByChannelConnection(
-            channel,
-            adapter.provider,
-            providerAccountId,
-          )
-        : null;
+  app.post(
+    "/webhooks/meta/:channel",
+    {
+      // Capture the RAW request body for THIS route only so we can verify
+      // Meta's `X-Hub-Signature-256` (HMAC over the exact bytes). The buffered
+      // bytes are re-streamed so the default JSON body parser still runs; global
+      // JSON parsing for all other routes is untouched.
+      preParsing: async (request, _reply, payload) => {
+        const chunks: Buffer[] = [];
+        for await (const chunk of payload) {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        }
+        const raw = Buffer.concat(chunks);
+        (request as RequestWithRawBody).rawBody = raw;
+        return Readable.from(raw);
+      },
+    },
+    async (request, reply) => {
+      const { channel } = ParamsMetaChannelSchema.parse(request.params);
+      const query = MetaWebhookQuerySchema.parse(request.query);
+      const adapter = metaAdapters[channel];
 
-    if (!tenant) {
-      return reply.code(202).send({
+      // When a Meta app secret is configured, every inbound webhook MUST carry a
+      // valid signature; otherwise reject. When it is NOT configured we log once
+      // and skip, so existing/dev setups keep working.
+      if (options.metaAppSecret) {
+        const rawBody =
+          (request as RequestWithRawBody).rawBody ?? Buffer.alloc(0);
+        const signature = request.headers["x-hub-signature-256"];
+        const signatureValue = Array.isArray(signature)
+          ? signature[0]
+          : signature;
+        if (
+          !verifyMetaSignature(rawBody, signatureValue, options.metaAppSecret)
+        ) {
+          request.log.warn(
+            { channel },
+            "Rejected Meta webhook with missing/invalid X-Hub-Signature-256",
+          );
+          return reply.code(401).send({ error: "Invalid webhook signature." });
+        }
+      } else {
+        request.log.warn(
+          "META_APP_SECRET is not configured; skipping Meta webhook signature verification",
+        );
+      }
+
+      const providerAccountId = extractMetaProviderAccountId(
+        channel,
+        request.body,
+      );
+      const tenant = query.assistantId
+        ? await options.store.getTenantByPublicId(query.assistantId)
+        : providerAccountId
+          ? await options.store.getTenantByChannelConnection(
+              channel,
+              adapter.provider,
+              providerAccountId,
+            )
+          : null;
+
+      if (!tenant) {
+        return reply.code(202).send({
+          received: true,
+          routed: false,
+          channel,
+          provider: adapter.provider,
+          reason: "tenant_not_mapped",
+          ...(providerAccountId ? { providerAccountId } : {}),
+        });
+      }
+
+      const events = adapter.normalizeInbound(request.body, tenant.id);
+      const results = [];
+      for (const event of events) {
+        results.push(
+          await processChannelInboundEvent({
+            options,
+            engine,
+            adapter,
+            tenant,
+            event,
+          }),
+        );
+      }
+
+      return {
         received: true,
-        routed: false,
         channel,
         provider: adapter.provider,
-        reason: "tenant_not_mapped",
-        ...(providerAccountId ? { providerAccountId } : {}),
-      });
-    }
-
-    const events = adapter.normalizeInbound(request.body, tenant.id);
-    const results = [];
-    for (const event of events) {
-      results.push(
-        await processChannelInboundEvent({
-          options,
-          engine,
-          adapter,
-          tenant,
-          event,
-        }),
-      );
-    }
-
-    return {
-      received: true,
-      channel,
-      provider: adapter.provider,
-      routed: results.length,
-      results,
-    };
-  });
+        routed: results.length,
+        results,
+      };
+    },
+  );
 
   app.setErrorHandler(async (error, _request, reply) => {
     if (error instanceof z.ZodError) {
@@ -2378,6 +2446,8 @@ async function twilioApiRequest<T>(
         ? { "content-type": "application/x-www-form-urlencoded" }
         : {}),
     },
+    // Bound the external call so a hung Twilio API never stalls a request.
+    signal: AbortSignal.timeout(10_000),
   };
   if (options.form) {
     requestInit.body = new URLSearchParams(

@@ -56,6 +56,9 @@ async function main() {
   if (env.MESSENGER_PAGE_ACCESS_TOKEN) {
     serverOptions.messengerPageAccessToken = env.MESSENGER_PAGE_ACCESS_TOKEN;
   }
+  if (env.META_APP_SECRET) {
+    serverOptions.metaAppSecret = env.META_APP_SECRET;
+  }
   if (env.VOICE_PUBLIC_URL) {
     serverOptions.voicePublicUrl = env.VOICE_PUBLIC_URL;
   }
