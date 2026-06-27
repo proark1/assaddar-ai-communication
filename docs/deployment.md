@@ -88,6 +88,30 @@ OPENAI_EMBEDDING_MODEL=text-embedding-3-small
 OPENAI_VOICE_MODEL=gpt-4o-mini-tts
 ```
 
+## Enabling Semantic Retrieval
+
+Retrieval runs keyword-only by default. To turn on hybrid keyword + semantic
+search (pgvector):
+
+1. Set `OPENAI_API_KEY` (and optionally `OPENAI_EMBEDDING_MODEL`) in the API and
+   workers environments.
+2. Apply migrations so the embedding column and ANN index exist:
+
+   ```bash
+   pnpm db:migrate
+   ```
+
+3. Backfill embeddings for existing approved knowledge:
+
+   ```bash
+   pnpm backfill:embeddings
+   ```
+
+The backfill is idempotent — it only embeds chunks that are still missing an
+embedding, so re-running it (e.g. on a schedule) picks up newly added knowledge.
+The answer engine automatically uses semantic results once embeddings exist and
+falls back to keyword-only retrieval on any embedding-provider failure.
+
 ## Railway CLI Flow
 
 ```bash

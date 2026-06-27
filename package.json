@@ -18,6 +18,7 @@
     "db:check": "pnpm --filter @assaddar/db check",
     "db:migrate": "pnpm --filter @assaddar/db migrate",
     "db:seed": "pnpm --filter @assaddar/db seed",
+    "backfill:embeddings": "pnpm --filter @assaddar/workers backfill:embeddings",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint .",

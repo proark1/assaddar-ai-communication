@@ -16,6 +16,7 @@ import {
   eq,
   inArray,
   isNotNull,
+  isNull,
   lt,
   or,
   sql,
@@ -1185,6 +1186,43 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
           inArray(knowledgeChunks.id, chunkIds),
         ),
       );
+    return rows.map((row) => {
+      const chunk: Pick<KnowledgeChunk, "id" | "title" | "content"> = {
+        id: row.id,
+        content: row.content,
+      };
+      if (row.title) {
+        chunk.title = row.title;
+      }
+      return chunk;
+    });
+  }
+
+  /**
+   * Approved chunks that still lack an embedding, in id order so the backfill
+   * can page through them deterministically.
+   */
+  async listChunksMissingEmbedding(
+    tenantId: string,
+    limit = 200,
+  ): Promise<Array<Pick<KnowledgeChunk, "id" | "title" | "content">>> {
+    assertTenantId(tenantId);
+    const rows = await this.db
+      .select({
+        id: knowledgeChunks.id,
+        title: knowledgeChunks.title,
+        content: knowledgeChunks.content,
+      })
+      .from(knowledgeChunks)
+      .where(
+        and(
+          eq(knowledgeChunks.tenantId, tenantId),
+          eq(knowledgeChunks.status, "approved"),
+          isNull(knowledgeChunks.embedding),
+        ),
+      )
+      .orderBy(knowledgeChunks.id)
+      .limit(Math.max(limit, 1));
     return rows.map((row) => {
       const chunk: Pick<KnowledgeChunk, "id" | "title" | "content"> = {
         id: row.id,
