@@ -68,7 +68,7 @@ export const defaultTheme: Required<
   readinessEnabled: boolean;
   automation: Required<WidgetAutomationSettings>;
 } = {
-  primaryColor: "#a66e2f",
+  primaryColor: "#2f6f73",
   backgroundColor: "#ffffff",
   textColor: "#16191e",
   launcherLabel: "AI Beratung",

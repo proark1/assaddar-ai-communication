@@ -107,6 +107,8 @@ type StringKey =
   | "leadBooking"
   | "leadError"
   | "chatError"
+  | "chatRateLimited"
+  | "typing"
   | "openingMessage"
   | "leadFieldName"
   | "leadFieldEmail"
@@ -175,6 +177,9 @@ const STRINGS: Record<string, StringSet> = {
       "Ich konnte Ihre Daten gerade nicht senden. Bitte versuchen Sie es später erneut.",
     chatError:
       "Ich kann diese Nachricht gerade nicht senden. Bitte versuchen Sie es später erneut.",
+    chatRateLimited:
+      "Bitte warten Sie einen Moment, bevor Sie weitere Nachrichten senden.",
+    typing: "Schreibt ...",
     openingMessage: "Hallo, wie kann ich helfen?",
     leadFieldName: "Name",
     leadFieldEmail: "E-Mail",
@@ -238,6 +243,9 @@ const STRINGS: Record<string, StringSet> = {
     leadError:
       "I couldn't send your details right now. Please try again later.",
     chatError: "I can't send this message right now. Please try again later.",
+    chatRateLimited:
+      "Please wait a moment before sending more messages.",
+    typing: "Typing ...",
     openingMessage: "Hi, how can I help?",
     leadFieldName: "Name",
     leadFieldEmail: "Email",
@@ -339,7 +347,7 @@ void (() => {
     const locale =
       config.theme.locale ?? config.theme.language ?? config.defaultLocale;
     const t = makeTranslator(locale);
-    const primaryColor = sanitizeCssColor(config.theme.primaryColor, "#a66e2f");
+    const primaryColor = sanitizeCssColor(config.theme.primaryColor, "#2f6f73");
     const backgroundColor = sanitizeCssColor(
       config.theme.backgroundColor,
       "#ffffff",
@@ -502,11 +510,34 @@ void (() => {
         background: ${primaryColor};
         color: #fff;
       }
+      .bubble.typing {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: rgba(22, 25, 30, 0.72);
+      }
+      .typing-dots {
+        display: inline-flex;
+        gap: 3px;
+      }
+      .typing-dots span {
+        width: 5px;
+        height: 5px;
+        border-radius: 999px;
+        background: currentColor;
+        animation: assaddarPulse 900ms ease-in-out infinite;
+      }
+      .typing-dots span:nth-child(2) { animation-delay: 120ms; }
+      .typing-dots span:nth-child(3) { animation-delay: 240ms; }
+      @keyframes assaddarPulse {
+        0%, 100% { opacity: 0.35; transform: translateY(0); }
+        50% { opacity: 1; transform: translateY(-2px); }
+      }
       .cta {
         display: inline-flex;
         align-self: flex-start;
         border-radius: 7px;
-        background: rgba(166, 110, 47, 0.12);
+        background: rgba(47, 111, 115, 0.12);
         color: ${primaryColor};
         padding: 8px 10px;
         text-decoration: none;
@@ -598,7 +629,7 @@ void (() => {
       }
       .quick-replies button[data-action="readiness"],
       .quick-replies button[data-action="lead"] {
-        background: rgba(166, 110, 47, 0.12);
+        background: rgba(47, 111, 115, 0.12);
       }
 	      .readiness-form input,
 	      .readiness-form textarea,
@@ -630,7 +661,7 @@ void (() => {
 	      .readiness-form input:focus,
 	      .readiness-form textarea:focus {
         border-color: ${primaryColor};
-        box-shadow: 0 0 0 3px rgba(166, 110, 47, 0.16);
+        box-shadow: 0 0 0 3px rgba(47, 111, 115, 0.16);
       }
       .lead-form button,
       .readiness-form button.primary {
@@ -665,7 +696,7 @@ void (() => {
       }
       .composer input:focus {
         border-color: ${primaryColor};
-        box-shadow: 0 0 0 3px rgba(166, 110, 47, 0.16);
+        box-shadow: 0 0 0 3px rgba(47, 111, 115, 0.16);
       }
       .composer button {
         width: 44px;
@@ -677,9 +708,21 @@ void (() => {
         font-size: 18px;
       }
       .composer button:disabled { opacity: 0.5; cursor: not-allowed; }
+      .sr-status {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
+        white-space: nowrap;
+      }
       @media (max-width: 520px) {
         .assaddar-shell { right: 10px; left: 10px; bottom: 10px; }
-        .panel { width: 100%; height: min(560px, calc(100vh - 96px)); }
+        .panel {
+          width: 100%;
+          height: min(640px, calc(100vh - 24px));
+          border-radius: 10px;
+        }
         .readiness-form { max-height: min(290px, calc(100vh - 318px)); }
         .launcher { float: right; }
       }
@@ -751,6 +794,7 @@ void (() => {
           <input maxlength="${maxMessageLength}" autocomplete="off" aria-label="${escapeHtml(t("composerInputLabel"))}" placeholder="${escapeHtml(t("composerInputPlaceholder"))}" />
           <button type="submit" aria-label="${escapeHtml(t("sendMessage"))}">›</button>
         </form>
+        <div class="sr-status" role="status" aria-live="polite"></div>
       </div>
       <button class="launcher" aria-label="${escapeHtml(launcherLabel)}" aria-haspopup="dialog" aria-expanded="false">${escapeHtml(launcherLabel)}</button>
     </div>
@@ -780,6 +824,7 @@ void (() => {
     const input = shadow.querySelector<HTMLInputElement>(".composer input");
     const sendButton =
       shadow.querySelector<HTMLButtonElement>(".composer button");
+    const statusNode = shadow.querySelector<HTMLDivElement>(".sr-status");
 
     if (
       !launcher ||
@@ -794,7 +839,8 @@ void (() => {
       !leadForm ||
       !form ||
       !input ||
-      !sendButton
+      !sendButton ||
+      !statusNode
     ) {
       throw new Error("Widget failed to initialize.");
     }
@@ -804,6 +850,7 @@ void (() => {
     const sendButtonEl = sendButton;
     const panelEl = panel;
     const launcherEl = launcher;
+    const statusEl = statusNode;
 
     drawMessages(messagesEl, state.messages, context.config.theme);
 
@@ -811,9 +858,7 @@ void (() => {
       panelEl.classList.add("open");
       launcherEl.style.display = "none";
       launcherEl.setAttribute("aria-expanded", "true");
-      if (window.matchMedia("(min-width: 641px)").matches) {
-        inputEl.focus();
-      }
+      focusBestTarget();
       if (!state.openTracked) {
         state.openTracked = true;
         persistState(context.config.assistantId, state);
@@ -842,6 +887,10 @@ void (() => {
       if (event.key === "Escape") {
         event.preventDefault();
         closePanel();
+        return;
+      }
+      if (event.key === "Tab") {
+        trapFocus(event, panelEl);
       }
     });
 
@@ -1112,14 +1161,22 @@ void (() => {
     });
 
     async function sendChatMessage(text: string) {
-      if (!text || isClientRateLimited(state)) {
+      if (!text) {
+        return;
+      }
+      if (isClientRateLimited(state)) {
+        state.messages.push({ role: "assistant", text: t("chatRateLimited") });
+        persistState(context.config.assistantId, state);
+        drawMessages(messagesEl, state.messages, context.config.theme);
         return;
       }
 
       inputEl.value = "";
+      inputEl.disabled = true;
       sendButtonEl.disabled = true;
       state.messages.push({ role: "user", text });
-      drawMessages(messagesEl, state.messages, context.config.theme);
+      statusEl.textContent = t("typing");
+      drawMessages(messagesEl, state.messages, context.config.theme, t("typing"));
       state.sentAt.push(Date.now());
 
       try {
@@ -1150,9 +1207,20 @@ void (() => {
           text: t("chatError"),
         });
       } finally {
+        inputEl.disabled = false;
         sendButtonEl.disabled = false;
+        statusEl.textContent = "";
         drawMessages(messagesEl, state.messages, context.config.theme);
+        inputEl.focus();
       }
+    }
+
+    function focusBestTarget() {
+      if (window.matchMedia("(min-width: 641px)").matches) {
+        inputEl.focus();
+        return;
+      }
+      panelEl.focus();
     }
 
     form.addEventListener("submit", (event) => {
@@ -1294,6 +1362,7 @@ void (() => {
     container: HTMLElement,
     messages: StoredMessage[],
     theme?: WidgetTheme,
+    pendingText?: string,
   ) {
     container.innerHTML = messages
       .map(
@@ -1301,6 +1370,12 @@ void (() => {
           `<div class="bubble ${message.role}">${escapeHtml(message.text)}</div>`,
       )
       .join("");
+    if (pendingText) {
+      container.insertAdjacentHTML(
+        "beforeend",
+        `<div class="bubble assistant typing" aria-label="${escapeHtml(pendingText)}"><span>${escapeHtml(pendingText)}</span><span class="typing-dots" aria-hidden="true"><span></span><span></span><span></span></span></div>`,
+      );
+    }
     const ctaUrl = getPrimaryCtaUrl(theme);
     if (ctaUrl && theme?.ctaLabel) {
       container.insertAdjacentHTML(
@@ -1309,6 +1384,44 @@ void (() => {
       );
     }
     container.scrollTop = container.scrollHeight;
+  }
+
+  function trapFocus(event: KeyboardEvent, container: HTMLElement) {
+    const focusable = Array.from(
+      container.querySelectorAll<HTMLElement>(
+        [
+          "button:not([disabled])",
+          "input:not([disabled])",
+          "select:not([disabled])",
+          "textarea:not([disabled])",
+          "a[href]",
+          '[tabindex]:not([tabindex="-1"])',
+        ].join(","),
+      ),
+    ).filter((element) => element.offsetParent !== null);
+
+    if (focusable.length === 0) {
+      event.preventDefault();
+      container.focus();
+      return;
+    }
+
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const root = container.getRootNode();
+    const active =
+      root instanceof ShadowRoot ? root.activeElement : document.activeElement;
+
+    if (event.shiftKey && active === first) {
+      event.preventDefault();
+      last?.focus();
+      return;
+    }
+
+    if (!event.shiftKey && active === last) {
+      event.preventDefault();
+      first?.focus();
+    }
   }
 
   function getPrimaryCtaUrl(theme?: WidgetTheme) {

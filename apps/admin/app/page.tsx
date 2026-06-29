@@ -49,6 +49,7 @@ import {
 } from "react";
 import { APP_CONFIG } from "./config";
 import { DeleteKnowledgeModal } from "./DeleteKnowledgeModal";
+import { DashboardMetrics } from "./DashboardMetrics";
 import { useDialogA11y, useToasts } from "./dashboard-hooks";
 import {
   buildFollowUpIcs,
@@ -208,6 +209,8 @@ const pipelineStages: Array<{ key: LeadPipelineStage; label: string }> = [
   { key: "lost", label: "Lost" },
 ];
 
+const listPageSize = 50;
+
 export default function DashboardPage() {
   const [deepLink] = useState<AdminDeepLink>(() => readAdminDeepLink());
   const [apiBase, setApiBase] = useState(defaultApiBase);
@@ -349,7 +352,13 @@ export default function DashboardPage() {
   const [knowledgeStatusFilter, setKnowledgeStatusFilter] =
     useState<KnowledgeStatusFilter>("all");
   const [inboxFilter, setInboxFilter] = useState<InboxFilter>("all");
+  const [inboxSearch, setInboxSearch] = useState("");
   const [handoffFilter, setHandoffFilter] = useState<HandoffFilter>("open");
+  const [contactSearch, setContactSearch] = useState("");
+  const [knowledgeHasMore, setKnowledgeHasMore] = useState(false);
+  const [inboxHasMore, setInboxHasMore] = useState(false);
+  const [contactsHasMore, setContactsHasMore] = useState(false);
+  const [handoffsHasMore, setHandoffsHasMore] = useState(false);
   const [showAdvancedConnection, setShowAdvancedConnection] = useState(false);
   const [connectionAttempted, setConnectionAttempted] = useState(false);
   const [confirmDeleteItem, setConfirmDeleteItem] =
@@ -440,10 +449,12 @@ export default function DashboardPage() {
   const [retentionDays, setRetentionDays] = useState(365);
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
+  const [workspaceLoading, setWorkspaceLoading] = useState(false);
   // Mobile navigation: toggles the sidebar into a slide-in drawer on small screens.
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { toasts, pushToast, dismissToast } = useToasts();
   const copiedResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const workspaceRefreshId = useRef(0);
 
   const normalizedApiBase = normalizeBaseUrl(apiBase);
   const selectedTenant = useMemo(
@@ -1016,6 +1027,28 @@ export default function DashboardPage() {
   }, [selectedTenant?.id, selectedConversationId]);
 
   useEffect(() => {
+    if (selectedTenant?.id && activeTab === "knowledge") {
+      void refreshKnowledge(selectedTenant.id);
+    }
+  }, [activeTab, knowledgeSearch, knowledgeStatusFilter, selectedTenant?.id]);
+
+  useEffect(() => {
+    if (selectedTenant?.id && activeTab === "leads") {
+      void Promise.all([
+        refreshConversations(selectedTenant.id),
+        refreshUnifiedInbox(selectedTenant.id),
+        refreshHandoffs(selectedTenant.id),
+      ]);
+    }
+  }, [activeTab, inboxSearch, selectedTenant?.id]);
+
+  useEffect(() => {
+    if (selectedTenant?.id && activeTab === "leads") {
+      void refreshContacts(selectedTenant.id);
+    }
+  }, [activeTab, contactSearch, selectedTenant?.id]);
+
+  useEffect(() => {
     if (!deepLink.handoffId || !handoffs.length) {
       return;
     }
@@ -1070,6 +1103,27 @@ export default function DashboardPage() {
       setStatus("Opened linked conversation");
     }
   }, [deepLink.conversationId, deepLink.handoffId, conversations]);
+
+  function buildListPath(
+    path: string,
+    options: {
+      limit?: number;
+      offset?: number;
+      q?: string;
+      status?: string;
+    } = {},
+  ) {
+    const params = new URLSearchParams();
+    params.set("limit", String(options.limit ?? listPageSize));
+    params.set("offset", String(options.offset ?? 0));
+    if (options.q?.trim()) {
+      params.set("q", options.q.trim());
+    }
+    if (options.status && options.status !== "all") {
+      params.set("status", options.status);
+    }
+    return `${path}?${params.toString()}`;
+  }
 
   async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     const response = await fetch(`${normalizedApiBase}${path}`, {
@@ -1292,35 +1346,142 @@ export default function DashboardPage() {
       setTenantUsers([]);
       setTenantInvites([]);
       setChannelAccountDrafts({});
+      setWorkspaceLoading(false);
       return;
     }
 
-    await Promise.all([
-      refreshKnowledge(tenantId),
-      refreshAnalytics(tenantId),
-      refreshConversations(tenantId),
-      refreshUnifiedInbox(tenantId),
-      refreshContacts(tenantId),
-      refreshHandoffs(tenantId),
-      refreshChannelConnections(tenantId),
-      refreshWhatsappOperations(tenantId),
-      refreshUnanswered(tenantId),
-      refreshWorkflowSuggestions(tenantId),
-      refreshTenantUsers(tenantId),
+    const refreshId = workspaceRefreshId.current + 1;
+    workspaceRefreshId.current = refreshId;
+    setWorkspaceLoading(true);
+
+    const canLoadUsers = canManageUsers(tenantId);
+    const results = await Promise.allSettled([
+      apiFetch<KnowledgeItem[]>(
+        buildListPath(`/admin/tenants/${tenantId}/knowledge`),
+      ),
+      apiFetch<TenantAnalytics>(`/admin/tenants/${tenantId}/analytics`),
+      apiFetch<Conversation[]>(
+        buildListPath(`/admin/tenants/${tenantId}/conversations`),
+      ),
+      apiFetch<UnifiedInboxItem[]>(
+        buildListPath(`/admin/tenants/${tenantId}/inbox`),
+      ),
+      apiFetch<ContactProfile[]>(
+        buildListPath(`/admin/tenants/${tenantId}/contacts`),
+      ),
+      apiFetch<Handoff[]>(
+        buildListPath(`/admin/tenants/${tenantId}/handoffs`),
+      ),
+      apiFetch<ChannelConnection[]>(
+        `/admin/tenants/${tenantId}/channel-connections`,
+      ),
+      apiFetch<WhatsappTemplate[]>(
+        `/admin/tenants/${tenantId}/whatsapp/templates`,
+      ),
+      apiFetch<WhatsappCompliance>(
+        `/admin/tenants/${tenantId}/whatsapp/compliance`,
+      ),
+      apiFetch<UnansweredQuestion[]>(`/admin/tenants/${tenantId}/unanswered`),
+      apiFetch<WorkflowSuggestionsResult>(
+        `/admin/tenants/${tenantId}/workflows/suggestions`,
+      ),
+      canLoadUsers
+        ? apiFetch<TenantUser[]>(`/admin/tenants/${tenantId}/users`)
+        : Promise.resolve([] as TenantUser[]),
+      canLoadUsers
+        ? apiFetch<TenantInvite[]>(`/admin/tenants/${tenantId}/invites`)
+        : Promise.resolve([] as TenantInvite[]),
     ]);
+
+    if (workspaceRefreshId.current !== refreshId) {
+      return;
+    }
+
+    const firstError = results.find(
+      (result) => result.status === "rejected",
+    ) as PromiseRejectedResult | undefined;
+
+    const resultValue = <T,>(
+      result: PromiseSettledResult<T>,
+      fallback: T,
+    ): T => (result.status === "fulfilled" ? result.value : fallback);
+
+    const nextKnowledge = resultValue(results[0], [] as KnowledgeItem[]);
+    const nextAnalytics = resultValue(results[1], null as TenantAnalytics | null);
+    const nextConversations = resultValue(results[2], [] as Conversation[]);
+    const nextInbox = resultValue(results[3], [] as UnifiedInboxItem[]);
+    const nextContacts = resultValue(results[4], [] as ContactProfile[]);
+    const nextHandoffs = resultValue(results[5], [] as Handoff[]);
+    const nextConnections = resultValue(results[6], [] as ChannelConnection[]);
+
+    setKnowledge(nextKnowledge);
+    setAnalytics(nextAnalytics);
+    setConversations(nextConversations);
+    setUnifiedInbox(nextInbox);
+    setContacts(nextContacts);
+    setHandoffs(nextHandoffs);
+    setChannelConnections(nextConnections);
+    setWhatsappTemplates(resultValue(results[7], [] as WhatsappTemplate[]));
+    setWhatsappCompliance(
+      resultValue(results[8], null as WhatsappCompliance | null),
+    );
+    setUnansweredQuestions(resultValue(results[9], [] as UnansweredQuestion[]));
+    setWorkflowSuggestions(
+      resultValue(results[10], null as WorkflowSuggestionsResult | null),
+    );
+    setTenantUsers(resultValue(results[11], [] as TenantUser[]));
+    setTenantInvites(resultValue(results[12], [] as TenantInvite[]));
+    setChannelAccountDrafts(
+      Object.fromEntries(
+        nextConnections.map((item) => [
+          item.channel,
+          item.externalAccountId ?? "",
+        ]),
+      ),
+    );
+    setKnowledgeHasMore(nextKnowledge.length === listPageSize);
+    setInboxHasMore(nextInbox.length === listPageSize);
+    setContactsHasMore(nextContacts.length === listPageSize);
+    setHandoffsHasMore(nextHandoffs.length === listPageSize);
+    setSelectedConversationId((current) => {
+      if (
+        current &&
+        (nextInbox.some((conversation) => conversation.id === current) ||
+          nextConversations.some((conversation) => conversation.id === current))
+      ) {
+        return current;
+      }
+      return nextInbox[0]?.id ?? nextConversations[0]?.id ?? "";
+    });
+
+    if (firstError) {
+      setStatus(readableError(firstError.reason));
+    }
+    setWorkspaceLoading(false);
   }
 
-  async function refreshKnowledge(tenantId = selectedTenant?.id) {
+  async function refreshKnowledge(
+    tenantId = selectedTenant?.id,
+    options: { offset?: number; append?: boolean } = {},
+  ) {
     if (!tenantId) {
       setKnowledge([]);
+      setKnowledgeHasMore(false);
       return;
     }
 
     try {
       const items = await apiFetch<KnowledgeItem[]>(
-        `/admin/tenants/${tenantId}/knowledge`,
+        buildListPath(`/admin/tenants/${tenantId}/knowledge`, {
+          offset: options.offset ?? 0,
+          q: knowledgeSearch,
+          status: knowledgeStatusFilter,
+        }),
       );
-      setKnowledge(items);
+      setKnowledge((current) =>
+        options.append ? [...current, ...items] : items,
+      );
+      setKnowledgeHasMore(items.length === listPageSize);
     } catch (error) {
       setStatus(readableError(error));
     }
@@ -1342,7 +1503,10 @@ export default function DashboardPage() {
     }
   }
 
-  async function refreshConversations(tenantId = selectedTenant?.id) {
+  async function refreshConversations(
+    tenantId = selectedTenant?.id,
+    options: { offset?: number; append?: boolean } = {},
+  ) {
     if (!tenantId) {
       setConversations([]);
       return;
@@ -1350,9 +1514,14 @@ export default function DashboardPage() {
 
     try {
       const items = await apiFetch<Conversation[]>(
-        `/admin/tenants/${tenantId}/conversations`,
+        buildListPath(`/admin/tenants/${tenantId}/conversations`, {
+          offset: options.offset ?? 0,
+          q: inboxSearch,
+        }),
       );
-      setConversations(items);
+      setConversations((current) =>
+        options.append ? [...current, ...items] : items,
+      );
       if (
         items[0] &&
         !items.some(
@@ -1369,17 +1538,27 @@ export default function DashboardPage() {
     }
   }
 
-  async function refreshUnifiedInbox(tenantId = selectedTenant?.id) {
+  async function refreshUnifiedInbox(
+    tenantId = selectedTenant?.id,
+    options: { offset?: number; append?: boolean } = {},
+  ) {
     if (!tenantId) {
       setUnifiedInbox([]);
+      setInboxHasMore(false);
       return;
     }
 
     try {
       const items = await apiFetch<UnifiedInboxItem[]>(
-        `/admin/tenants/${tenantId}/inbox`,
+        buildListPath(`/admin/tenants/${tenantId}/inbox`, {
+          offset: options.offset ?? 0,
+          q: inboxSearch,
+        }),
       );
-      setUnifiedInbox(items);
+      setUnifiedInbox((current) =>
+        options.append ? [...current, ...items] : items,
+      );
+      setInboxHasMore(items.length === listPageSize);
       if (
         items[0] &&
         !items.some(
@@ -1390,22 +1569,32 @@ export default function DashboardPage() {
       }
     } catch {
       setUnifiedInbox([]);
+      setInboxHasMore(false);
     }
   }
 
-  async function refreshContacts(tenantId = selectedTenant?.id) {
+  async function refreshContacts(
+    tenantId = selectedTenant?.id,
+    options: { offset?: number; append?: boolean } = {},
+  ) {
     if (!tenantId) {
       setContacts([]);
+      setContactsHasMore(false);
       return;
     }
 
     try {
       const items = await apiFetch<ContactProfile[]>(
-        `/admin/tenants/${tenantId}/contacts`,
+        buildListPath(`/admin/tenants/${tenantId}/contacts`, {
+          offset: options.offset ?? 0,
+          q: contactSearch,
+        }),
       );
-      setContacts(items);
+      setContacts((current) => (options.append ? [...current, ...items] : items));
+      setContactsHasMore(items.length === listPageSize);
     } catch {
       setContacts([]);
+      setContactsHasMore(false);
     }
   }
 
@@ -1423,17 +1612,27 @@ export default function DashboardPage() {
     }
   }
 
-  async function refreshHandoffs(tenantId = selectedTenant?.id) {
+  async function refreshHandoffs(
+    tenantId = selectedTenant?.id,
+    options: { offset?: number; append?: boolean } = {},
+  ) {
     if (!tenantId) {
       setHandoffs([]);
+      setHandoffsHasMore(false);
       return;
     }
 
     try {
       const items = await apiFetch<Handoff[]>(
-        `/admin/tenants/${tenantId}/handoffs`,
+        buildListPath(`/admin/tenants/${tenantId}/handoffs`, {
+          offset: options.offset ?? 0,
+          q: inboxSearch,
+        }),
       );
-      setHandoffs(items);
+      setHandoffs((current) =>
+        options.append ? [...current, ...items] : items,
+      );
+      setHandoffsHasMore(items.length === listPageSize);
     } catch (error) {
       setStatus(readableError(error));
     }
@@ -1534,6 +1733,52 @@ export default function DashboardPage() {
     } catch (error) {
       setStatus(readableError(error));
     }
+  }
+
+  async function loadMoreKnowledge() {
+    if (!selectedTenant) {
+      return;
+    }
+    await refreshKnowledge(selectedTenant.id, {
+      offset: knowledge.length,
+      append: true,
+    });
+  }
+
+  async function loadMoreInbox() {
+    if (!selectedTenant) {
+      return;
+    }
+    await Promise.all([
+      refreshConversations(selectedTenant.id, {
+        offset: conversations.length,
+        append: true,
+      }),
+      refreshUnifiedInbox(selectedTenant.id, {
+        offset: unifiedInbox.length,
+        append: true,
+      }),
+    ]);
+  }
+
+  async function loadMoreContacts() {
+    if (!selectedTenant) {
+      return;
+    }
+    await refreshContacts(selectedTenant.id, {
+      offset: contacts.length,
+      append: true,
+    });
+  }
+
+  async function loadMoreHandoffs() {
+    if (!selectedTenant) {
+      return;
+    }
+    await refreshHandoffs(selectedTenant.id, {
+      offset: handoffs.length,
+      append: true,
+    });
   }
 
   async function createTenant(event: FormEvent) {
@@ -1665,7 +1910,12 @@ export default function DashboardPage() {
       setQuestion("");
       setAnswer("");
       setTagInput("faq");
-      await refreshWorkspace(selectedTenant.id);
+      await Promise.all([
+        refreshKnowledge(selectedTenant.id),
+        refreshAnalytics(selectedTenant.id),
+        refreshUnanswered(selectedTenant.id),
+        refreshWorkflowSuggestions(selectedTenant.id),
+      ]);
       setStatus("Knowledge saved");
     } catch (error) {
       setStatus(readableError(error));
@@ -1726,7 +1976,12 @@ export default function DashboardPage() {
           }),
         ),
       );
-      await refreshWorkspace(selectedTenant.id);
+      await Promise.all([
+        refreshKnowledge(selectedTenant.id),
+        refreshAnalytics(selectedTenant.id),
+        refreshUnanswered(selectedTenant.id),
+        refreshWorkflowSuggestions(selectedTenant.id),
+      ]);
       setStatus(`${suggestions.length} website FAQs imported`);
     } catch (error) {
       setStatus(readableError(error));
@@ -2183,7 +2438,12 @@ export default function DashboardPage() {
         ),
       );
       setImportText("");
-      await refreshWorkspace(selectedTenant.id);
+      await Promise.all([
+        refreshKnowledge(selectedTenant.id),
+        refreshAnalytics(selectedTenant.id),
+        refreshUnanswered(selectedTenant.id),
+        refreshWorkflowSuggestions(selectedTenant.id),
+      ]);
       setStatus(`${importFaqs.length} FAQs imported`);
     } catch (error) {
       setStatus(readableError(error));
@@ -2231,7 +2491,12 @@ export default function DashboardPage() {
         },
       );
       cancelKnowledgeEdit();
-      await refreshWorkspace(selectedTenant.id);
+      await Promise.all([
+        refreshKnowledge(selectedTenant.id),
+        refreshAnalytics(selectedTenant.id),
+        refreshUnanswered(selectedTenant.id),
+        refreshWorkflowSuggestions(selectedTenant.id),
+      ]);
       setStatus("Knowledge updated");
     } catch (error) {
       setStatus(readableError(error));
@@ -2258,7 +2523,12 @@ export default function DashboardPage() {
         },
       );
       setConfirmDeleteItem(null);
-      await refreshWorkspace(selectedTenant.id);
+      await Promise.all([
+        refreshKnowledge(selectedTenant.id),
+        refreshAnalytics(selectedTenant.id),
+        refreshUnanswered(selectedTenant.id),
+        refreshWorkflowSuggestions(selectedTenant.id),
+      ]);
       setStatus("Knowledge deleted");
     } catch (error) {
       setStatus(readableError(error));
@@ -2299,7 +2569,12 @@ export default function DashboardPage() {
           }),
         },
       );
-      await refreshWorkspace(selectedTenant.id);
+      await Promise.all([
+        refreshHandoffs(selectedTenant.id),
+        refreshUnifiedInbox(selectedTenant.id),
+        refreshAnalytics(selectedTenant.id),
+        refreshWorkflowSuggestions(selectedTenant.id),
+      ]);
       setStatus("Handoff updated");
     } catch (error) {
       setStatus(readableError(error));
@@ -2356,7 +2631,13 @@ export default function DashboardPage() {
         },
       );
       setTestAnswer(result.answer);
-      await refreshWorkspace(selectedTenant.id);
+      await Promise.all([
+        refreshAnalytics(selectedTenant.id),
+        refreshConversations(selectedTenant.id),
+        refreshUnifiedInbox(selectedTenant.id),
+        refreshHandoffs(selectedTenant.id),
+        refreshUnanswered(selectedTenant.id),
+      ]);
       setStatus("Assistant tested");
     } catch (error) {
       setStatus(readableError(error));
@@ -2424,65 +2705,17 @@ export default function DashboardPage() {
   }
 
   function renderMetrics() {
-    // First load (fetching with nothing cached yet): show shimmer placeholders
-    // instead of a row of zeros so the dashboard does not look empty/broken.
-    if (busy && !analytics && knowledge.length === 0) {
-      return (
-        <section className="metricsGrid" aria-busy="true" aria-hidden="true">
-          {Array.from({ length: 7 }).map((_, index) => (
-            <article className="metricCard skeletonCard" key={index}>
-              <span className="skeleton skeletonIcon" />
-              <span className="skeleton skeletonLabel" />
-              <span className="skeleton skeletonValue" />
-            </article>
-          ))}
-        </section>
-      );
-    }
     return (
-      <section className="metricsGrid">
-        <article className="metricCard">
-          <BarChart3 size={18} />
-          <span>Conversations</span>
-          <strong>{analytics?.conversations ?? 0}</strong>
-        </article>
-        <article className="metricCard">
-          <MessageSquare size={18} />
-          <span>Messages</span>
-          <strong>{analytics?.messages ?? 0}</strong>
-        </article>
-        <article className="metricCard">
-          <UserCheck size={18} />
-          <span>Contacts</span>
-          <strong>{knownContactCount}</strong>
-        </article>
-        <article className="metricCard">
-          <UserCheck size={18} />
-          <span>Leads</span>
-          <strong>{leadHandoffs.length}</strong>
-        </article>
-        <article className="metricCard">
-          <Database size={18} />
-          <span>Knowledge</span>
-          <strong>{analytics?.approvedKnowledge ?? knowledge.length}</strong>
-        </article>
-        <article
-          className="metricCard"
-          data-alert={openHandoffs.length ? "true" : "false"}
-        >
-          <Inbox size={18} />
-          <span>Open handoffs</span>
-          <strong>{analytics?.openHandoffs ?? openHandoffs.length}</strong>
-        </article>
-        <article
-          className="metricCard"
-          data-alert={unansweredCount ? "true" : "false"}
-        >
-          <AlertCircle size={18} />
-          <span>Unanswered</span>
-          <strong>{unansweredCount}</strong>
-        </article>
-      </section>
+      <DashboardMetrics
+        loading={(busy || workspaceLoading) && !analytics && knowledge.length === 0}
+        conversations={analytics?.conversations ?? 0}
+        messages={analytics?.messages ?? 0}
+        contacts={knownContactCount}
+        leads={leadHandoffs.length}
+        knowledge={analytics?.approvedKnowledge ?? knowledge.length}
+        openHandoffs={analytics?.openHandoffs ?? openHandoffs.length}
+        unanswered={unansweredCount}
+      />
     );
   }
 
@@ -3062,6 +3295,17 @@ export default function DashboardPage() {
                 <div className="emptyState">No matching knowledge entries.</div>
               )}
             </div>
+            {knowledgeHasMore ? (
+              <button
+                className="secondaryButton full"
+                type="button"
+                disabled={busy}
+                onClick={loadMoreKnowledge}
+              >
+                <RefreshCw size={16} />
+                Load more entries
+              </button>
+            ) : null}
           </section>
 
           <section className="panel">
@@ -3546,9 +3790,20 @@ export default function DashboardPage() {
           </div>
           <span className="countPill">{contacts.length}</span>
         </div>
+        <label className="field searchField listSearch">
+          <span>Search contacts</span>
+          <div className="inputIcon">
+            <Search size={16} />
+            <input
+              value={contactSearch}
+              onChange={(event) => setContactSearch(event.target.value)}
+              placeholder="Name, email, phone, company"
+            />
+          </div>
+        </label>
         <div className="contactGrid">
           {contacts.length ? (
-            contacts.slice(0, 12).map((contact) => (
+            contacts.map((contact) => (
               <article className="contactCard" key={contact.id}>
                 <div>
                   <strong>{getContactDisplayName(contact)}</strong>
@@ -3570,6 +3825,17 @@ export default function DashboardPage() {
             </div>
           )}
         </div>
+        {contactsHasMore ? (
+          <button
+            className="secondaryButton full"
+            type="button"
+            disabled={busy}
+            onClick={loadMoreContacts}
+          >
+            <RefreshCw size={16} />
+            Load more contacts
+          </button>
+        ) : null}
       </section>
     );
   }
@@ -3943,44 +4209,68 @@ export default function DashboardPage() {
         </div>
 
         <div className="inboxGrid">
-          <div className="conversationList framed">
-            {filteredInboxItems.length ? (
-              filteredInboxItems.map((conversation) => (
-                <button
-                  className={
-                    conversation.id === selectedConversationId
-                      ? "conversationButton active"
-                      : "conversationButton"
-                  }
-                  key={conversation.id}
-                  type="button"
-                  onClick={() => setSelectedConversationId(conversation.id)}
-                >
-                  <strong>
-                    {getContactDisplayName(
-                      conversation.contact,
-                      titleCase(conversation.channel),
-                    )}
-                  </strong>
-                  <span>
-                    {titleCase(conversation.channel)} ·{" "}
-                    {getContactSubtitle(conversation.contact) ||
-                      conversation.externalUserId ||
-                      conversation.publicId}
-                  </span>
-                  <small>
-                    {conversation.lastMessage?.content
-                      ? conversation.lastMessage.content.slice(0, 90)
-                      : formatDate(conversation.createdAt)}
-                  </small>
-                  {conversation.openHandoffs.length ? (
-                    <em>{conversation.openHandoffs.length} handoff</em>
-                  ) : null}
-                </button>
-              ))
-            ) : (
-              <div className="emptyState compact">No conversations.</div>
-            )}
+          <div>
+            <label className="field searchField listSearch">
+              <span>Search conversations</span>
+              <div className="inputIcon">
+                <Search size={16} />
+                <input
+                  value={inboxSearch}
+                  onChange={(event) => setInboxSearch(event.target.value)}
+                  placeholder="Name, channel, message, phone"
+                />
+              </div>
+            </label>
+            <div className="conversationList framed">
+              {filteredInboxItems.length ? (
+                filteredInboxItems.map((conversation) => (
+                  <button
+                    className={
+                      conversation.id === selectedConversationId
+                        ? "conversationButton active"
+                        : "conversationButton"
+                    }
+                    key={conversation.id}
+                    type="button"
+                    onClick={() => setSelectedConversationId(conversation.id)}
+                  >
+                    <strong>
+                      {getContactDisplayName(
+                        conversation.contact,
+                        titleCase(conversation.channel),
+                      )}
+                    </strong>
+                    <span>
+                      {titleCase(conversation.channel)} ·{" "}
+                      {getContactSubtitle(conversation.contact) ||
+                        conversation.externalUserId ||
+                        conversation.publicId}
+                    </span>
+                    <small>
+                      {conversation.lastMessage?.content
+                        ? conversation.lastMessage.content.slice(0, 90)
+                        : formatDate(conversation.createdAt)}
+                    </small>
+                    {conversation.openHandoffs.length ? (
+                      <em>{conversation.openHandoffs.length} handoff</em>
+                    ) : null}
+                  </button>
+                ))
+              ) : (
+                <div className="emptyState compact">No conversations.</div>
+              )}
+            </div>
+            {inboxHasMore ? (
+              <button
+                className="secondaryButton full"
+                type="button"
+                disabled={busy}
+                onClick={loadMoreInbox}
+              >
+                <RefreshCw size={16} />
+                Load more conversations
+              </button>
+            ) : null}
           </div>
 
           <div className="transcriptPane">
@@ -4197,6 +4487,17 @@ export default function DashboardPage() {
             <div className="emptyState">No handoff requests in this view.</div>
           )}
         </div>
+        {handoffsHasMore ? (
+          <button
+            className="secondaryButton full"
+            type="button"
+            disabled={busy}
+            onClick={loadMoreHandoffs}
+          >
+            <RefreshCw size={16} />
+            Load more handoffs
+          </button>
+        ) : null}
       </section>
     );
   }

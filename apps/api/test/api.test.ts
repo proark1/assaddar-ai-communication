@@ -2827,7 +2827,7 @@ describe("API", () => {
 
     const response = await app.inject({
       method: "GET",
-      url: `/admin/tenants/${tenant.id}/handoffs?limit=25&offset=50`,
+      url: `/admin/tenants/${tenant.id}/handoffs?limit=25&offset=50&q=lead&status=open`,
       headers: { "x-admin-token": "test-token" },
     });
 
@@ -2835,6 +2835,8 @@ describe("API", () => {
     expect(handoffsSpy).toHaveBeenCalledWith(tenant.id, {
       limit: 25,
       offset: 50,
+      q: "lead",
+      status: "open",
     });
 
     // Omitting the params leaves them undefined so the store keeps its default.
@@ -2848,6 +2850,8 @@ describe("API", () => {
     expect(handoffsSpy).toHaveBeenCalledWith(tenant.id, {
       limit: undefined,
       offset: undefined,
+      q: undefined,
+      status: undefined,
     });
     await app.close();
   });

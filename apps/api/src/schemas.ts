@@ -42,6 +42,8 @@ export const TenantRoleNameSchema = z.enum([
 export const PaginationQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).optional(),
   offset: z.coerce.number().int().min(0).optional(),
+  q: z.string().trim().min(1).max(120).optional(),
+  status: z.string().trim().min(1).max(40).optional(),
 });
 
 export const ParamsKnowledgeSchema = ParamsTenantSchema.extend({

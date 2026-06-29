@@ -141,6 +141,8 @@ type StoreAuthSession = {
 export type PaginationOptions = {
   limit?: number | undefined;
   offset?: number | undefined;
+  q?: string | undefined;
+  status?: string | undefined;
 };
 
 export type PlatformStore = AnswerDataStore &

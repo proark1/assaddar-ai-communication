@@ -165,6 +165,8 @@ export type UpdateFaqInput = AddFaqInput;
 export type PaginationOptions = {
   limit?: number | undefined;
   offset?: number | undefined;
+  q?: string | undefined;
+  status?: string | undefined;
 };
 
 const DEFAULT_LIST_LIMIT = 100;
@@ -191,6 +193,16 @@ function resolvePagination(options?: PaginationOptions): {
       ? Math.max(Math.trunc(rawOffset), 0)
       : 0;
   return { limit, offset };
+}
+
+function normalizeListQuery(options?: PaginationOptions): string | undefined {
+  const value = options?.q?.trim().toLowerCase();
+  return value ? `%${value}%` : undefined;
+}
+
+function normalizeListStatus(options?: PaginationOptions): string | undefined {
+  const value = options?.status?.trim();
+  return value && value !== "all" ? value : undefined;
 }
 
 export type ConversationRecord = typeof conversations.$inferSelect;
@@ -1220,6 +1232,17 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       );
     }
     const { limit, offset } = resolvePagination(options);
+    const query = normalizeListQuery(options);
+    const status = normalizeListStatus(options);
+    const filters: SQL[] = [eq(knowledgeChunks.tenantId, tenantId)];
+    if (status) {
+      filters.push(eq(knowledgeChunks.status, status));
+    }
+    if (query) {
+      filters.push(
+        sql`lower(concat_ws(' ', ${knowledgeChunks.title}, ${knowledgeChunks.content}, ${knowledgeChunks.tags}::text)) like ${query}`,
+      );
+    }
     return this.db
       .select({
         id: knowledgeChunks.id,
@@ -1234,7 +1257,7 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
         updatedAt: knowledgeChunks.updatedAt,
       })
       .from(knowledgeChunks)
-      .where(eq(knowledgeChunks.tenantId, tenantId))
+      .where(and(...filters))
       .orderBy(desc(knowledgeChunks.createdAt))
       .limit(limit)
       .offset(offset);
@@ -1920,10 +1943,21 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       );
     }
     const { limit, offset } = resolvePagination(options);
+    const query = normalizeListQuery(options);
+    const status = normalizeListStatus(options);
+    const filters: SQL[] = [eq(conversations.tenantId, tenantId)];
+    if (status) {
+      filters.push(eq(conversations.status, status));
+    }
+    if (query) {
+      filters.push(
+        sql`lower(concat_ws(' ', ${conversations.publicId}, ${conversations.channel}, ${conversations.externalUserId}, ${conversations.locale})) like ${query}`,
+      );
+    }
     return this.db
       .select()
       .from(conversations)
-      .where(eq(conversations.tenantId, tenantId))
+      .where(and(...filters))
       .orderBy(desc(conversations.createdAt))
       .limit(limit)
       .offset(offset);
@@ -1940,38 +1974,58 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       );
     }
     const { limit, offset } = resolvePagination(options);
-    // Fetch enough recent messages to summarise the conversations on this page.
-    // Scales with the page size rather than the hard-coded 400 it used before.
-    const messageFetchLimit = limit * 4;
-    const [conversationRows, recentMessages, openHandoffs] = await Promise.all([
-      this.db
-        .select({
-          conversation: conversations,
-          contact: contacts,
-        })
-        .from(conversations)
-        .leftJoin(
-          conversationContacts,
-          and(
-            eq(conversationContacts.tenantId, conversations.tenantId),
-            eq(conversationContacts.conversationId, conversations.id),
-          ),
-        )
-        .leftJoin(
-          contacts,
-          and(
-            eq(contacts.tenantId, tenantId),
-            eq(contacts.id, conversationContacts.contactId),
-          ),
-        )
-        .where(eq(conversations.tenantId, tenantId))
-        .orderBy(desc(conversations.updatedAt))
-        .limit(limit)
-        .offset(offset),
+    const query = normalizeListQuery(options);
+    const status = normalizeListStatus(options);
+    const filters: SQL[] = [eq(conversations.tenantId, tenantId)];
+    if (status) {
+      filters.push(eq(conversations.status, status));
+    }
+    if (query) {
+      filters.push(
+        sql`lower(concat_ws(' ', ${conversations.publicId}, ${conversations.channel}, ${conversations.externalUserId}, ${contacts.displayName}, ${contacts.email}, ${contacts.phone}, ${contacts.company})) like ${query}`,
+      );
+    }
+    const conversationRows = await this.db
+      .select({
+        conversation: conversations,
+        contact: contacts,
+      })
+      .from(conversations)
+      .leftJoin(
+        conversationContacts,
+        and(
+          eq(conversationContacts.tenantId, conversations.tenantId),
+          eq(conversationContacts.conversationId, conversations.id),
+        ),
+      )
+      .leftJoin(
+        contacts,
+        and(
+          eq(contacts.tenantId, tenantId),
+          eq(contacts.id, conversationContacts.contactId),
+        ),
+      )
+      .where(and(...filters))
+      .orderBy(desc(conversations.updatedAt))
+      .limit(limit)
+      .offset(offset);
+
+    const conversationIds = conversationRows.map((row) => row.conversation.id);
+    if (conversationIds.length === 0) {
+      return [];
+    }
+
+    const messageFetchLimit = conversationIds.length * 4;
+    const [recentMessages, openHandoffs] = await Promise.all([
       this.db
         .select()
         .from(messages)
-        .where(eq(messages.tenantId, tenantId))
+        .where(
+          and(
+            eq(messages.tenantId, tenantId),
+            inArray(messages.conversationId, conversationIds),
+          ),
+        )
         .orderBy(desc(messages.createdAt))
         .limit(messageFetchLimit),
       this.db
@@ -1980,6 +2034,7 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
         .where(
           and(
             eq(handoffRequests.tenantId, tenantId),
+            inArray(handoffRequests.conversationId, conversationIds),
             or(
               eq(handoffRequests.status, "open"),
               eq(handoffRequests.status, "in_progress"),
@@ -2060,10 +2115,17 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       );
     }
     const { limit, offset } = resolvePagination(options);
+    const query = normalizeListQuery(options);
+    const filters: SQL[] = [eq(contacts.tenantId, tenantId)];
+    if (query) {
+      filters.push(
+        sql`lower(concat_ws(' ', ${contacts.displayName}, ${contacts.email}, ${contacts.phone}, ${contacts.company}, ${contacts.identifiers}::text)) like ${query}`,
+      );
+    }
     return this.db
       .select()
       .from(contacts)
-      .where(eq(contacts.tenantId, tenantId))
+      .where(and(...filters))
       .orderBy(desc(contacts.updatedAt))
       .limit(limit)
       .offset(offset);
@@ -2080,10 +2142,21 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       );
     }
     const { limit, offset } = resolvePagination(options);
+    const query = normalizeListQuery(options);
+    const status = normalizeListStatus(options);
+    const filters: SQL[] = [eq(handoffRequests.tenantId, tenantId)];
+    if (status) {
+      filters.push(eq(handoffRequests.status, status));
+    }
+    if (query) {
+      filters.push(
+        sql`lower(concat_ws(' ', ${handoffRequests.reason}, ${handoffRequests.requesterMessage}, ${handoffRequests.channel}, ${handoffRequests.assignedTo}, ${handoffRequests.metadata}::text)) like ${query}`,
+      );
+    }
     return this.db
       .select()
       .from(handoffRequests)
-      .where(eq(handoffRequests.tenantId, tenantId))
+      .where(and(...filters))
       .orderBy(desc(handoffRequests.createdAt))
       .limit(limit)
       .offset(offset);
