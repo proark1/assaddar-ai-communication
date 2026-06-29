@@ -66,10 +66,12 @@ type WidgetState = {
   openTracked?: boolean;
   sentAt: number[];
   messages: StoredMessage[];
+  updatedAt: number;
 };
 
 type StringKey =
   | "closeChat"
+  | "clearConversation"
   | "sendMessage"
   | "launcherAriaLabel"
   | "panelAriaLabel"
@@ -126,6 +128,7 @@ type StringSet = Record<StringKey, string>;
 const STRINGS: Record<string, StringSet> = {
   de: {
     closeChat: "Chat schließen",
+    clearConversation: "Verlauf löschen",
     sendMessage: "Nachricht senden",
     launcherAriaLabel: "Chat öffnen",
     panelAriaLabel: "Chat-Fenster",
@@ -190,6 +193,7 @@ const STRINGS: Record<string, StringSet> = {
   },
   en: {
     closeChat: "Close chat",
+    clearConversation: "Clear conversation",
     sendMessage: "Send message",
     launcherAriaLabel: "Open chat",
     panelAriaLabel: "Chat window",
@@ -253,6 +257,9 @@ const STRINGS: Record<string, StringSet> = {
 };
 
 const DEFAULT_LOCALE = "de";
+const STATE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const MAX_STORED_MESSAGES = 50;
+const MAX_STORED_MESSAGE_LENGTH = 4000;
 
 function resolveLocale(locale?: string) {
   if (!locale) {
@@ -385,6 +392,7 @@ void (() => {
         border-radius: 4px;
       }
       .assaddar-shell .close:focus-visible,
+      .assaddar-shell .reset-history:focus-visible,
       .assaddar-shell .composer button:focus-visible,
       .assaddar-shell .launcher:focus-visible {
         outline-color: #fff;
@@ -433,6 +441,12 @@ void (() => {
         gap: 12px;
       }
       .header > div { min-width: 0; }
+      .header-actions {
+        display: inline-flex;
+        flex: 0 0 auto;
+        align-items: center;
+        gap: 6px;
+      }
       .header strong {
         display: block;
         overflow: hidden;
@@ -442,7 +456,8 @@ void (() => {
         line-height: 1.15;
       }
       .header span { display: block; font-size: 12px; opacity: 0.88; }
-      .close {
+      .close,
+      .reset-history {
         flex: 0 0 auto;
         border: 0;
         background: rgba(255,255,255,0.18);
@@ -453,6 +468,10 @@ void (() => {
         cursor: pointer;
         font-size: 18px;
         line-height: 1;
+      }
+      .reset-history {
+        font-size: 15px;
+        font-weight: 800;
       }
       .messages {
         flex: 1 1 auto;
@@ -682,7 +701,10 @@ void (() => {
             <strong>${escapeHtml(assistantName)}</strong>
             <span>${escapeHtml(resolveLocale(locale).toUpperCase())}</span>
           </div>
-          <button class="close" type="button" aria-label="${escapeHtml(t("closeChat"))}">×</button>
+          <div class="header-actions">
+            <button class="reset-history" type="button" aria-label="${escapeHtml(t("clearConversation"))}" title="${escapeHtml(t("clearConversation"))}">↺</button>
+            <button class="close" type="button" aria-label="${escapeHtml(t("closeChat"))}">×</button>
+          </div>
         </div>
         <div class="messages" part="messages" role="log" aria-live="polite" aria-relevant="additions text" aria-label="${escapeHtml(t("messagesAriaLabel"))}"></div>
 	        <div class="consent" data-visible="${consentVisible ? "true" : "false"}">
@@ -737,6 +759,7 @@ void (() => {
     const launcher = shadow.querySelector<HTMLButtonElement>(".launcher");
     const panel = shadow.querySelector<HTMLDivElement>(".panel");
     const close = shadow.querySelector<HTMLButtonElement>(".close");
+    const reset = shadow.querySelector<HTMLButtonElement>(".reset-history");
     const messages = shadow.querySelector<HTMLDivElement>(".messages");
     const consent = shadow.querySelector<HTMLDivElement>(".consent");
     const consentButton =
@@ -762,6 +785,7 @@ void (() => {
       !launcher ||
       !panel ||
       !close ||
+      !reset ||
       !messages ||
       !consent ||
       !modeChooser ||
@@ -807,6 +831,12 @@ void (() => {
     launcher.addEventListener("click", openPanel);
 
     close.addEventListener("click", closePanel);
+
+    reset.addEventListener("click", () => {
+      resetState(state, config.theme.openingMessage ?? t("openingMessage"));
+      persistState(context.config.assistantId, state);
+      render(shadow, context);
+    });
 
     panel.addEventListener("keydown", (event) => {
       if (event.key === "Escape") {
@@ -1137,16 +1167,37 @@ void (() => {
   ): WidgetState {
     const stored = readState(assistantId);
     if (stored) {
+      if (!stored.messages.length) {
+        stored.messages = [{ role: "assistant", text: openingMessage }];
+      }
       return stored;
     }
 
+    return createInitialState(openingMessage);
+  }
+
+  function createInitialState(openingMessage: string): WidgetState {
     return {
       visitorId: `visitor_${crypto.randomUUID().replaceAll("-", "").slice(0, 20)}`,
       sentAt: [] as number[],
       messages: [
         { role: "assistant", text: openingMessage },
       ] as StoredMessage[],
+      updatedAt: Date.now(),
     };
+  }
+
+  function resetState(state: WidgetState, openingMessage: string) {
+    const next = createInitialState(openingMessage);
+    state.visitorId = next.visitorId;
+    delete state.conversationId;
+    delete state.consentAccepted;
+    delete state.leadCaptured;
+    delete state.readinessCaptured;
+    delete state.openTracked;
+    state.sentAt = next.sentAt;
+    state.messages = next.messages;
+    state.updatedAt = next.updatedAt;
   }
 
   function readState(assistantId: string): WidgetState | null {
@@ -1155,14 +1206,84 @@ void (() => {
       if (!raw) {
         return null;
       }
-      return JSON.parse(raw) as WidgetState;
+      const state = normalizeStoredState(JSON.parse(raw));
+      if (!state) {
+        window.localStorage.removeItem(storageKey(assistantId));
+        return null;
+      }
+      if (Date.now() - state.updatedAt > STATE_TTL_MS) {
+        window.localStorage.removeItem(storageKey(assistantId));
+        return null;
+      }
+      return state;
     } catch {
       return null;
     }
   }
 
   function persistState(assistantId: string, state: WidgetState) {
-    window.localStorage.setItem(storageKey(assistantId), JSON.stringify(state));
+    state.messages = trimStoredMessages(state.messages);
+    state.sentAt = state.sentAt.filter((value) => Number.isFinite(value));
+    state.updatedAt = Date.now();
+    try {
+      window.localStorage.setItem(
+        storageKey(assistantId),
+        JSON.stringify(state),
+      );
+    } catch {
+      // Local storage can be disabled or full; the live widget still works.
+    }
+  }
+
+  function normalizeStoredState(value: unknown): WidgetState | null {
+    if (!isRecord(value) || typeof value.visitorId !== "string") {
+      return null;
+    }
+    const sentAt = Array.isArray(value.sentAt)
+      ? value.sentAt.filter((item): item is number => Number.isFinite(item))
+      : [];
+    const messages = Array.isArray(value.messages)
+      ? trimStoredMessages(
+          value.messages.flatMap((item): StoredMessage[] => {
+            if (
+              !isRecord(item) ||
+              (item.role !== "assistant" && item.role !== "user") ||
+              typeof item.text !== "string"
+            ) {
+              return [];
+            }
+            return [{ role: item.role, text: item.text }];
+          }),
+        )
+      : [];
+
+    return {
+      visitorId: value.visitorId,
+      ...(typeof value.conversationId === "string"
+        ? { conversationId: value.conversationId }
+        : {}),
+      ...(value.consentAccepted === true ? { consentAccepted: true } : {}),
+      ...(value.leadCaptured === true ? { leadCaptured: true } : {}),
+      ...(value.readinessCaptured === true ? { readinessCaptured: true } : {}),
+      ...(value.openTracked === true ? { openTracked: true } : {}),
+      sentAt,
+      messages,
+      updatedAt:
+        typeof value.updatedAt === "number" && Number.isFinite(value.updatedAt)
+          ? value.updatedAt
+          : Date.now(),
+    };
+  }
+
+  function trimStoredMessages(messages: StoredMessage[]) {
+    return messages.slice(-MAX_STORED_MESSAGES).map((message) => ({
+      role: message.role,
+      text: message.text.slice(0, MAX_STORED_MESSAGE_LENGTH),
+    }));
+  }
+
+  function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
   }
 
   function storageKey(assistantId: string) {

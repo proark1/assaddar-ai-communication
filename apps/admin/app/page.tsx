@@ -1213,6 +1213,10 @@ export default function DashboardPage() {
 
   async function createTenantUser(event: FormEvent) {
     event.preventDefault();
+    if (!canManageUsers()) {
+      setStatus("Your role cannot manage project users.");
+      return;
+    }
     if (!selectedTenant || !newUserEmail || !newUserName) {
       return;
     }
@@ -1242,6 +1246,10 @@ export default function DashboardPage() {
 
   async function createTenantInvite(event: FormEvent) {
     event.preventDefault();
+    if (!canManageUsers()) {
+      setStatus("Your role cannot invite project users.");
+      return;
+    }
     if (!selectedTenant || !inviteEmail) {
       return;
     }
@@ -1493,7 +1501,7 @@ export default function DashboardPage() {
   }
 
   async function refreshTenantUsers(tenantId = selectedTenant?.id) {
-    if (!tenantId) {
+    if (!tenantId || !canManageUsers(tenantId)) {
       setTenantUsers([]);
       setTenantInvites([]);
       return;
@@ -1502,9 +1510,7 @@ export default function DashboardPage() {
     try {
       const [users, invites] = await Promise.all([
         apiFetch<TenantUser[]>(`/admin/tenants/${tenantId}/users`),
-        canManageUsers()
-          ? apiFetch<TenantInvite[]>(`/admin/tenants/${tenantId}/invites`)
-          : Promise.resolve([]),
+        apiFetch<TenantInvite[]>(`/admin/tenants/${tenantId}/invites`),
       ]);
       setTenantUsers(users);
       setTenantInvites(invites);
@@ -1560,6 +1566,10 @@ export default function DashboardPage() {
   }
 
   async function saveTenantSettings() {
+    if (!canManageTenantSettings()) {
+      setStatus("Your role cannot change tenant settings.");
+      return;
+    }
     if (!selectedTenant) {
       return;
     }
@@ -1604,6 +1614,10 @@ export default function DashboardPage() {
   }
 
   async function sendWeeklyReport() {
+    if (!canManageTenantSettings()) {
+      setStatus("Your role cannot send owner reports.");
+      return;
+    }
     if (!selectedTenant) {
       return;
     }
@@ -1630,6 +1644,10 @@ export default function DashboardPage() {
 
   async function addFaq(event: FormEvent) {
     event.preventDefault();
+    if (!canManageKnowledge()) {
+      setStatus("Your role cannot change approved knowledge.");
+      return;
+    }
     if (!selectedTenant || !question || !answer) {
       return;
     }
@@ -1657,6 +1675,10 @@ export default function DashboardPage() {
   }
 
   async function scanWebsiteForKnowledge() {
+    if (!canManageKnowledge()) {
+      setStatus("Your role cannot import approved knowledge.");
+      return;
+    }
     if (!selectedTenant || !siteUrl) {
       return;
     }
@@ -1686,6 +1708,10 @@ export default function DashboardPage() {
   async function importSuggestedFaqs(
     suggestions = websiteImport?.suggestedFaqs ?? [],
   ) {
+    if (!canManageKnowledge()) {
+      setStatus("Your role cannot import approved knowledge.");
+      return;
+    }
     if (!selectedTenant || !suggestions.length) {
       return;
     }
@@ -1710,6 +1736,10 @@ export default function DashboardPage() {
   }
 
   async function verifyWidgetInstall() {
+    if (!canManageChannels()) {
+      setStatus("Your role cannot run installation checks.");
+      return;
+    }
     if (!selectedTenant || !siteUrl) {
       return;
     }
@@ -1740,6 +1770,10 @@ export default function DashboardPage() {
     connection: ChannelConnection,
     updates: Partial<Pick<ChannelConnection, "externalAccountId" | "status">>,
   ) {
+    if (!canManageChannels()) {
+      setStatus("Your role cannot change channel setup.");
+      return;
+    }
     if (!selectedTenant) {
       return;
     }
@@ -1769,6 +1803,10 @@ export default function DashboardPage() {
   }
 
   async function saveNewTelephoneNumberSetup() {
+    if (!canManageChannels()) {
+      setStatus("Your role cannot change telephone setup.");
+      return;
+    }
     if (!selectedTenant) {
       return;
     }
@@ -1809,6 +1847,10 @@ export default function DashboardPage() {
   }
 
   async function saveCarrierForwardingSetup() {
+    if (!canManageChannels()) {
+      setStatus("Your role cannot change telephone setup.");
+      return;
+    }
     if (!selectedTenant || !forwardingExistingNumber || !forwardingAiNumber) {
       return;
     }
@@ -1845,6 +1887,10 @@ export default function DashboardPage() {
   }
 
   async function saveSipByocSetup() {
+    if (!canManageChannels()) {
+      setStatus("Your role cannot change telephone setup.");
+      return;
+    }
     if (!selectedTenant) {
       return;
     }
@@ -1883,6 +1929,10 @@ export default function DashboardPage() {
   }
 
   async function saveTelephoneRuntimeSettings() {
+    if (!canManageChannels()) {
+      setStatus("Your role cannot change telephone settings.");
+      return;
+    }
     if (!selectedTenant) {
       return;
     }
@@ -1909,6 +1959,10 @@ export default function DashboardPage() {
   async function saveTelephoneTestCall(
     testStatus: "pending" | "passed" | "failed",
   ) {
+    if (!canManageChannels()) {
+      setStatus("Your role cannot change telephone settings.");
+      return;
+    }
     if (!selectedTenant) {
       return;
     }
@@ -1942,6 +1996,10 @@ export default function DashboardPage() {
   }
 
   async function refreshVoiceEdgeStatus() {
+    if (!canManageChannels()) {
+      setStatus("Your role cannot check telephone setup.");
+      return;
+    }
     if (!selectedTenant) {
       return;
     }
@@ -2023,6 +2081,10 @@ export default function DashboardPage() {
   }
 
   async function saveWhatsappTemplate() {
+    if (!canManageChannels()) {
+      setStatus("Your role cannot change WhatsApp templates.");
+      return;
+    }
     if (!selectedTenant || !templateName || !templateBody) {
       return;
     }
@@ -2098,6 +2160,10 @@ export default function DashboardPage() {
   }
 
   async function importFaqBlocks() {
+    if (!canManageKnowledge()) {
+      setStatus("Your role cannot import approved knowledge.");
+      return;
+    }
     if (!selectedTenant || !importFaqs.length) {
       return;
     }
@@ -2127,6 +2193,10 @@ export default function DashboardPage() {
   }
 
   function startKnowledgeEdit(item: KnowledgeItem) {
+    if (!canManageKnowledge()) {
+      setStatus("Your role cannot edit approved knowledge.");
+      return;
+    }
     setEditingKnowledgeId(item.id);
     setEditQuestion(getQuestion(item));
     setEditAnswer(getAnswer(item));
@@ -2139,6 +2209,10 @@ export default function DashboardPage() {
   }
 
   async function saveKnowledgeEdit(item: KnowledgeItem) {
+    if (!canManageKnowledge()) {
+      setStatus("Your role cannot edit approved knowledge.");
+      return;
+    }
     if (!selectedTenant || !editQuestion || !editAnswer) {
       return;
     }
@@ -2167,6 +2241,10 @@ export default function DashboardPage() {
   }
 
   async function deleteKnowledge(item: KnowledgeItem) {
+    if (!canManageKnowledge()) {
+      setStatus("Your role cannot delete approved knowledge.");
+      return;
+    }
     if (!selectedTenant) {
       return;
     }
@@ -2196,6 +2274,10 @@ export default function DashboardPage() {
     pipelineStage?: LeadPipelineStage,
     note?: string,
   ) {
+    if (!canManageLeads()) {
+      setStatus("Your role cannot update leads or handoffs.");
+      return;
+    }
     if (!selectedTenant) {
       return;
     }
@@ -2256,6 +2338,10 @@ export default function DashboardPage() {
 
   async function testAssistant(event: FormEvent) {
     event.preventDefault();
+    if (!canManageLeads()) {
+      setStatus("Your role cannot run assistant tests.");
+      return;
+    }
     if (!selectedTenant || !testMessage) {
       return;
     }
@@ -2781,10 +2867,9 @@ export default function DashboardPage() {
   }
 
   function renderKnowledge() {
+    const canEditKnowledge = canManageKnowledge();
     return (
       <div className="workspaceStack">
-        {renderProjectUsers()}
-
         <section className="panel">
           <div className="panelHeader">
             <div className="panelTitle">
@@ -2793,6 +2878,12 @@ export default function DashboardPage() {
             </div>
             <span className="countPill">{knowledge.length}</span>
           </div>
+          {!canEditKnowledge ? (
+            <div className="inlineNotice">
+              <ShieldCheck size={16} />
+              <span>Your role can review knowledge but not change it.</span>
+            </div>
+          ) : null}
 
           <div className="knowledgeTools">
             <label className="field searchField">
@@ -2828,6 +2919,7 @@ export default function DashboardPage() {
               <span>Question</span>
               <input
                 value={question}
+                disabled={!canEditKnowledge}
                 onChange={(event) => setQuestion(event.target.value)}
               />
             </label>
@@ -2835,6 +2927,7 @@ export default function DashboardPage() {
               <span>Answer</span>
               <textarea
                 value={answer}
+                disabled={!canEditKnowledge}
                 onChange={(event) => setAnswer(event.target.value)}
                 rows={4}
               />
@@ -2843,6 +2936,7 @@ export default function DashboardPage() {
               <span>Tags</span>
               <input
                 value={tagInput}
+                disabled={!canEditKnowledge}
                 onChange={(event) => setTagInput(event.target.value)}
               />
             </label>
@@ -2855,7 +2949,7 @@ export default function DashboardPage() {
             ) : null}
             <button
               className="primaryButton"
-              disabled={busy || !question || !answer}
+              disabled={busy || !canEditKnowledge || !question || !answer}
             >
               <Plus size={16} />
               Add FAQ
@@ -2884,6 +2978,7 @@ export default function DashboardPage() {
                             <span>Question</span>
                             <input
                               value={editQuestion}
+                              disabled={!canEditKnowledge}
                               onChange={(event) =>
                                 setEditQuestion(event.target.value)
                               }
@@ -2893,6 +2988,7 @@ export default function DashboardPage() {
                             <span>Answer</span>
                             <textarea
                               value={editAnswer}
+                              disabled={!canEditKnowledge}
                               onChange={(event) =>
                                 setEditAnswer(event.target.value)
                               }
@@ -2912,7 +3008,12 @@ export default function DashboardPage() {
                             <button
                               className="primaryButton"
                               type="button"
-                              disabled={busy || !editQuestion || !editAnswer}
+                              disabled={
+                                busy ||
+                                !canEditKnowledge ||
+                                !editQuestion ||
+                                !editAnswer
+                              }
                               onClick={() => saveKnowledgeEdit(item)}
                             >
                               <Save size={15} />
@@ -2936,6 +3037,7 @@ export default function DashboardPage() {
                             <button
                               className="secondaryButton"
                               type="button"
+                              disabled={!canEditKnowledge}
                               onClick={() => startKnowledgeEdit(item)}
                             >
                               <Save size={15} />
@@ -2944,6 +3046,7 @@ export default function DashboardPage() {
                             <button
                               className="dangerButton"
                               type="button"
+                              disabled={!canEditKnowledge}
                               onClick={() => setConfirmDeleteItem(item)}
                             >
                               <Trash2 size={15} />
@@ -2975,6 +3078,7 @@ export default function DashboardPage() {
               <span>Website URL</span>
               <input
                 value={siteUrl}
+                disabled={!canEditKnowledge}
                 onChange={(event) => setSiteUrl(event.target.value)}
               />
             </label>
@@ -2985,6 +3089,7 @@ export default function DashboardPage() {
                 min="1"
                 max="8"
                 value={crawlMaxPages}
+                disabled={!canEditKnowledge}
                 onChange={(event) =>
                   setCrawlMaxPages(Number(event.target.value))
                 }
@@ -2992,7 +3097,9 @@ export default function DashboardPage() {
             </label>
             <button
               className="primaryButton full"
-              disabled={busy || !selectedTenant || !siteUrl}
+              disabled={
+                busy || !canEditKnowledge || !selectedTenant || !siteUrl
+              }
               type="button"
               onClick={scanWebsiteForKnowledge}
             >
@@ -3029,7 +3136,7 @@ export default function DashboardPage() {
                     <button
                       className="secondaryButton"
                       type="button"
-                      disabled={busy}
+                      disabled={busy || !canEditKnowledge}
                       onClick={() => importSuggestedFaqs([item])}
                     >
                       <Plus size={15} />
@@ -3040,7 +3147,11 @@ export default function DashboardPage() {
                 <button
                   className="secondaryButton full"
                   type="button"
-                  disabled={busy || !websiteImport.suggestedFaqs.length}
+                  disabled={
+                    busy ||
+                    !canEditKnowledge ||
+                    !websiteImport.suggestedFaqs.length
+                  }
                   onClick={() => importSuggestedFaqs()}
                 >
                   <Upload size={16} />
@@ -3053,13 +3164,14 @@ export default function DashboardPage() {
               <span>Paste FAQs</span>
               <textarea
                 value={importText}
+                disabled={!canEditKnowledge}
                 onChange={(event) => setImportText(event.target.value)}
                 rows={8}
               />
             </label>
             <button
               className="secondaryButton full"
-              disabled={busy || !importFaqs.length}
+              disabled={busy || !canEditKnowledge || !importFaqs.length}
               type="button"
               onClick={importFaqBlocks}
             >
@@ -3093,6 +3205,7 @@ export default function DashboardPage() {
                       <button
                         className="secondaryButton"
                         type="button"
+                        disabled={!canEditKnowledge}
                         onClick={() => draftFaqFromUnanswered(firstItem)}
                       >
                         <Plus size={15} />
@@ -3121,6 +3234,7 @@ export default function DashboardPage() {
                       <button
                         className="secondaryButton"
                         type="button"
+                        disabled={!canEditKnowledge}
                         onClick={() => draftFaqFromUnanswered(item)}
                       >
                         <Plus size={15} />
@@ -3237,6 +3351,7 @@ export default function DashboardPage() {
   }
 
   function renderLeads() {
+    const canEditLeads = canManageLeads();
     return (
       <div className="workspaceStack">
         <section className="metricsGrid compactMetrics">
@@ -3356,6 +3471,7 @@ export default function DashboardPage() {
                       <span>Pipeline stage</span>
                       <select
                         value={getPipelineStage(handoff)}
+                        disabled={!canEditLeads}
                         onChange={(event) =>
                           updateHandoff(
                             handoff,
@@ -3383,7 +3499,9 @@ export default function DashboardPage() {
                       <button
                         className="secondaryButton"
                         type="button"
-                        disabled={handoff.status === "in_progress"}
+                        disabled={
+                          !canEditLeads || handoff.status === "in_progress"
+                        }
                         onClick={() =>
                           updateHandoff(handoff, "in_progress", "Assad Dar")
                         }
@@ -3393,7 +3511,9 @@ export default function DashboardPage() {
                       <button
                         className="primaryButton"
                         type="button"
-                        disabled={handoff.status === "resolved"}
+                        disabled={
+                          !canEditLeads || handoff.status === "resolved"
+                        }
                         onClick={() =>
                           updateHandoff(handoff, "resolved", "Assad Dar")
                         }
@@ -3459,6 +3579,7 @@ export default function DashboardPage() {
       return null;
     }
 
+    const canEditLeads = canManageLeads();
     const details = parseLeadDetails(selectedLead.requesterMessage);
     const email = getLeadContactEmail(selectedLead);
     const phone = getLeadContactPhone(selectedLead);
@@ -3528,6 +3649,7 @@ export default function DashboardPage() {
                 <span>Pipeline stage</span>
                 <select
                   value={getPipelineStage(selectedLead)}
+                  disabled={!canEditLeads}
                   onChange={(event) =>
                     updateHandoff(
                       selectedLead,
@@ -3549,6 +3671,7 @@ export default function DashboardPage() {
                 <input
                   type="date"
                   value={leadFollowUpDate}
+                  disabled={!canEditLeads}
                   onChange={(event) => setLeadFollowUpDate(event.target.value)}
                 />
               </label>
@@ -3558,6 +3681,7 @@ export default function DashboardPage() {
               <button
                 className="secondaryButton"
                 type="button"
+                disabled={!canEditLeads}
                 onClick={() =>
                   updateHandoff(
                     selectedLead,
@@ -3572,6 +3696,7 @@ export default function DashboardPage() {
               <button
                 className="secondaryButton"
                 type="button"
+                disabled={!canEditLeads}
                 onClick={() =>
                   updateHandoff(
                     selectedLead,
@@ -3586,6 +3711,7 @@ export default function DashboardPage() {
               <button
                 className="secondaryButton"
                 type="button"
+                disabled={!canEditLeads}
                 onClick={() =>
                   updateHandoff(
                     selectedLead,
@@ -3600,6 +3726,7 @@ export default function DashboardPage() {
               <button
                 className="primaryButton"
                 type="button"
+                disabled={!canEditLeads}
                 onClick={() =>
                   updateHandoff(selectedLead, "resolved", "Assad Dar", "won")
                 }
@@ -3609,6 +3736,7 @@ export default function DashboardPage() {
               <button
                 className="dangerButton"
                 type="button"
+                disabled={!canEditLeads}
                 onClick={() =>
                   updateHandoff(selectedLead, "resolved", "Assad Dar", "lost")
                 }
@@ -3660,7 +3788,7 @@ export default function DashboardPage() {
               <button
                 className="secondaryButton"
                 type="button"
-                disabled={!leadFollowUpDate}
+                disabled={!canEditLeads || !leadFollowUpDate}
                 onClick={saveSelectedLeadFollowUp}
               >
                 Save follow-up
@@ -3736,6 +3864,7 @@ export default function DashboardPage() {
               <span>Note</span>
               <textarea
                 value={leadNote}
+                disabled={!canEditLeads}
                 onChange={(event) => setLeadNote(event.target.value)}
                 rows={3}
               />
@@ -3743,7 +3872,7 @@ export default function DashboardPage() {
             <button
               className="primaryButton full"
               type="button"
-              disabled={busy || !leadNote.trim()}
+              disabled={busy || !canEditLeads || !leadNote.trim()}
               onClick={saveSelectedLeadNote}
             >
               <Save size={16} />
@@ -3974,6 +4103,7 @@ export default function DashboardPage() {
   }
 
   function renderHandoffs() {
+    const canEditLeads = canManageLeads();
     return (
       <section className="panel">
         <div className="panelHeader">
@@ -4016,7 +4146,9 @@ export default function DashboardPage() {
                   <button
                     className="secondaryButton"
                     type="button"
-                    disabled={handoff.assignedTo === "Assad Dar"}
+                    disabled={
+                      !canEditLeads || handoff.assignedTo === "Assad Dar"
+                    }
                     onClick={() => updateHandoff(handoff, "open", "Assad Dar")}
                   >
                     <UserCheck size={15} />
@@ -4025,7 +4157,7 @@ export default function DashboardPage() {
                   <button
                     className="secondaryButton"
                     type="button"
-                    disabled={handoff.status === "in_progress"}
+                    disabled={!canEditLeads || handoff.status === "in_progress"}
                     onClick={() =>
                       updateHandoff(
                         handoff,
@@ -4039,7 +4171,7 @@ export default function DashboardPage() {
                   <button
                     className="primaryButton"
                     type="button"
-                    disabled={handoff.status === "resolved"}
+                    disabled={!canEditLeads || handoff.status === "resolved"}
                     onClick={() =>
                       updateHandoff(
                         handoff,
@@ -4053,7 +4185,7 @@ export default function DashboardPage() {
                   <button
                     className="dangerButton"
                     type="button"
-                    disabled={handoff.status === "dismissed"}
+                    disabled={!canEditLeads || handoff.status === "dismissed"}
                     onClick={() => updateHandoff(handoff, "dismissed")}
                   >
                     Dismiss
@@ -4070,6 +4202,7 @@ export default function DashboardPage() {
   }
 
   function renderTestStudio() {
+    const canRunTests = canManageLeads();
     return (
       <div className="testStudioGrid">
         <section className="panel">
@@ -4094,12 +4227,13 @@ export default function DashboardPage() {
           <form className="testRow large" onSubmit={testAssistant}>
             <input
               value={testMessage}
+              disabled={!canRunTests}
               onChange={(event) => setTestMessage(event.target.value)}
               placeholder="Ask from approved knowledge"
             />
             <button
               className="iconButton"
-              disabled={busy || !testMessage}
+              disabled={busy || !canRunTests || !testMessage}
               aria-label="Send test"
             >
               <Send size={18} />
@@ -4167,6 +4301,8 @@ export default function DashboardPage() {
   }
 
   function renderWidget() {
+    const canEditSettings = canManageTenantSettings();
+    const canEditChannels = canManageChannels();
     return (
       <div className="workspaceStack">
         <div className="widgetGrid">
@@ -4235,7 +4371,9 @@ export default function DashboardPage() {
               <button
                 className="secondaryButton"
                 type="button"
-                disabled={busy || !selectedTenant || !siteUrl}
+                disabled={
+                  busy || !canEditChannels || !selectedTenant || !siteUrl
+                }
                 onClick={verifyWidgetInstall}
               >
                 <ShieldCheck size={16} />
@@ -4416,7 +4554,7 @@ export default function DashboardPage() {
             <button
               className="primaryButton full"
               type="button"
-              disabled={busy || !selectedTenant}
+              disabled={busy || !canEditSettings || !selectedTenant}
               onClick={saveTenantSettings}
             >
               <Save size={16} />
@@ -4563,6 +4701,7 @@ export default function DashboardPage() {
   }
 
   function renderChannels() {
+    const canEditChannels = canManageChannels();
     return (
       <div className="workspaceStack">
         <section className="metricsGrid compactMetrics">
@@ -4621,6 +4760,12 @@ export default function DashboardPage() {
               </span>
             </article>
           </div>
+          {!canEditChannels ? (
+            <div className="inlineNotice">
+              <ShieldCheck size={16} />
+              <span>Your role can review channels but not change setup.</span>
+            </div>
+          ) : null}
         </section>
 
         {renderTelephoneSetup(telephoneConnection)}
@@ -4728,6 +4873,7 @@ export default function DashboardPage() {
                         <span>{channelAccountLabel(connection.channel)}</span>
                         <input
                           value={draftValue}
+                          disabled={!canEditChannels}
                           onChange={(event) =>
                             setChannelAccountDrafts((current) => ({
                               ...current,
@@ -4790,7 +4936,7 @@ export default function DashboardPage() {
                         <button
                           className="primaryButton"
                           type="button"
-                          disabled={busy}
+                          disabled={busy || !canEditChannels}
                           onClick={() =>
                             saveChannelConnection(connection, {
                               externalAccountId: draftValue,
@@ -4804,7 +4950,7 @@ export default function DashboardPage() {
                         <button
                           className="secondaryButton"
                           type="button"
-                          disabled={busy}
+                          disabled={busy || !canEditChannels}
                           onClick={() =>
                             saveChannelConnection(connection, {
                               status: "pending",
@@ -4816,7 +4962,7 @@ export default function DashboardPage() {
                         <button
                           className="dangerButton"
                           type="button"
-                          disabled={busy}
+                          disabled={busy || !canEditChannels}
                           onClick={() =>
                             saveChannelConnection(connection, {
                               status: "disabled",
@@ -4839,6 +4985,7 @@ export default function DashboardPage() {
   }
 
   function renderTelephoneSetup(connection?: ChannelConnection) {
+    const canEditChannels = canManageChannels();
     const voiceBridgeUrl =
       telephoneSettingString(connection, "voiceBridgeUrl") ??
       connection?.webhookUrl ??
@@ -5061,7 +5208,7 @@ export default function DashboardPage() {
               <button
                 className="secondaryButton"
                 type="button"
-                disabled={busy || !selectedTenant}
+                disabled={busy || !canEditChannels || !selectedTenant}
                 onClick={saveTelephoneRuntimeSettings}
               >
                 <Save size={15} />
@@ -5088,7 +5235,7 @@ export default function DashboardPage() {
               <button
                 className="secondaryButton"
                 type="button"
-                disabled={busy || !selectedTenant}
+                disabled={busy || !canEditChannels || !selectedTenant}
                 onClick={refreshVoiceEdgeStatus}
               >
                 <RefreshCw size={15} />
@@ -5243,7 +5390,7 @@ export default function DashboardPage() {
             <button
               className="primaryButton"
               type="button"
-              disabled={busy || !selectedTenant}
+              disabled={busy || !canEditChannels || !selectedTenant}
               onClick={saveNewTelephoneNumberSetup}
             >
               <Save size={16} />
@@ -5315,7 +5462,11 @@ export default function DashboardPage() {
               className="primaryButton"
               type="button"
               disabled={
-                busy || !forwardingExistingNumber || !forwardingAiNumber
+                busy ||
+                !canEditChannels ||
+                !selectedTenant ||
+                !forwardingExistingNumber ||
+                !forwardingAiNumber
               }
               onClick={saveCarrierForwardingSetup}
             >
@@ -5412,7 +5563,7 @@ export default function DashboardPage() {
               <button
                 className="primaryButton"
                 type="button"
-                disabled={busy}
+                disabled={busy || !canEditChannels || !selectedTenant}
                 onClick={saveSipByocSetup}
               >
                 <RadioTower size={16} />
@@ -5677,7 +5828,7 @@ export default function DashboardPage() {
             <button
               className="secondaryButton"
               type="button"
-              disabled={busy || !selectedTenant}
+              disabled={busy || !canEditChannels || !selectedTenant}
               onClick={() => saveTelephoneTestCall("pending")}
             >
               Pending
@@ -5685,7 +5836,7 @@ export default function DashboardPage() {
             <button
               className="primaryButton"
               type="button"
-              disabled={busy || !selectedTenant}
+              disabled={busy || !canEditChannels || !selectedTenant}
               onClick={() => saveTelephoneTestCall("passed")}
             >
               <CheckCircle2 size={15} />
@@ -5694,7 +5845,7 @@ export default function DashboardPage() {
             <button
               className="dangerButton"
               type="button"
-              disabled={busy || !selectedTenant}
+              disabled={busy || !canEditChannels || !selectedTenant}
               onClick={() => saveTelephoneTestCall("failed")}
             >
               Failed
@@ -5772,6 +5923,7 @@ export default function DashboardPage() {
   }
 
   function renderWhatsappOperations() {
+    const canEditChannels = canManageChannels();
     const variables = extractTemplateVariablesFromBody(templateBody);
 
     return (
@@ -5834,6 +5986,7 @@ export default function DashboardPage() {
                 <span>Name</span>
                 <input
                   value={templateName}
+                  disabled={!canEditChannels}
                   onChange={(event) => setTemplateName(event.target.value)}
                 />
               </label>
@@ -5841,6 +5994,7 @@ export default function DashboardPage() {
                 <span>Language</span>
                 <input
                   value={templateLanguage}
+                  disabled={!canEditChannels}
                   onChange={(event) => setTemplateLanguage(event.target.value)}
                 />
               </label>
@@ -5848,6 +6002,7 @@ export default function DashboardPage() {
                 <span>Category</span>
                 <select
                   value={templateCategory}
+                  disabled={!canEditChannels}
                   onChange={(event) =>
                     setTemplateCategory(
                       event.target.value as WhatsappTemplate["category"],
@@ -5863,6 +6018,7 @@ export default function DashboardPage() {
                 <span>Status</span>
                 <select
                   value={templateStatus}
+                  disabled={!canEditChannels}
                   onChange={(event) =>
                     setTemplateStatus(
                       event.target.value as WhatsappTemplate["status"],
@@ -5881,6 +6037,7 @@ export default function DashboardPage() {
               <span>Body</span>
               <textarea
                 value={templateBody}
+                disabled={!canEditChannels}
                 onChange={(event) => setTemplateBody(event.target.value)}
                 rows={5}
               />
@@ -5898,7 +6055,11 @@ export default function DashboardPage() {
               className="primaryButton full"
               type="button"
               disabled={
-                busy || !selectedTenant || !templateName || !templateBody
+                busy ||
+                !canEditChannels ||
+                !selectedTenant ||
+                !templateName ||
+                !templateBody
               }
               onClick={saveWhatsappTemplate}
             >
@@ -6192,16 +6353,41 @@ export default function DashboardPage() {
     return null;
   }
 
-  function canManageUsers() {
+  function currentTenantRole(tenantId = selectedTenant?.id) {
     if (adminSession?.authType === "admin_token") {
-      return true;
+      return "platform_owner";
     }
-    const role = adminSession?.memberships?.find(
-      (membership) => membership.tenantId === selectedTenant?.id,
+    return adminSession?.memberships?.find(
+      (membership) => membership.tenantId === tenantId,
     )?.role;
-    return role
-      ? tenantRoleRank(role) >= tenantRoleRank("tenant_admin")
-      : false;
+  }
+
+  function canUseTenantRole(
+    minimumRole: string,
+    tenantId = selectedTenant?.id,
+  ) {
+    const role = currentTenantRole(tenantId);
+    return role ? tenantRoleRank(role) >= tenantRoleRank(minimumRole) : false;
+  }
+
+  function canManageUsers(tenantId = selectedTenant?.id) {
+    return canUseTenantRole("tenant_admin", tenantId);
+  }
+
+  function canManageTenantSettings() {
+    return canUseTenantRole("tenant_admin");
+  }
+
+  function canManageKnowledge() {
+    return canUseTenantRole("tenant_admin");
+  }
+
+  function canManageChannels() {
+    return canUseTenantRole("tenant_admin");
+  }
+
+  function canManageLeads() {
+    return canUseTenantRole("operator");
   }
 
   function tenantRoleRank(role: string) {
@@ -6319,6 +6505,7 @@ export default function DashboardPage() {
   }
 
   function renderAutomation() {
+    const canEditSettings = canManageTenantSettings();
     const rules = [
       {
         key: "ownerLeadEmailEnabled" as const,
@@ -6404,6 +6591,7 @@ export default function DashboardPage() {
                     <input
                       type="checkbox"
                       checked={rule.enabled}
+                      disabled={!canEditSettings}
                       onChange={(event) =>
                         updateAutomationSetting(rule.key, event.target.checked)
                       }
@@ -6430,6 +6618,7 @@ export default function DashboardPage() {
                   min="1"
                   max="100"
                   value={automationSettings.readinessQualificationScore}
+                  disabled={!canEditSettings}
                   onChange={(event) =>
                     updateAutomationSetting(
                       "readinessQualificationScore",
@@ -6445,6 +6634,7 @@ export default function DashboardPage() {
                   min="1"
                   max="30"
                   value={automationSettings.staleLeadReminderDays}
+                  disabled={!canEditSettings}
                   onChange={(event) =>
                     updateAutomationSetting(
                       "staleLeadReminderDays",
@@ -6458,6 +6648,7 @@ export default function DashboardPage() {
               <span>Booking URL</span>
               <input
                 value={bookingUrl}
+                disabled={!canEditSettings}
                 onChange={(event) => setBookingUrl(event.target.value)}
                 placeholder="https://cal.com/..."
               />
@@ -6466,7 +6657,7 @@ export default function DashboardPage() {
               <button
                 className="primaryButton"
                 type="button"
-                disabled={busy || !selectedTenant}
+                disabled={busy || !canEditSettings || !selectedTenant}
                 onClick={saveTenantSettings}
               >
                 <Save size={16} />
@@ -6475,7 +6666,7 @@ export default function DashboardPage() {
               <button
                 className="secondaryButton"
                 type="button"
-                disabled={busy || !selectedTenant}
+                disabled={busy || !canEditSettings || !selectedTenant}
                 onClick={sendWeeklyReport}
               >
                 <Send size={16} />
@@ -6498,6 +6689,7 @@ export default function DashboardPage() {
   }
 
   function renderSettings() {
+    const canEditSettings = canManageTenantSettings();
     return (
       <div className="settingsGrid">
         <section className="panel">
@@ -6512,6 +6704,7 @@ export default function DashboardPage() {
               <span>Default language</span>
               <select
                 value={tenantLocale}
+                disabled={!canEditSettings}
                 onChange={(event) => {
                   setTenantLocale(event.target.value);
                   setWidgetLanguage(event.target.value);
@@ -6525,6 +6718,7 @@ export default function DashboardPage() {
               <span>Tone</span>
               <select
                 value={tenantTone}
+                disabled={!canEditSettings}
                 onChange={(event) =>
                   setTenantTone(
                     event.target.value as "friendly" | "neutral" | "formal",
@@ -6541,6 +6735,7 @@ export default function DashboardPage() {
             <span>Assistant role</span>
             <textarea
               value={widgetOpeningMessage}
+              disabled={!canEditSettings}
               onChange={(event) => setWidgetOpeningMessage(event.target.value)}
               rows={4}
             />
@@ -6548,7 +6743,7 @@ export default function DashboardPage() {
           <button
             className="primaryButton full"
             type="button"
-            disabled={busy || !selectedTenant}
+            disabled={busy || !canEditSettings || !selectedTenant}
             onClick={saveTenantSettings}
           >
             <Save size={16} />
@@ -6572,6 +6767,7 @@ export default function DashboardPage() {
                 max="0.95"
                 step="0.01"
                 value={confidenceThreshold}
+                disabled={!canEditSettings}
                 onChange={(event) =>
                   setConfidenceThreshold(Number(event.target.value))
                 }
@@ -6584,6 +6780,7 @@ export default function DashboardPage() {
                 min="200"
                 max="4000"
                 value={maxMessageLength}
+                disabled={!canEditSettings}
                 onChange={(event) =>
                   setMaxMessageLength(Number(event.target.value))
                 }
@@ -6596,6 +6793,7 @@ export default function DashboardPage() {
                 min="1"
                 max="3650"
                 value={retentionDays}
+                disabled={!canEditSettings}
                 onChange={(event) =>
                   setRetentionDays(Number(event.target.value))
                 }
@@ -6646,7 +6844,7 @@ export default function DashboardPage() {
             />
           </label>
           <label className="field">
-            <span>Admin token</span>
+            <span>Bootstrap token</span>
             <div className="inputIcon">
               <KeyRound size={16} />
               <input
@@ -6692,6 +6890,8 @@ export default function DashboardPage() {
             </button>
           ) : null}
         </section>
+
+        {renderProjectUsers()}
       </div>
     );
   }
@@ -6722,8 +6922,7 @@ export default function DashboardPage() {
             ))
           ) : (
             <div className="emptyState compact">
-              No project users yet. Create the first project owner with the
-              admin token.
+              No project users visible for this session.
             </div>
           )}
         </div>
@@ -6839,7 +7038,7 @@ export default function DashboardPage() {
         ) : (
           <div className="inlineNotice">
             <ShieldCheck size={16} />
-            <span>Your role can view users but not create or invite them.</span>
+            <span>Your role cannot view or manage project users.</span>
           </div>
         )}
       </section>
@@ -7117,7 +7316,7 @@ export default function DashboardPage() {
                   type="button"
                   onClick={() => setAuthMode("admin_token")}
                 >
-                  Admin token
+                  Bootstrap token
                 </button>
               </div>
 
@@ -7196,7 +7395,7 @@ export default function DashboardPage() {
                   }}
                 >
                   <label className="field">
-                    <span>Admin token</span>
+                    <span>Bootstrap admin token</span>
                     <div className="inputIcon">
                       <KeyRound size={16} />
                       <input
@@ -7292,7 +7491,7 @@ export default function DashboardPage() {
           </div>
 
           <label className="field">
-            <span>Admin token</span>
+            <span>Bootstrap token</span>
             <div className="inputIcon">
               <KeyRound size={16} />
               <input

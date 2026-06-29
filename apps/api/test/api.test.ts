@@ -1245,6 +1245,162 @@ describe("API", () => {
     await app.close();
   });
 
+  it("prevents tenant admins from escalating tenant or platform roles", async () => {
+    const store = new MemoryPlatformStore();
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+    });
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+
+    const createAdminResponse = await app.inject({
+      method: "POST",
+      url: `/admin/tenants/${tenant.id}/users`,
+      headers: { "x-admin-token": "test-token" },
+      payload: {
+        email: "tenant-admin@example.com",
+        name: "Tenant Admin",
+        role: "tenant_admin",
+        password: "secure-password",
+      },
+    });
+    expect(createAdminResponse.statusCode).toBe(201);
+
+    const loginResponse = await app.inject({
+      method: "POST",
+      url: "/auth/login",
+      payload: {
+        email: "tenant-admin@example.com",
+        password: "secure-password",
+      },
+    });
+    expect(loginResponse.statusCode).toBe(200);
+    const cookie = String(loginResponse.headers["set-cookie"]);
+
+    const platformOwnerResponse = await app.inject({
+      method: "POST",
+      url: `/admin/tenants/${tenant.id}/users`,
+      headers: { cookie },
+      payload: {
+        email: "platform-owner@example.com",
+        name: "Platform Owner",
+        role: "platform_owner",
+        password: "secure-password",
+      },
+    });
+    expect(platformOwnerResponse.statusCode).toBe(400);
+
+    const tenantOwnerResponse = await app.inject({
+      method: "POST",
+      url: `/admin/tenants/${tenant.id}/users`,
+      headers: { cookie },
+      payload: {
+        email: "tenant-owner@example.com",
+        name: "Tenant Owner",
+        role: "tenant_owner",
+        password: "secure-password",
+      },
+    });
+    expect(tenantOwnerResponse.statusCode).toBe(403);
+
+    const operatorResponse = await app.inject({
+      method: "POST",
+      url: `/admin/tenants/${tenant.id}/users`,
+      headers: { cookie },
+      payload: {
+        email: "operator@example.com",
+        name: "Operator",
+        role: "operator",
+        password: "secure-password",
+      },
+    });
+    expect(operatorResponse.statusCode).toBe(201);
+
+    const tenantOwnerInviteResponse = await app.inject({
+      method: "POST",
+      url: `/admin/tenants/${tenant.id}/invites`,
+      headers: { cookie },
+      payload: {
+        email: "invited-owner@example.com",
+        role: "tenant_owner",
+      },
+    });
+    expect(tenantOwnerInviteResponse.statusCode).toBe(403);
+
+    await app.close();
+  });
+
+  it("allows viewers to read tenant data but blocks tenant mutations", async () => {
+    const store = new MemoryPlatformStore();
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+    });
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+
+    const createViewerResponse = await app.inject({
+      method: "POST",
+      url: `/admin/tenants/${tenant.id}/users`,
+      headers: { "x-admin-token": "test-token" },
+      payload: {
+        email: "viewer@example.com",
+        name: "Viewer",
+        role: "viewer",
+        password: "secure-password",
+      },
+    });
+    expect(createViewerResponse.statusCode).toBe(201);
+
+    const loginResponse = await app.inject({
+      method: "POST",
+      url: "/auth/login",
+      payload: {
+        email: "viewer@example.com",
+        password: "secure-password",
+      },
+    });
+    expect(loginResponse.statusCode).toBe(200);
+    const cookie = String(loginResponse.headers["set-cookie"]);
+
+    const readResponse = await app.inject({
+      method: "GET",
+      url: `/admin/tenants/${tenant.id}/knowledge`,
+      headers: { cookie },
+    });
+    expect(readResponse.statusCode).toBe(200);
+
+    const writeResponse = await app.inject({
+      method: "POST",
+      url: `/admin/tenants/${tenant.id}/knowledge/faqs`,
+      headers: { cookie },
+      payload: {
+        question: "Can I edit?",
+        answer: "No.",
+      },
+    });
+    expect(writeResponse.statusCode).toBe(403);
+
+    const settingsResponse = await app.inject({
+      method: "PATCH",
+      url: `/admin/tenants/${tenant.id}`,
+      headers: { cookie },
+      payload: {
+        defaultLocale: "de",
+      },
+    });
+    expect(settingsResponse.statusCode).toBe(403);
+
+    await app.close();
+  });
+
   it("creates a tenant, adds knowledge, and answers via widget endpoint", async () => {
     const store = new MemoryPlatformStore();
     const app = await buildServer({
@@ -1653,9 +1809,9 @@ describe("API", () => {
         assistantId: tenant.publicId,
         visitorId: "visitor-one",
         pageUrl: "https://assad-dar.de/de",
-        eventType: "quick_reply_clicked",
+        eventType: "intake_mode_selected",
         metadata: {
-          reply: "Termin buchen",
+          mode: "readiness",
         },
       },
     });
@@ -1663,11 +1819,11 @@ describe("API", () => {
     expect(response.statusCode).toBe(202);
     expect(store.usageEvents[0]).toMatchObject({
       tenantId: tenant.id,
-      eventType: "quick_reply_clicked",
+      eventType: "intake_mode_selected",
       credits: 0,
       metadata: {
         visitorId: "visitor-one",
-        reply: "Termin buchen",
+        mode: "readiness",
       },
     });
     await app.close();

@@ -382,7 +382,14 @@ declare
   table_name text;
 begin
   foreach table_name in array array[
+    'memberships',
+    'subscriptions',
+    'usage_events',
+    'api_keys',
+    'channel_connections',
+    'channel_webhook_events',
     'contacts',
+    'audit_logs',
     'knowledge_sources',
     'knowledge_documents',
     'knowledge_chunks',

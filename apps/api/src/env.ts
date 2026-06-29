@@ -52,6 +52,9 @@ export function loadEnv(env = process.env): Env {
     if (parsed.META_VERIFY_TOKEN === DEFAULT_META_VERIFY_TOKEN) {
       insecureDefaults.push("META_VERIFY_TOKEN");
     }
+    if (!parsed.META_APP_SECRET) {
+      insecureDefaults.push("META_APP_SECRET");
+    }
     if (insecureDefaults.length > 0) {
       throw new Error(
         `Refusing to start in production with default development secrets: ${insecureDefaults.join(

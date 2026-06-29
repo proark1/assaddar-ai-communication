@@ -14,6 +14,7 @@ describe("loadEnv", () => {
         NODE_ENV: "production",
         ADMIN_API_TOKEN: "change-me-dev-admin-token",
         META_VERIFY_TOKEN: "a-secure-verify-token",
+        META_APP_SECRET: "a-secure-meta-app-secret",
       }),
     ).toThrow(/ADMIN_API_TOKEN/);
   });
@@ -25,8 +26,20 @@ describe("loadEnv", () => {
         NODE_ENV: "production",
         ADMIN_API_TOKEN: "a-secure-admin-token",
         META_VERIFY_TOKEN: "change-me-meta-verify-token",
+        META_APP_SECRET: "a-secure-meta-app-secret",
       }),
     ).toThrow(/META_VERIFY_TOKEN/);
+  });
+
+  it("throws in production when meta app secret is missing", () => {
+    expect(() =>
+      loadEnv({
+        ...baseEnv,
+        NODE_ENV: "production",
+        ADMIN_API_TOKEN: "a-secure-admin-token",
+        META_VERIFY_TOKEN: "a-secure-verify-token",
+      }),
+    ).toThrow(/META_APP_SECRET/);
   });
 
   it("boots in production when secure values are provided", () => {
@@ -35,6 +48,7 @@ describe("loadEnv", () => {
       NODE_ENV: "production",
       ADMIN_API_TOKEN: "a-secure-admin-token",
       META_VERIFY_TOKEN: "a-secure-verify-token",
+      META_APP_SECRET: "a-secure-meta-app-secret",
     });
     expect(env.ADMIN_API_TOKEN).toBe("a-secure-admin-token");
   });

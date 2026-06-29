@@ -3,6 +3,22 @@ export const openApiDocument = {
   info: {
     title: "Assaddar AI Communication Platform API",
     version: "0.1.0",
+    description:
+      "Admin routes accept either an HttpOnly project-user session cookie or the bootstrap admin token. Tenant role requirements are documented with x-minimum-role.",
+  },
+  components: {
+    securitySchemes: {
+      projectSession: {
+        type: "apiKey",
+        in: "cookie",
+        name: "assaddar_session",
+      },
+      bootstrapAdminToken: {
+        type: "apiKey",
+        in: "header",
+        name: "x-admin-token",
+      },
+    },
   },
   paths: {
     "/health": {
@@ -36,24 +52,29 @@ export const openApiDocument = {
       },
       post: {
         summary: "Create a tenant",
+        "x-minimum-role": "platform_owner",
       },
     },
     "/admin/tenants/{tenantId}/knowledge/faqs": {
       post: {
         summary: "Add an approved FAQ knowledge entry",
+        "x-minimum-role": "tenant_admin",
       },
     },
     "/admin/tenants/{tenantId}/knowledge": {
       get: {
         summary: "List approved tenant knowledge",
+        "x-minimum-role": "viewer",
       },
     },
     "/admin/tenants/{tenantId}/knowledge/{knowledgeId}": {
       put: {
         summary: "Update an approved FAQ knowledge entry",
+        "x-minimum-role": "tenant_admin",
       },
       delete: {
         summary: "Delete an approved knowledge entry",
+        "x-minimum-role": "tenant_admin",
       },
     },
     "/admin/tenants/{tenantId}/analytics": {
@@ -79,32 +100,39 @@ export const openApiDocument = {
     "/admin/tenants/{tenantId}/handoffs/{handoffId}": {
       patch: {
         summary: "Update a tenant handoff request",
+        "x-minimum-role": "operator",
       },
     },
     "/admin/tenants/{tenantId}/channel-connections": {
       get: {
         summary: "List tenant channel connection setup status",
+        "x-minimum-role": "viewer",
       },
     },
     "/admin/tenants/{tenantId}/channel-connections/{channel}": {
       put: {
         summary: "Create or update a tenant channel connection",
+        "x-minimum-role": "tenant_admin",
       },
     },
     "/admin/tenants/{tenantId}/users": {
       get: {
         summary: "List tenant users and roles",
+        "x-minimum-role": "tenant_admin",
       },
       post: {
         summary: "Create or update a tenant user login",
+        "x-minimum-role": "tenant_admin",
       },
     },
     "/admin/tenants/{tenantId}/invites": {
       get: {
         summary: "List tenant invite links",
+        "x-minimum-role": "tenant_admin",
       },
       post: {
         summary: "Create a tenant invite link",
+        "x-minimum-role": "tenant_admin",
       },
     },
     "/admin/tenants/{tenantId}/telephone/twilio/search": {
@@ -159,11 +187,13 @@ export const openApiDocument = {
     "/admin/tenants/{tenantId}/weekly-report": {
       post: {
         summary: "Send the tenant weekly automation summary email",
+        "x-minimum-role": "tenant_admin",
       },
     },
     "/admin/tenants/{tenantId}/test-assistant": {
       post: {
         summary: "Test the grounded answer engine for a tenant",
+        "x-minimum-role": "operator",
       },
     },
     "/widget/config/{assistantId}": {

@@ -7,7 +7,7 @@ Credential-dependent integrations are intentionally adapter-backed and conservat
 - Public config endpoint: `GET /widget/config/{assistantId}`
 - Chat endpoint: `POST /widget/chat`
 - Widget isolation: Shadow DOM
-- Conversation continuity: browser `localStorage` public conversation ID
+- Conversation continuity: browser `localStorage` stores the public conversation ID and a bounded local transcript cache for the visitor experience. The widget keeps at most 50 messages and expires local state after 30 days.
 - Public IDs: `asst_...` values do not expose internal tenant UUIDs
 
 ## WhatsApp Business
@@ -17,6 +17,7 @@ Adapter: `WhatsAppCloudAdapter`
 Current foundation:
 
 - Meta webhook verification using `hub.mode`, `hub.verify_token`, and `hub.challenge`
+- Meta webhook POST signature verification using `X-Hub-Signature-256`; production startup requires `META_APP_SECRET`
 - Incoming payload normalization for text messages
 - Outgoing sender is credential-gated until `WHATSAPP_ACCESS_TOKEN` and phone number mapping are configured
 - Tenant-level template storage for draft/submitted/approved/rejected WhatsApp templates
@@ -107,11 +108,9 @@ Planned provider expansion:
 ## TODOs Before Production Credentials
 
 - Encrypt/decrypt channel tokens with a KMS-backed provider.
-- Persist provider account IDs and webhook event IDs per channel connection.
-- Verify provider signatures, not only webhook verify tokens.
+- Persist provider webhook event IDs for idempotent processing where each provider exposes stable IDs.
 - Enforce WhatsApp and Messenger/Instagram response windows before sending.
 - Add retry queues and dead-letter handling for outbound delivery.
-- Add Twilio signature validation.
 - Add richer voice callback workflows and call summaries.
 - Add provider-specific integration health dashboards.
 - Add hard enforcement for WhatsApp template-only replies outside the 24-hour response window.

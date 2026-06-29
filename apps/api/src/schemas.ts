@@ -27,6 +27,13 @@ export const RoleNameSchema = z.enum([
   "viewer",
 ]);
 
+export const TenantRoleNameSchema = z.enum([
+  "tenant_owner",
+  "tenant_admin",
+  "operator",
+  "viewer",
+]);
+
 /**
  * Optional pagination query params for list endpoints. Both are coerced from
  * strings and clamped: `limit` to [1, 100], `offset` to >= 0. Omitting them
@@ -195,7 +202,12 @@ export const WidgetEventSchema = z.object({
   conversationId: z.string().min(8).max(80).optional(),
   visitorId: z.string().min(1).max(120).optional(),
   pageUrl: z.string().url().max(500).optional(),
-  eventType: z.enum(["widget_open", "quick_reply_clicked", "cta_clicked"]),
+  eventType: z.enum([
+    "widget_open",
+    "quick_reply_clicked",
+    "cta_clicked",
+    "intake_mode_selected",
+  ]),
   metadata: z.record(z.unknown()).optional(),
 });
 
@@ -423,13 +435,13 @@ export const LoginSchema = z.object({
 export const CreateTenantUserSchema = z.object({
   email: z.string().email().max(240),
   name: z.string().min(1).max(160),
-  role: RoleNameSchema.default("operator"),
+  role: TenantRoleNameSchema.default("operator"),
   password: z.string().min(8).max(200).optional(),
 });
 
 export const CreateTenantInviteSchema = z.object({
   email: z.string().email().max(240),
-  role: RoleNameSchema.default("operator"),
+  role: TenantRoleNameSchema.default("operator"),
 });
 
 export const AcceptTenantInviteSchema = z.object({
@@ -446,3 +458,4 @@ export type ChannelConnectionInput = z.infer<typeof ChannelConnectionSchema>;
 export type WhatsappTemplateInput = z.infer<typeof WhatsappTemplateSchema>;
 export type WidgetThemeInput = z.infer<typeof WidgetThemeSchema>;
 export type RoleName = z.infer<typeof RoleNameSchema>;
+export type TenantRoleName = z.infer<typeof TenantRoleNameSchema>;

@@ -6,6 +6,7 @@
 - Repository methods require tenant scope for tenant data access.
 - Public assistant IDs do not expose internal tenant UUIDs.
 - Migration SQL enables row-level security on tenant-scoped tables.
+- The tenant-scoped RLS list includes memberships, tenant invites, subscriptions, API keys, channel connections, webhook events, audit logs, knowledge, conversations, messages, calls, handoffs, deliveries, and WhatsApp templates.
 - Production deployments should use a non-owner Railway Postgres application role and set `app.current_tenant_id` per request/transaction when RLS is enabled. Database RLS is defense in depth; the API must still enforce tenant scope before querying.
 
 ## Secrets
@@ -16,6 +17,15 @@
 - API keys should be stored as hashes, not plaintext.
 - `ADMIN_API_TOKEN` is retained as an internal/root fallback. Normal project access uses Railway Postgres-backed users, memberships, and HttpOnly session cookies.
 - User passwords are stored as salted `scrypt` hashes. Session and invite tokens are stored only as SHA-256 hashes.
+- `META_APP_SECRET` is required in production so Meta webhook POST requests are verified with `X-Hub-Signature-256`.
+
+## Roles
+
+- `viewer`: read-only tenant dashboards, inbox, contacts, analytics, handoffs, knowledge, and channel status.
+- `operator`: viewer access plus lead, handoff, and assistant-test actions.
+- `tenant_admin`: operator access plus tenant settings, knowledge, channel setup, automation, WhatsApp templates, and project users.
+- `tenant_owner`: tenant admin access plus tenant export and deletion.
+- `platform_owner` / bootstrap token: platform-wide tenant administration. Tenant admins cannot grant this role.
 
 ## AI Data Handling
 
@@ -24,6 +34,7 @@
 - It does not train shared models on customer data.
 - Retrieval is keyword-based by default. Setting `OPENAI_API_KEY` enables optional hybrid keyword + semantic retrieval (pgvector); only the chunk text being embedded is sent to the embedding provider, and the engine degrades to keyword-only on any provider failure.
 - Future LLM providers must receive only the retrieved tenant context required for the answer.
+- The website widget stores a bounded local transcript cache in the visitor browser for continuity: 50 messages maximum, 30-day expiry, and a clear-conversation control. Server-side messages remain governed by tenant retention settings.
 - Logs should avoid storing raw provider secrets or unnecessary personal data.
 
 ## Abuse And Cost Controls

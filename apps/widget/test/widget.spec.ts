@@ -72,4 +72,28 @@ test("widget renders inside a shadow root and sends a grounded message", async (
   await expect(page.locator(".bubble.assistant").last()).toContainText(
     "09:00 to 18:00",
   );
+
+  const storedState = await page.evaluate(() => {
+    const raw = window.localStorage.getItem("assaddar_widget_asst_test");
+    return raw ? JSON.parse(raw) : null;
+  });
+  expect(storedState).toMatchObject({
+    conversationId: "conv_test",
+    messages: expect.arrayContaining([
+      expect.objectContaining({ role: "user", text: "When are you open?" }),
+    ]),
+  });
+  expect(storedState.messages.length).toBeLessThanOrEqual(50);
+
+  await page.getByRole("button", { name: "Clear conversation" }).click();
+  await expect(page.locator(".bubble")).toHaveCount(1);
+  await expect(page.locator(".bubble.assistant").first()).toContainText(
+    "Hi from test",
+  );
+  const resetState = await page.evaluate(() => {
+    const raw = window.localStorage.getItem("assaddar_widget_asst_test");
+    return raw ? JSON.parse(raw) : null;
+  });
+  expect(resetState.conversationId).toBeUndefined();
+  expect(resetState.messages).toHaveLength(1);
 });

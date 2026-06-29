@@ -77,6 +77,7 @@ import {
   type WhatsappTemplateInput,
   type WidgetThemeInput,
   type RoleName,
+  type TenantRoleName,
 } from "./schemas";
 
 const scryptAsync = promisify(scrypt);
@@ -684,7 +685,7 @@ export async function buildServer(
 
   app.patch(
     "/admin/tenants/:tenantId",
-    { preHandler: requireTenantAccess(options) },
+    { preHandler: requireTenantAccess(options, "tenant_admin") },
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const body = UpdateTenantSchema.parse(request.body);
@@ -694,7 +695,7 @@ export async function buildServer(
 
   app.get(
     "/admin/tenants/:tenantId/users",
-    { preHandler: requireTenantAccess(options) },
+    { preHandler: requireTenantAccess(options, "tenant_admin") },
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const pagination = PaginationQuerySchema.parse(request.query);
@@ -708,6 +709,11 @@ export async function buildServer(
     async (request, reply) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const body = CreateTenantUserSchema.parse(request.body);
+      if (!canGrantTenantRole(getRequestAuth(request), tenantId, body.role)) {
+        return reply.code(403).send({
+          error: "Cannot grant a role above your current tenant role.",
+        });
+      }
       const user = await options.store.upsertTenantUser(tenantId, {
         email: body.email,
         name: body.name,
@@ -735,6 +741,11 @@ export async function buildServer(
     async (request, reply) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const body = CreateTenantInviteSchema.parse(request.body);
+      if (!canGrantTenantRole(getRequestAuth(request), tenantId, body.role)) {
+        return reply.code(403).send({
+          error: "Cannot invite a role above your current tenant role.",
+        });
+      }
       const token = createSessionToken();
       const invite = await options.store.createTenantInvite(tenantId, {
         email: body.email,
@@ -756,7 +767,7 @@ export async function buildServer(
 
   app.get(
     "/admin/tenants/:tenantId/channel-connections",
-    { preHandler: requireTenantAccess(options) },
+    { preHandler: requireTenantAccess(options, "viewer") },
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const tenant = await options.store.getTenant(tenantId);
@@ -771,7 +782,7 @@ export async function buildServer(
 
   app.put(
     "/admin/tenants/:tenantId/channel-connections/:channel",
-    { preHandler: requireTenantAccess(options) },
+    { preHandler: requireTenantAccess(options, "tenant_admin") },
     async (request) => {
       const { tenantId, channel } = ParamsChannelSchema.parse(request.params);
       const body = ChannelConnectionSchema.parse({
@@ -784,7 +795,7 @@ export async function buildServer(
 
   app.get(
     "/admin/tenants/:tenantId/telephone/twilio/search",
-    { preHandler: requireTenantAccess(options) },
+    { preHandler: requireTenantAccess(options, "tenant_admin") },
     async (request, reply) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const tenant = await options.store.getTenant(tenantId);
@@ -826,7 +837,7 @@ export async function buildServer(
 
   app.get(
     "/admin/tenants/:tenantId/telephone/twilio/numbers",
-    { preHandler: requireTenantAccess(options) },
+    { preHandler: requireTenantAccess(options, "tenant_admin") },
     async (request, reply) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const tenant = await options.store.getTenant(tenantId);
@@ -864,7 +875,7 @@ export async function buildServer(
 
   app.post(
     "/admin/tenants/:tenantId/telephone/twilio/purchase",
-    { preHandler: requireTenantAccess(options) },
+    { preHandler: requireTenantAccess(options, "tenant_admin") },
     async (request, reply) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const tenant = await options.store.getTenant(tenantId);
@@ -933,7 +944,7 @@ export async function buildServer(
 
   app.post(
     "/admin/tenants/:tenantId/telephone/twilio/connect-existing",
-    { preHandler: requireTenantAccess(options) },
+    { preHandler: requireTenantAccess(options, "tenant_admin") },
     async (request, reply) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const tenant = await options.store.getTenant(tenantId);
@@ -1001,7 +1012,7 @@ export async function buildServer(
 
   app.post(
     "/admin/tenants/:tenantId/telephone/new-number",
-    { preHandler: requireTenantAccess(options) },
+    { preHandler: requireTenantAccess(options, "tenant_admin") },
     async (request, reply) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const tenant = await options.store.getTenant(tenantId);
@@ -1063,7 +1074,7 @@ export async function buildServer(
 
   app.post(
     "/admin/tenants/:tenantId/telephone/carrier-forwarding",
-    { preHandler: requireTenantAccess(options) },
+    { preHandler: requireTenantAccess(options, "tenant_admin") },
     async (request, reply) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const tenant = await options.store.getTenant(tenantId);
@@ -1110,7 +1121,7 @@ export async function buildServer(
 
   app.post(
     "/admin/tenants/:tenantId/telephone/sip-byoc",
-    { preHandler: requireTenantAccess(options) },
+    { preHandler: requireTenantAccess(options, "tenant_admin") },
     async (request, reply) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const tenant = await options.store.getTenant(tenantId);
@@ -1167,7 +1178,7 @@ export async function buildServer(
 
   app.put(
     "/admin/tenants/:tenantId/telephone/settings",
-    { preHandler: requireTenantAccess(options) },
+    { preHandler: requireTenantAccess(options, "tenant_admin") },
     async (request, reply) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const tenant = await options.store.getTenant(tenantId);
@@ -1219,7 +1230,7 @@ export async function buildServer(
 
   app.get(
     "/admin/tenants/:tenantId/telephone/voice-edge-status",
-    { preHandler: requireTenantAccess(options) },
+    { preHandler: requireTenantAccess(options, "tenant_admin") },
     async (request, reply) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const tenant = await options.store.getTenant(tenantId);
@@ -1232,7 +1243,7 @@ export async function buildServer(
 
   app.post(
     "/admin/tenants/:tenantId/knowledge/faqs",
-    { preHandler: requireTenantAccess(options) },
+    { preHandler: requireTenantAccess(options, "tenant_admin") },
     async (request, reply) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const body = AddFaqSchema.parse(request.body);
@@ -1243,7 +1254,7 @@ export async function buildServer(
 
   app.get(
     "/admin/tenants/:tenantId/knowledge",
-    { preHandler: requireTenantAccess(options) },
+    { preHandler: requireTenantAccess(options, "viewer") },
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const pagination = PaginationQuerySchema.parse(request.query);
@@ -1253,7 +1264,7 @@ export async function buildServer(
 
   app.post(
     "/admin/tenants/:tenantId/knowledge/import-website",
-    { preHandler: requireTenantAccess(options) },
+    { preHandler: requireTenantAccess(options, "tenant_admin") },
     async (request, reply) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const body = WebsiteImportSchema.parse(request.body);
@@ -1284,7 +1295,7 @@ export async function buildServer(
 
   app.put(
     "/admin/tenants/:tenantId/knowledge/:knowledgeId",
-    { preHandler: requireTenantAccess(options) },
+    { preHandler: requireTenantAccess(options, "tenant_admin") },
     async (request) => {
       const { tenantId, knowledgeId } = ParamsKnowledgeSchema.parse(
         request.params,
@@ -1296,7 +1307,7 @@ export async function buildServer(
 
   app.delete(
     "/admin/tenants/:tenantId/knowledge/:knowledgeId",
-    { preHandler: requireTenantAccess(options) },
+    { preHandler: requireTenantAccess(options, "tenant_admin") },
     async (request, reply) => {
       const { tenantId, knowledgeId } = ParamsKnowledgeSchema.parse(
         request.params,
@@ -1308,7 +1319,7 @@ export async function buildServer(
 
   app.get(
     "/admin/tenants/:tenantId/analytics",
-    { preHandler: requireTenantAccess(options) },
+    { preHandler: requireTenantAccess(options, "viewer") },
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       return options.store.getTenantAnalytics(tenantId);
@@ -1317,7 +1328,7 @@ export async function buildServer(
 
   app.get(
     "/admin/tenants/:tenantId/conversations",
-    { preHandler: requireTenantAccess(options) },
+    { preHandler: requireTenantAccess(options, "viewer") },
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const pagination = PaginationQuerySchema.parse(request.query);
@@ -1327,7 +1338,7 @@ export async function buildServer(
 
   app.get(
     "/admin/tenants/:tenantId/inbox",
-    { preHandler: requireTenantAccess(options) },
+    { preHandler: requireTenantAccess(options, "viewer") },
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const pagination = PaginationQuerySchema.parse(request.query);
@@ -1337,7 +1348,7 @@ export async function buildServer(
 
   app.get(
     "/admin/tenants/:tenantId/contacts",
-    { preHandler: requireTenantAccess(options) },
+    { preHandler: requireTenantAccess(options, "viewer") },
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const pagination = PaginationQuerySchema.parse(request.query);
@@ -1347,7 +1358,7 @@ export async function buildServer(
 
   app.get(
     "/admin/tenants/:tenantId/conversations/:conversationId/messages",
-    { preHandler: requireTenantAccess(options) },
+    { preHandler: requireTenantAccess(options, "viewer") },
     async (request) => {
       const { tenantId, conversationId } = ParamsConversationSchema.parse(
         request.params,
@@ -1358,7 +1369,7 @@ export async function buildServer(
 
   app.get(
     "/admin/tenants/:tenantId/handoffs",
-    { preHandler: requireTenantAccess(options) },
+    { preHandler: requireTenantAccess(options, "viewer") },
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const pagination = PaginationQuerySchema.parse(request.query);
@@ -1368,7 +1379,7 @@ export async function buildServer(
 
   app.get(
     "/admin/tenants/:tenantId/unanswered",
-    { preHandler: requireTenantAccess(options) },
+    { preHandler: requireTenantAccess(options, "viewer") },
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const handoffs = await options.store.listHandoffs(tenantId);
@@ -1378,7 +1389,7 @@ export async function buildServer(
 
   app.get(
     "/admin/tenants/:tenantId/workflows/suggestions",
-    { preHandler: requireTenantAccess(options) },
+    { preHandler: requireTenantAccess(options, "viewer") },
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const [analytics, handoffs, contacts, templates, compliance] =
@@ -1401,7 +1412,7 @@ export async function buildServer(
 
   app.get(
     "/admin/tenants/:tenantId/whatsapp/templates",
-    { preHandler: requireTenantAccess(options) },
+    { preHandler: requireTenantAccess(options, "viewer") },
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       return options.store.listWhatsappTemplates(tenantId);
@@ -1410,7 +1421,7 @@ export async function buildServer(
 
   app.post(
     "/admin/tenants/:tenantId/whatsapp/templates",
-    { preHandler: requireTenantAccess(options) },
+    { preHandler: requireTenantAccess(options, "tenant_admin") },
     async (request, reply) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const body = WhatsappTemplateSchema.parse(request.body);
@@ -1424,7 +1435,7 @@ export async function buildServer(
 
   app.get(
     "/admin/tenants/:tenantId/whatsapp/compliance",
-    { preHandler: requireTenantAccess(options) },
+    { preHandler: requireTenantAccess(options, "viewer") },
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       return options.store.getWhatsappCompliance(tenantId);
@@ -1433,7 +1444,7 @@ export async function buildServer(
 
   app.post(
     "/admin/tenants/:tenantId/weekly-report",
-    { preHandler: requireTenantAccess(options) },
+    { preHandler: requireTenantAccess(options, "tenant_admin") },
     async (request, reply) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const tenant = await options.store.getTenant(tenantId);
@@ -1481,7 +1492,7 @@ export async function buildServer(
 
   app.patch(
     "/admin/tenants/:tenantId/handoffs/:handoffId",
-    { preHandler: requireTenantAccess(options) },
+    { preHandler: requireTenantAccess(options, "operator") },
     async (request) => {
       const { tenantId, handoffId } = ParamsHandoffSchema.parse(request.params);
       const body = UpdateHandoffSchema.parse(request.body);
@@ -1491,7 +1502,7 @@ export async function buildServer(
 
   app.post(
     "/admin/tenants/:tenantId/test-assistant",
-    { preHandler: requireTenantAccess(options) },
+    { preHandler: requireTenantAccess(options, "operator") },
     async (request, reply) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const body = TestAssistantSchema.parse(request.body);
@@ -1553,7 +1564,7 @@ export async function buildServer(
 
   app.get(
     "/admin/tenants/:tenantId/export",
-    { preHandler: requireTenantAccess(options) },
+    { preHandler: requireTenantAccess(options, "tenant_owner") },
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       return options.store.exportTenantData(tenantId);
@@ -1562,7 +1573,7 @@ export async function buildServer(
 
   app.delete(
     "/admin/tenants/:tenantId",
-    { preHandler: requireTenantAccess(options) },
+    { preHandler: requireTenantAccess(options, "tenant_owner") },
     async (request, reply) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       await options.store.deleteTenantData(tenantId);
@@ -1572,7 +1583,7 @@ export async function buildServer(
 
   app.post(
     "/admin/tenants/:tenantId/install-check",
-    { preHandler: requireTenantAccess(options) },
+    { preHandler: requireTenantAccess(options, "tenant_admin") },
     async (request, reply) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const body = InstallCheckSchema.parse(request.body);
@@ -2010,9 +2021,8 @@ export async function buildServer(
       const query = MetaWebhookQuerySchema.parse(request.query);
       const adapter = metaAdapters[channel];
 
-      // When a Meta app secret is configured, every inbound webhook MUST carry a
-      // valid signature; otherwise reject. When it is NOT configured we log once
-      // and skip, so existing/dev setups keep working.
+      // Production must never accept unsigned Meta webhooks. Local/dev setups
+      // may omit the app secret while provider credentials are being prepared.
       if (options.metaAppSecret) {
         const rawBody =
           (request as RequestWithRawBody).rawBody ?? Buffer.alloc(0);
@@ -2029,6 +2039,14 @@ export async function buildServer(
           );
           return reply.code(401).send({ error: "Invalid webhook signature." });
         }
+      } else if (process.env.NODE_ENV === "production") {
+        request.log.error(
+          { channel },
+          "Rejected Meta webhook because META_APP_SECRET is not configured",
+        );
+        return reply.code(503).send({
+          error: "Meta webhook signature verification is not configured.",
+        });
       } else {
         request.log.warn(
           "META_APP_SECRET is not configured; skipping Meta webhook signature verification",
@@ -2167,7 +2185,7 @@ function requirePlatformOwner(options: BuildServerOptions) {
 
 function requireTenantAccess(
   options: BuildServerOptions,
-  minimumRole: RoleName = "viewer",
+  minimumRole: RoleName,
 ) {
   return async (request: FastifyRequest, reply: FastifyReply) => {
     const auth = await authenticateRequest(request, options);
@@ -2459,6 +2477,20 @@ function upsertAuthMembership(
 
 function roleAtLeast(role: RoleName, minimumRole: RoleName) {
   return roleRank(role) >= roleRank(minimumRole);
+}
+
+function canGrantTenantRole(
+  auth: RequestAuth,
+  tenantId: string,
+  targetRole: TenantRoleName,
+) {
+  if (auth.kind === "admin" || isPlatformOwner(auth)) {
+    return true;
+  }
+  const membership = auth.memberships.find(
+    (item) => item.tenantId === tenantId,
+  );
+  return membership ? roleAtLeast(membership.role, targetRole) : false;
 }
 
 function roleRank(role: RoleName) {

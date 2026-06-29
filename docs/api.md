@@ -2,11 +2,25 @@
 
 Base URL in local development: `http://localhost:4000`
 
-Admin endpoints require:
+Admin endpoints use project user sessions by default:
+
+```http
+cookie: assaddar_session=...
+```
+
+The bootstrap admin token is retained for initial setup and emergency platform administration:
 
 ```http
 x-admin-token: change-me-dev-admin-token
 ```
+
+Tenant role requirements:
+
+- `viewer`: read-only tenant data.
+- `operator`: lead, handoff, and assistant-test mutations.
+- `tenant_admin`: tenant settings, knowledge, channels, automation, WhatsApp templates, and user/invite management.
+- `tenant_owner`: tenant export and deletion.
+- `platform_owner` / bootstrap token: platform-wide tenant creation and administration.
 
 ## Health & Readiness
 
