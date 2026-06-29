@@ -11,12 +11,28 @@ create policy usage_events_tenant_isolation on usage_events
 
 -- Keep keyword retrieval in Postgres before the app performs deterministic
 -- re-ranking. The expression mirrors the search query in TenantRepository.
+create or replace function knowledge_chunk_search_text(
+  chunk_title text,
+  chunk_content text,
+  chunk_tags text[]
+)
+returns text
+language sql
+immutable
+parallel safe
+as $$
+  select
+    coalesce(chunk_title, '') || ' ' ||
+    coalesce(chunk_content, '') || ' ' ||
+    coalesce(array_to_string(chunk_tags, ' '), '')
+$$;
+
 create index if not exists knowledge_chunks_fts_idx
   on knowledge_chunks
   using gin (
     to_tsvector(
-      'simple',
-      coalesce(title, '') || ' ' || content || ' ' || array_to_string(tags, ' ')
+      'simple'::regconfig,
+      knowledge_chunk_search_text(title, content, tags)
     )
   )
   where status = 'approved';

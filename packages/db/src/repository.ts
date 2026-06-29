@@ -1459,8 +1459,8 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     }
     const requestedLimit = Math.max(limit, 1);
     const rowLimit = Math.max(requestedLimit * 5, requestedLimit);
-    const searchVector = sql`to_tsvector('simple', coalesce(${knowledgeChunks.title}, '') || ' ' || ${knowledgeChunks.content} || ' ' || array_to_string(${knowledgeChunks.tags}, ' '))`;
-    const searchQuery = sql`websearch_to_tsquery('simple', ${query})`;
+    const searchVector = sql`to_tsvector('simple'::regconfig, knowledge_chunk_search_text(${knowledgeChunks.title}, ${knowledgeChunks.content}, ${knowledgeChunks.tags}))`;
+    const searchQuery = sql`websearch_to_tsquery('simple'::regconfig, ${query})`;
     const ftsRows = query.trim()
       ? await this.db
           .select()
