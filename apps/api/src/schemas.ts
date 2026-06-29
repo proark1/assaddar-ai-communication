@@ -1,5 +1,20 @@
 import { z } from "zod";
 
+const SafeCssColorSchema = z
+  .string()
+  .trim()
+  .min(3)
+  .max(64)
+  .regex(/^[#a-zA-Z0-9\s.,()%+-]+$/)
+  .refine((value) => !/\b(?:expression|url|import)\s*\(/i.test(value), {
+    message: "CSS color must not include executable CSS functions.",
+  });
+
+const SafeLeadFieldNameSchema = z
+  .string()
+  .trim()
+  .regex(/^[A-Za-z][A-Za-z0-9_-]{0,39}$/);
+
 export const ParamsTenantSchema = z.object({
   tenantId: z.string().uuid(),
 });
@@ -83,9 +98,9 @@ export const AutomationSettingsSchema = z.object({
 });
 
 export const WidgetThemeSchema = z.object({
-  primaryColor: z.string().min(3).max(32).optional(),
-  backgroundColor: z.string().min(3).max(32).optional(),
-  textColor: z.string().min(3).max(32).optional(),
+  primaryColor: SafeCssColorSchema.optional(),
+  backgroundColor: SafeCssColorSchema.optional(),
+  textColor: SafeCssColorSchema.optional(),
   launcherLabel: z.string().min(1).max(40).optional(),
   openingMessage: z.string().min(1).max(500).optional(),
   language: z.string().min(2).max(16).optional(),
@@ -93,7 +108,7 @@ export const WidgetThemeSchema = z.object({
   assistantName: z.string().min(1).max(80).optional(),
   leadCaptureEnabled: z.boolean().optional(),
   leadCaptureIntro: z.string().min(1).max(500).optional(),
-  leadCaptureFields: z.array(z.string().min(1).max(40)).max(10).optional(),
+  leadCaptureFields: z.array(SafeLeadFieldNameSchema).max(10).optional(),
   ctaLabel: z.string().min(1).max(80).optional(),
   ctaUrl: z.string().url().max(500).optional(),
   bookingUrl: z.string().url().max(500).optional(),

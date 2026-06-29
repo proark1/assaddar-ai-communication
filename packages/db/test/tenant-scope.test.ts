@@ -7,6 +7,7 @@ describe("tenant scope helpers", () => {
       "knowledge_sources",
       "knowledge_documents",
       "knowledge_chunks",
+      "usage_events",
       "allowed_intents",
       "blocked_topics",
       "business_hours",

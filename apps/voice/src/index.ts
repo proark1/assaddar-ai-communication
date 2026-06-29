@@ -10,8 +10,11 @@ import {
 import { createAnswerEngine, InboundMessageSchema } from "@assaddar/core";
 import { createDbClient, TenantRepository } from "@assaddar/db";
 import formBody from "@fastify/formbody";
+import rateLimit from "@fastify/rate-limit";
 import Fastify from "fastify";
-import type { FastifyRequest } from "fastify";
+import type { FastifyReply, FastifyRequest } from "fastify";
+import { createHmac, timingSafeEqual } from "node:crypto";
+import { Readable } from "node:stream";
 import { z } from "zod";
 
 config({ path: new URL("../../../.env", import.meta.url) });
@@ -55,6 +58,15 @@ const transferPhoneNumber = process.env.TWILIO_TRANSFER_PHONE_NUMBER;
 const twilioVoiceLanguage = process.env.TWILIO_VOICE_LANGUAGE ?? "de-DE";
 const twilioVoiceName = process.env.TWILIO_VOICE_NAME ?? "alice";
 const twilioAuthToken = process.env.TWILIO_AUTH_TOKEN;
+const voiceEdgeSecret = process.env.VOICE_EDGE_SECRET;
+
+if (process.env.NODE_ENV === "production" && !voiceEdgeSecret) {
+  throw new Error(
+    "VOICE_EDGE_SECRET is required in production to authenticate /voice/turn.",
+  );
+}
+
+type RequestWithRawBody = FastifyRequest & { rawBody?: Buffer };
 
 /**
  * Reconstruct the externally-visible URL Twilio used when it signed the
@@ -122,6 +134,69 @@ function ensureValidTwilioSignature(
 
   return true;
 }
+
+function ensureValidVoiceEdgeSignature(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): boolean {
+  if (!voiceEdgeSecret) {
+    request.log.warn(
+      "VOICE_EDGE_SECRET is not set; skipping /voice/turn signature verification.",
+    );
+    return true;
+  }
+
+  const timestampHeader = firstHeader(
+    request.headers["x-voice-edge-timestamp"],
+  );
+  const signatureHeader = firstHeader(
+    request.headers["x-voice-edge-signature"],
+  );
+  if (!timestampHeader || !signatureHeader) {
+    reply.code(403).send({ error: "Missing voice edge signature." });
+    return false;
+  }
+
+  const timestamp = Number(timestampHeader);
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  if (
+    !Number.isFinite(timestamp) ||
+    Math.abs(nowSeconds - timestamp) > 5 * 60
+  ) {
+    reply.code(403).send({ error: "Stale voice edge signature." });
+    return false;
+  }
+
+  const rawBody = (request as RequestWithRawBody).rawBody ?? Buffer.alloc(0);
+  const expected = createHmac("sha256", voiceEdgeSecret)
+    .update(timestampHeader)
+    .update(".")
+    .update(rawBody)
+    .digest("hex");
+  const provided = signatureHeader.startsWith("sha256=")
+    ? signatureHeader.slice("sha256=".length)
+    : signatureHeader;
+  if (!timingSafeEqualHex(provided, expected)) {
+    request.log.warn("Rejected /voice/turn with invalid voice edge signature.");
+    reply.code(403).send({ error: "Invalid voice edge signature." });
+    return false;
+  }
+
+  return true;
+}
+
+function timingSafeEqualHex(provided: string, expected: string) {
+  const providedBuffer = Buffer.from(provided, "hex");
+  const expectedBuffer = Buffer.from(expected, "hex");
+  return (
+    providedBuffer.length === expectedBuffer.length &&
+    timingSafeEqual(providedBuffer, expectedBuffer)
+  );
+}
+
+function firstHeader(value: string | string[] | undefined) {
+  return Array.isArray(value) ? value[0] : value;
+}
 const client = createDbClient();
 const store = new TenantRepository(client.db);
 const engine = createAnswerEngine({
@@ -132,108 +207,134 @@ const adapter = new TwilioVoiceAdapter();
 const app = Fastify({ logger: true });
 
 await app.register(formBody);
+await app.register(rateLimit, {
+  max: Number(process.env.VOICE_RATE_LIMIT_MAX ?? 120),
+  timeWindow: process.env.VOICE_RATE_LIMIT_WINDOW ?? "1 minute",
+});
 
 app.get("/health", async () => ({
   ok: true,
   service: "assaddar-ai-communication-voice",
 }));
 
-app.post("/voice/turn", async (request, reply) => {
-  const query = VoiceQuerySchema.partial().parse(request.query);
-  const body = VoiceTurnBodySchema.parse(request.body);
-  const assistantId = body.assistantId ?? query.assistantId;
-  if (!assistantId) {
-    return reply.code(400).send({
-      error: "assistantId is required in the query string or JSON body.",
-    });
-  }
-
-  const tenant = await store.getTenantByPublicId(assistantId);
-  if (!tenant) {
-    return reply.code(404).send({ error: "Assistant is not available." });
-  }
-
-  const conversationInput: Parameters<
-    TenantRepository["findOrCreateConversation"]
-  >[0] = {
-    tenantId: tenant.id,
-    channel: "telephone",
-    locale: body.locale ?? tenant.defaultLocale,
-  };
-  if (body.callId) {
-    conversationInput.publicConversationId = body.callId;
-  }
-  if (body.from) {
-    conversationInput.externalUserId = body.from;
-  }
-
-  const conversation = await store.findOrCreateConversation(conversationInput);
-
-  await store.addMessage({
-    tenantId: tenant.id,
-    conversationId: conversation.id,
-    channel: "telephone",
-    direction: "inbound",
-    role: "user",
-    content: body.text,
-    trace: {
-      provider: body.provider,
-      from: body.from ?? null,
-      to: body.to ?? null,
-      metadata: body.metadata ?? {},
+app.post(
+  "/voice/turn",
+  {
+    config: {
+      rateLimit: { max: 30, timeWindow: "1 minute" },
     },
-  });
+    preParsing: async (request, _reply, payload) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of payload) {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      }
+      const raw = Buffer.concat(chunks);
+      (request as RequestWithRawBody).rawBody = raw;
+      return Readable.from([raw]);
+    },
+  },
+  async (request, reply) => {
+    if (!ensureValidVoiceEdgeSignature(request, reply)) {
+      return reply;
+    }
 
-  const answer = await engine.answer(
-    InboundMessageSchema.parse({
+    const query = VoiceQuerySchema.partial().parse(request.query);
+    const body = VoiceTurnBodySchema.parse(request.body);
+    const assistantId = body.assistantId ?? query.assistantId;
+    if (!assistantId) {
+      return reply.code(400).send({
+        error: "assistantId is required in the query string or JSON body.",
+      });
+    }
+
+    const tenant = await store.getTenantByPublicId(assistantId);
+    if (!tenant) {
+      return reply.code(404).send({ error: "Assistant is not available." });
+    }
+
+    const conversationInput: Parameters<
+      TenantRepository["findOrCreateConversation"]
+    >[0] = {
+      tenantId: tenant.id,
+      channel: "telephone",
+      locale: body.locale ?? tenant.defaultLocale,
+    };
+    if (body.callId) {
+      conversationInput.publicConversationId = body.callId;
+    }
+    if (body.from) {
+      conversationInput.externalUserId = body.from;
+    }
+
+    const conversation =
+      await store.findOrCreateConversation(conversationInput);
+
+    await store.addMessage({
       tenantId: tenant.id,
       conversationId: conversation.id,
       channel: "telephone",
-      externalUserId: body.from,
-      text: body.text,
-      locale: body.locale ?? tenant.defaultLocale,
-      metadata: {
+      direction: "inbound",
+      role: "user",
+      content: body.text,
+      trace: {
         provider: body.provider,
-        callId: body.callId ?? null,
+        from: body.from ?? null,
         to: body.to ?? null,
-        ...(body.metadata ?? {}),
+        metadata: body.metadata ?? {},
       },
-    }),
-  );
+    });
 
-  await store.addMessage({
-    tenantId: tenant.id,
-    conversationId: conversation.id,
-    channel: "telephone",
-    direction: "outbound",
-    role: "assistant",
-    content: answer.text,
-    trace: { answer },
-  });
+    const answer = await engine.answer(
+      InboundMessageSchema.parse({
+        tenantId: tenant.id,
+        conversationId: conversation.id,
+        channel: "telephone",
+        externalUserId: body.from,
+        text: body.text,
+        locale: body.locale ?? tenant.defaultLocale,
+        metadata: {
+          provider: body.provider,
+          callId: body.callId ?? null,
+          to: body.to ?? null,
+          ...(body.metadata ?? {}),
+        },
+      }),
+    );
 
-  await store.logUsage({
-    tenantId: tenant.id,
-    channel: "telephone",
-    eventType: answer.status,
-    credits: answer.usage.estimatedCredits,
-    metadata: {
-      intent: answer.intent,
+    await store.addMessage({
+      tenantId: tenant.id,
+      conversationId: conversation.id,
+      channel: "telephone",
+      direction: "outbound",
+      role: "assistant",
+      content: answer.text,
+      trace: { answer },
+    });
+
+    await store.logUsage({
+      tenantId: tenant.id,
+      channel: "telephone",
+      eventType: answer.status,
+      credits: answer.usage.estimatedCredits,
+      metadata: {
+        intent: answer.intent,
+        confidence: answer.confidence,
+        provider: body.provider,
+      },
+    });
+
+    return {
+      conversationId: conversation.id,
+      reply: answer.text,
+      status: answer.status,
       confidence: answer.confidence,
-      provider: body.provider,
-    },
-  });
-
-  return {
-    conversationId: conversation.id,
-    reply: answer.text,
-    status: answer.status,
-    confidence: answer.confidence,
-    handoffRecommended: answer.handoffRecommended,
-    transferPhoneNumber: answer.handoffRecommended
-      ? (transferPhoneNumber ?? null)
-      : null,
-  };
-});
+      handoffRecommended: answer.handoffRecommended,
+      transferPhoneNumber: answer.handoffRecommended
+        ? (transferPhoneNumber ?? null)
+        : null,
+    };
+  },
+);
 
 app.post("/twilio/voice", async (request, reply) => {
   if (!ensureValidTwilioSignature(request, reply)) {

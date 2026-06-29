@@ -66,6 +66,7 @@ import {
   normalizeTemplateName,
   retentionCutoff,
   roleDescription,
+  setTenantSession,
   titleCase,
 } from "./repository-helpers";
 
@@ -198,6 +199,132 @@ export type MessageRecord = typeof messages.$inferSelect;
 
 export type ContactRecord = typeof contacts.$inferSelect;
 
+export type ChannelConnectionRecord = typeof channelConnections.$inferSelect;
+
+export type TenantInviteRecord = typeof tenantInvites.$inferSelect;
+
+export type KnowledgeSourceRecord = typeof knowledgeSources.$inferSelect;
+
+export type KnowledgeDocumentRecord = typeof knowledgeDocuments.$inferSelect;
+
+export type KnowledgeChunkRecord = typeof knowledgeChunks.$inferSelect;
+
+export type MessageDeliveryRecord = typeof messageDeliveries.$inferSelect;
+
+export type HandoffRecord = typeof handoffRequests.$inferSelect;
+
+export type WhatsappTemplateRecord = typeof whatsappTemplates.$inferSelect;
+
+export type TenantUserSummary = {
+  id: string;
+  email: string;
+  name: string;
+  status: string;
+  role: string;
+  membershipStatus: string;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+export type UpsertTenantUserRecord = typeof users.$inferSelect & {
+  role: RoleName;
+  membershipId: string | null;
+};
+
+export type AddFaqResult = {
+  source: KnowledgeSourceRecord;
+  document: KnowledgeDocumentRecord;
+  chunk: KnowledgeChunkRecord;
+};
+
+export type KnowledgeListItem = Pick<
+  KnowledgeChunkRecord,
+  | "id"
+  | "documentId"
+  | "sourceId"
+  | "title"
+  | "content"
+  | "tags"
+  | "status"
+  | "metadata"
+  | "createdAt"
+  | "updatedAt"
+>;
+
+export type UnifiedInboxItem = {
+  id: string;
+  publicId: string;
+  channel: string;
+  status: string;
+  locale: string;
+  externalUserId: string | null;
+  summary: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  contact: ContactRecord | null;
+  lastMessage: {
+    id: string;
+    direction: string;
+    role: string;
+    content: string;
+    createdAt: Date;
+  } | null;
+  messageCount: number;
+  openHandoffs: Array<{
+    id: string;
+    reason: string;
+    status: string;
+    assignedTo: string | null;
+    createdAt: Date;
+  }>;
+  nextAction: ReturnType<typeof deriveConversationNextAction>;
+};
+
+export type TenantAnalyticsResult = {
+  conversations: number;
+  messages: number;
+  approvedKnowledge: number;
+  openHandoffs: number;
+  totalHandoffs: number;
+  contacts: number;
+  lastConversationAt: Date | null;
+  lastMessageAt: Date | null;
+  usageByStatus: Array<{
+    eventType: string;
+    total: number;
+    credits: number;
+  }>;
+};
+
+export type WhatsappComplianceResult = {
+  lastInboundAt: Date | null;
+  windowClosesAt: Date | null;
+  canUseFreeformReply: boolean;
+  templates: {
+    total: number;
+    approved: number;
+    draft: number;
+    needsAttention: number;
+  };
+  recentDeliveries: Array<
+    Pick<
+      MessageDeliveryRecord,
+      "id" | "providerMessageId" | "status" | "detail" | "createdAt"
+    >
+  >;
+};
+
+export type TenantExportData = {
+  tenant: TenantSummary | null;
+  knowledge: KnowledgeListItem[];
+  conversations: ConversationRecord[];
+  messages: MessageRecord[];
+  handoffRequests: HandoffRecord[];
+  contacts: ContactRecord[];
+  messageDeliveries: MessageDeliveryRecord[];
+  whatsappTemplates: WhatsappTemplateRecord[];
+};
+
 export type ChannelConnectionInput = {
   channel: Channel;
   provider: string;
@@ -205,6 +332,39 @@ export type ChannelConnectionInput = {
   status?: "pending" | "connected" | "disabled" | undefined;
   settings?: Record<string, unknown> | undefined;
 };
+
+const secretLikeSettingsKeyPattern =
+  /token|secret|password|api[_-]?key|apikey|authorization|credential|private[_-]?key/i;
+
+function rejectSecretSettings<T extends Record<string, unknown>>(
+  settings: T,
+): T {
+  assertNoSecretSettings(settings);
+  return settings;
+}
+
+function assertNoSecretSettings(value: unknown, path: string[] = []) {
+  if (!value || typeof value !== "object") {
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item, index) =>
+      assertNoSecretSettings(item, [...path, String(index)]),
+    );
+    return;
+  }
+  for (const [key, entry] of Object.entries(value)) {
+    if (secretLikeSettingsKeyPattern.test(key)) {
+      throw new Error(
+        `Channel connection settings must not contain secret-like key "${[
+          ...path,
+          key,
+        ].join(".")}". Store provider credentials in a secret manager.`,
+      );
+    }
+    assertNoSecretSettings(entry, [...path, key]);
+  }
+}
 
 export type ContactProfileInput = {
   displayName?: string | null | undefined;
@@ -243,10 +403,13 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
   private readonly db: DbExecutor;
   /** The root db, used to open transactions. Same object as `db` at the root. */
   private readonly rootDb: Database;
+  /** Tenant id already set on the current transaction via app.current_tenant_id. */
+  private readonly tenantScope: string | undefined;
 
-  constructor(db: Database, executor: DbExecutor = db) {
+  constructor(db: Database, executor: DbExecutor = db, tenantScope?: string) {
     this.rootDb = db;
     this.db = executor;
+    this.tenantScope = tenantScope;
   }
 
   /**
@@ -262,36 +425,69 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       return fn(this);
     }
     return this.rootDb.transaction((tx: Transaction) =>
-      fn(new TenantRepository(this.rootDb, tx)),
+      fn(new TenantRepository(this.rootDb, tx, this.tenantScope)),
     );
   }
 
-  async createTenant(input: CreateTenantInput) {
-    const [tenant] = await this.db
-      .insert(tenants)
-      .values({
-        name: input.name,
-        slug: input.slug,
-        publicId: createPublicAssistantId(),
-        defaultLocale: input.defaultLocale ?? "en",
-        theme: input.theme ?? {
-          primaryColor: "#155eef",
-          openingMessage: "Hi, how can I help?",
-        },
-      })
-      .returning();
-
-    if (!tenant) {
-      throw new Error("Failed to create tenant.");
+  private async withTenantScope<T>(
+    tenantId: string,
+    fn: (repo: TenantRepository) => Promise<T>,
+  ): Promise<T> {
+    assertTenantId(tenantId);
+    if (this.tenantScope === tenantId) {
+      return fn(this);
     }
-
-    await this.createDefaultEscalationRule(tenant.id);
-    await this.audit(tenant.id, "tenant.created", "tenant", tenant.id, {
-      name: tenant.name,
-      slug: tenant.slug,
+    if (this.db !== this.rootDb) {
+      await setTenantSession(this.db, tenantId);
+      return fn(new TenantRepository(this.rootDb, this.db, tenantId));
+    }
+    return this.rootDb.transaction(async (tx: Transaction) => {
+      await setTenantSession(tx, tenantId);
+      return fn(new TenantRepository(this.rootDb, tx, tenantId));
     });
+  }
 
-    return tenant;
+  private needsTenantScope(tenantId: string) {
+    assertTenantId(tenantId);
+    return this.tenantScope !== tenantId;
+  }
+
+  async createTenant(input: CreateTenantInput) {
+    return this.withTransaction(async (repo) => {
+      const [tenant] = await repo.db
+        .insert(tenants)
+        .values({
+          name: input.name,
+          slug: input.slug,
+          publicId: createPublicAssistantId(),
+          defaultLocale: input.defaultLocale ?? "en",
+          theme: input.theme ?? {
+            primaryColor: "#155eef",
+            openingMessage: "Hi, how can I help?",
+          },
+        })
+        .returning();
+
+      if (!tenant) {
+        throw new Error("Failed to create tenant.");
+      }
+
+      await repo.withTenantScope(tenant.id, async (scopedRepo) => {
+        await scopedRepo.createDefaultEscalationRule(tenant.id);
+        await scopedRepo.audit(
+          tenant.id,
+          "tenant.created",
+          "tenant",
+          tenant.id,
+          {
+            name: tenant.name,
+            slug: tenant.slug,
+          },
+        );
+      });
+
+      return tenant;
+    });
   }
 
   async listTenants() {
@@ -392,8 +588,15 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     return tenant;
   }
 
-  async listChannelConnections(tenantId: string) {
+  async listChannelConnections(
+    tenantId: string,
+  ): Promise<ChannelConnectionRecord[]> {
     assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<ChannelConnectionRecord[]>(tenantId, (repo) =>
+        repo.listChannelConnections(tenantId),
+      );
+    }
     return this.db
       .select()
       .from(channelConnections)
@@ -404,15 +607,20 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
   async upsertChannelConnection(
     tenantId: string,
     input: ChannelConnectionInput,
-  ) {
+  ): Promise<ChannelConnectionRecord> {
     assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<ChannelConnectionRecord>(tenantId, (repo) =>
+        repo.upsertChannelConnection(tenantId, input),
+      );
+    }
     const values = {
       tenantId,
       channel: input.channel,
       provider: input.provider,
       externalAccountId: input.externalAccountId?.trim() || null,
       status: input.status ?? "pending",
-      settings: input.settings ?? {},
+      settings: rejectSecretSettings(input.settings ?? {}),
       updatedAt: sql`now()`,
     };
 
@@ -655,8 +863,17 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     }));
   }
 
-  async getTenantMembership(userId: string, tenantId: string) {
+  async getTenantMembership(
+    userId: string,
+    tenantId: string,
+  ): Promise<TenantMembershipSummary | null> {
     assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<TenantMembershipSummary | null>(
+        tenantId,
+        (repo) => repo.getTenantMembership(userId, tenantId),
+      );
+    }
     const [membership] = await this.db
       .select({
         tenantId: memberships.tenantId,
@@ -686,8 +903,16 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       : null;
   }
 
-  async listTenantUsers(tenantId: string, options?: PaginationOptions) {
+  async listTenantUsers(
+    tenantId: string,
+    options?: PaginationOptions,
+  ): Promise<TenantUserSummary[]> {
     assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<TenantUserSummary[]>(tenantId, (repo) =>
+        repo.listTenantUsers(tenantId, options),
+      );
+    }
     const { limit, offset } = resolvePagination(options);
     return this.db
       .select({
@@ -709,8 +934,16 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       .offset(offset);
   }
 
-  async upsertTenantUser(tenantId: string, input: UpsertTenantUserInput) {
+  async upsertTenantUser(
+    tenantId: string,
+    input: UpsertTenantUserInput,
+  ): Promise<UpsertTenantUserRecord> {
     assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<UpsertTenantUserRecord>(tenantId, (repo) =>
+        repo.upsertTenantUser(tenantId, input),
+      );
+    }
     const email = normalizeEmail(input.email);
     if (!email) {
       throw new Error("Valid email is required.");
@@ -777,8 +1010,16 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     };
   }
 
-  async createTenantInvite(tenantId: string, input: CreateTenantInviteInput) {
+  async createTenantInvite(
+    tenantId: string,
+    input: CreateTenantInviteInput,
+  ): Promise<TenantInviteRecord> {
     assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<TenantInviteRecord>(tenantId, (repo) =>
+        repo.createTenantInvite(tenantId, input),
+      );
+    }
     const email = normalizeEmail(input.email);
     if (!email) {
       throw new Error("Valid email is required.");
@@ -814,8 +1055,13 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     return invite;
   }
 
-  async listTenantInvites(tenantId: string) {
+  async listTenantInvites(tenantId: string): Promise<TenantInviteRecord[]> {
     assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<TenantInviteRecord[]>(tenantId, (repo) =>
+        repo.listTenantInvites(tenantId),
+      );
+    }
     return this.db
       .select()
       .from(tenantInvites)
@@ -883,8 +1129,13 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     });
   }
 
-  async addFaq(tenantId: string, input: AddFaqInput) {
+  async addFaq(tenantId: string, input: AddFaqInput): Promise<AddFaqResult> {
     assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<AddFaqResult>(tenantId, (repo) =>
+        repo.addFaq(tenantId, input),
+      );
+    }
     const tenant = await this.getTenant(tenantId);
     if (!tenant) {
       throw new Error("Tenant not found.");
@@ -958,8 +1209,16 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     return { source, document, chunk };
   }
 
-  async listKnowledge(tenantId: string, options?: PaginationOptions) {
+  async listKnowledge(
+    tenantId: string,
+    options?: PaginationOptions,
+  ): Promise<KnowledgeListItem[]> {
     assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<KnowledgeListItem[]>(tenantId, (repo) =>
+        repo.listKnowledge(tenantId, options),
+      );
+    }
     const { limit, offset } = resolvePagination(options);
     return this.db
       .select({
@@ -985,8 +1244,14 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     tenantId: string,
     knowledgeId: string,
     input: UpdateFaqInput,
-  ) {
+  ): Promise<KnowledgeChunkRecord | undefined> {
     assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<KnowledgeChunkRecord | undefined>(
+        tenantId,
+        (repo) => repo.updateFaq(tenantId, knowledgeId, input),
+      );
+    }
     const [chunk] = await this.db
       .select()
       .from(knowledgeChunks)
@@ -1053,8 +1318,13 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     return updatedChunk;
   }
 
-  async deleteKnowledge(tenantId: string, knowledgeId: string) {
+  async deleteKnowledge(tenantId: string, knowledgeId: string): Promise<void> {
     assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<void>(tenantId, (repo) =>
+        repo.deleteKnowledge(tenantId, knowledgeId),
+      );
+    }
     const [chunk] = await this.db
       .select()
       .from(knowledgeChunks)
@@ -1092,6 +1362,11 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
 
   async getTenantPolicy(tenantId: string): Promise<TenantPolicy> {
     assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope(tenantId, (repo) =>
+        repo.getTenantPolicy(tenantId),
+      );
+    }
     const tenant = await this.getTenant(tenantId);
     if (!tenant) {
       throw new Error("Tenant not found.");
@@ -1177,16 +1452,43 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     limit: number,
   ): Promise<KnowledgeChunk[]> {
     assertTenantId(tenantId);
-    const rows = await this.db
-      .select()
-      .from(knowledgeChunks)
-      .where(
-        and(
-          eq(knowledgeChunks.tenantId, tenantId),
-          eq(knowledgeChunks.status, "approved"),
-        ),
-      )
-      .limit(Math.max(limit * 5, limit));
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope(tenantId, (repo) =>
+        repo.searchKnowledge(tenantId, query, limit),
+      );
+    }
+    const requestedLimit = Math.max(limit, 1);
+    const rowLimit = Math.max(requestedLimit * 5, requestedLimit);
+    const searchVector = sql`to_tsvector('simple', coalesce(${knowledgeChunks.title}, '') || ' ' || ${knowledgeChunks.content} || ' ' || array_to_string(${knowledgeChunks.tags}, ' '))`;
+    const searchQuery = sql`websearch_to_tsquery('simple', ${query})`;
+    const ftsRows = query.trim()
+      ? await this.db
+          .select()
+          .from(knowledgeChunks)
+          .where(
+            and(
+              eq(knowledgeChunks.tenantId, tenantId),
+              eq(knowledgeChunks.status, "approved"),
+              sql`${searchVector} @@ ${searchQuery}`,
+            ),
+          )
+          .orderBy(sql`ts_rank_cd(${searchVector}, ${searchQuery}) desc`)
+          .limit(rowLimit)
+      : [];
+
+    const rows =
+      ftsRows.length > 0
+        ? ftsRows
+        : await this.db
+            .select()
+            .from(knowledgeChunks)
+            .where(
+              and(
+                eq(knowledgeChunks.tenantId, tenantId),
+                eq(knowledgeChunks.status, "approved"),
+              ),
+            )
+            .limit(rowLimit);
 
     return rankChunks(
       query,
@@ -1205,7 +1507,7 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
         }
         return chunk;
       }),
-    ).slice(0, limit);
+    ).slice(0, requestedLimit);
   }
 
   /**
@@ -1219,6 +1521,11 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     limit: number,
   ): Promise<RetrievedChunk[]> {
     assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope(tenantId, (repo) =>
+        repo.searchKnowledgeByEmbedding(tenantId, embedding, limit),
+      );
+    }
     if (embedding.length === 0) {
       return [];
     }
@@ -1272,6 +1579,11 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     embedding: number[],
   ): Promise<void> {
     assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope(tenantId, (repo) =>
+        repo.setChunkEmbedding(tenantId, chunkId, embedding),
+      );
+    }
     await this.db
       .update(knowledgeChunks)
       .set({ embedding, updatedAt: sql`now()` })
@@ -1289,6 +1601,11 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     chunkIds: string[],
   ): Promise<Array<Pick<KnowledgeChunk, "id" | "title" | "content">>> {
     assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope(tenantId, (repo) =>
+        repo.listChunksForEmbedding(tenantId, chunkIds),
+      );
+    }
     if (chunkIds.length === 0) {
       return [];
     }
@@ -1326,6 +1643,11 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     limit = 200,
   ): Promise<Array<Pick<KnowledgeChunk, "id" | "title" | "content">>> {
     assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope(tenantId, (repo) =>
+        repo.listChunksMissingEmbedding(tenantId, limit),
+      );
+    }
     const rows = await this.db
       .select({
         id: knowledgeChunks.id,
@@ -1363,6 +1685,11 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     contact?: ContactProfileInput;
   }): Promise<ConversationRecord> {
     assertTenantId(input.tenantId);
+    if (this.needsTenantScope(input.tenantId)) {
+      return this.withTenantScope(input.tenantId, (repo) =>
+        repo.findOrCreateConversation(input),
+      );
+    }
     const contact = await this.resolveContactForConversation({
       tenantId: input.tenantId,
       channel: input.channel,
@@ -1425,8 +1752,14 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     channel?: Channel;
     externalUserId?: string | null;
     contact: ContactProfileInput;
-  }) {
+  }): Promise<ContactRecord | null> {
     assertTenantId(input.tenantId);
+    if (this.needsTenantScope(input.tenantId)) {
+      return this.withTenantScope<ContactRecord | null>(
+        input.tenantId,
+        (repo) => repo.enrichConversationContact(input),
+      );
+    }
     const [conversation] = await this.db
       .select()
       .from(conversations)
@@ -1493,6 +1826,11 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     trace?: Record<string, unknown>;
   }): Promise<MessageRecord> {
     assertTenantId(input.tenantId);
+    if (this.needsTenantScope(input.tenantId)) {
+      return this.withTenantScope(input.tenantId, (repo) =>
+        repo.addMessage(input),
+      );
+    }
     const [message] = await this.db
       .insert(messages)
       .values({
@@ -1523,8 +1861,14 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     status: string;
     detail?: string | null;
     metadata?: Record<string, unknown>;
-  }) {
+  }): Promise<MessageDeliveryRecord | undefined> {
     assertTenantId(input.tenantId);
+    if (this.needsTenantScope(input.tenantId)) {
+      return this.withTenantScope<MessageDeliveryRecord | undefined>(
+        input.tenantId,
+        (repo) => repo.recordMessageDelivery(input),
+      );
+    }
     const [delivery] = await this.db
       .insert(messageDeliveries)
       .values({
@@ -1543,8 +1887,16 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     return delivery;
   }
 
-  async listConversationMessages(tenantId: string, conversationId: string) {
+  async listConversationMessages(
+    tenantId: string,
+    conversationId: string,
+  ): Promise<MessageRecord[]> {
     assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<MessageRecord[]>(tenantId, (repo) =>
+        repo.listConversationMessages(tenantId, conversationId),
+      );
+    }
     return this.db
       .select()
       .from(messages)
@@ -1557,8 +1909,16 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       .orderBy(messages.createdAt);
   }
 
-  async listConversations(tenantId: string, options?: PaginationOptions) {
+  async listConversations(
+    tenantId: string,
+    options?: PaginationOptions,
+  ): Promise<ConversationRecord[]> {
     assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<ConversationRecord[]>(tenantId, (repo) =>
+        repo.listConversations(tenantId, options),
+      );
+    }
     const { limit, offset } = resolvePagination(options);
     return this.db
       .select()
@@ -1569,8 +1929,16 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       .offset(offset);
   }
 
-  async listUnifiedInbox(tenantId: string, options?: PaginationOptions) {
+  async listUnifiedInbox(
+    tenantId: string,
+    options?: PaginationOptions,
+  ): Promise<UnifiedInboxItem[]> {
     assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<UnifiedInboxItem[]>(tenantId, (repo) =>
+        repo.listUnifiedInbox(tenantId, options),
+      );
+    }
     const { limit, offset } = resolvePagination(options);
     // Fetch enough recent messages to summarise the conversations on this page.
     // Scales with the page size rather than the hard-coded 400 it used before.
@@ -1681,8 +2049,16 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     });
   }
 
-  async listContacts(tenantId: string, options?: PaginationOptions) {
+  async listContacts(
+    tenantId: string,
+    options?: PaginationOptions,
+  ): Promise<ContactRecord[]> {
     assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<ContactRecord[]>(tenantId, (repo) =>
+        repo.listContacts(tenantId, options),
+      );
+    }
     const { limit, offset } = resolvePagination(options);
     return this.db
       .select()
@@ -1693,8 +2069,16 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       .offset(offset);
   }
 
-  async listHandoffs(tenantId: string, options?: PaginationOptions) {
+  async listHandoffs(
+    tenantId: string,
+    options?: PaginationOptions,
+  ): Promise<HandoffRecord[]> {
     assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<HandoffRecord[]>(tenantId, (repo) =>
+        repo.listHandoffs(tenantId, options),
+      );
+    }
     const { limit, offset } = resolvePagination(options);
     return this.db
       .select()
@@ -1721,8 +2105,13 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
         | undefined;
       note?: string | undefined;
     },
-  ) {
+  ): Promise<HandoffRecord> {
     assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<HandoffRecord>(tenantId, (repo) =>
+        repo.updateHandoff(tenantId, handoffId, input),
+      );
+    }
     const [existing] = await this.db
       .select()
       .from(handoffRequests)
@@ -1803,8 +2192,13 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     return handoff;
   }
 
-  async createHandoff(input: HandoffInput) {
+  async createHandoff(input: HandoffInput): Promise<HandoffRecord> {
     assertTenantId(input.tenantId);
+    if (this.needsTenantScope(input.tenantId)) {
+      return this.withTenantScope<HandoffRecord>(input.tenantId, (repo) =>
+        repo.createHandoff(input),
+      );
+    }
     const metadata =
       input.reason === "lead_capture" || input.reason === "readiness_assessment"
         ? { pipelineStage: "new", ...(input.metadata ?? {}) }
@@ -1821,6 +2215,10 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
         metadata,
       })
       .returning();
+
+    if (!handoff) {
+      throw new Error("Failed to create handoff request.");
+    }
 
     return handoff;
   }
@@ -1855,6 +2253,11 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     handoff: typeof handoffRequests.$inferSelect | undefined;
   }> {
     assertTenantId(input.tenantId);
+    if (this.needsTenantScope(input.tenantId)) {
+      return this.withTenantScope(input.tenantId, (repo) =>
+        repo.captureWebsiteLead(input),
+      );
+    }
     return this.withTransaction(async (repo) => {
       const conversationInput: Parameters<
         TenantRepository["findOrCreateConversation"]
@@ -1991,8 +2394,13 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     credits: number;
     estimatedCostCents?: number;
     metadata?: Record<string, unknown>;
-  }) {
+  }): Promise<void> {
     assertTenantId(input.tenantId);
+    if (this.needsTenantScope(input.tenantId)) {
+      return this.withTenantScope<void>(input.tenantId, (repo) =>
+        repo.logUsage(input),
+      );
+    }
     await this.db.insert(usageEvents).values({
       tenantId: input.tenantId,
       channel: input.channel,
@@ -2003,8 +2411,13 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     });
   }
 
-  async getTenantAnalytics(tenantId: string) {
+  async getTenantAnalytics(tenantId: string): Promise<TenantAnalyticsResult> {
     assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<TenantAnalyticsResult>(tenantId, (repo) =>
+        repo.getTenantAnalytics(tenantId),
+      );
+    }
     const [
       [conversationStats],
       [messageStats],
@@ -2086,8 +2499,15 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     };
   }
 
-  async listWhatsappTemplates(tenantId: string) {
+  async listWhatsappTemplates(
+    tenantId: string,
+  ): Promise<WhatsappTemplateRecord[]> {
     assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<WhatsappTemplateRecord[]>(tenantId, (repo) =>
+        repo.listWhatsappTemplates(tenantId),
+      );
+    }
     return this.db
       .select()
       .from(whatsappTemplates)
@@ -2095,8 +2515,16 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       .orderBy(desc(whatsappTemplates.updatedAt));
   }
 
-  async upsertWhatsappTemplate(tenantId: string, input: WhatsappTemplateInput) {
+  async upsertWhatsappTemplate(
+    tenantId: string,
+    input: WhatsappTemplateInput,
+  ): Promise<WhatsappTemplateRecord> {
     assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<WhatsappTemplateRecord>(tenantId, (repo) =>
+        repo.upsertWhatsappTemplate(tenantId, input),
+      );
+    }
     const values = {
       tenantId,
       name: normalizeTemplateName(input.name),
@@ -2150,8 +2578,15 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     return template;
   }
 
-  async getWhatsappCompliance(tenantId: string) {
+  async getWhatsappCompliance(
+    tenantId: string,
+  ): Promise<WhatsappComplianceResult> {
     assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<WhatsappComplianceResult>(tenantId, (repo) =>
+        repo.getWhatsappCompliance(tenantId),
+      );
+    }
     const [recentInbound, templates, deliveries] = await Promise.all([
       this.db
         .select()
@@ -2219,8 +2654,13 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
    * tenant-scoped personal-data tables (deliveries, contacts already present,
    * WhatsApp templates) so the export is actually complete.
    */
-  async exportTenantData(tenantId: string) {
+  async exportTenantData(tenantId: string): Promise<TenantExportData> {
     assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<TenantExportData>(tenantId, (repo) =>
+        repo.exportTenantData(tenantId),
+      );
+    }
     const [
       tenant,
       knowledge,
@@ -2268,8 +2708,13 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     };
   }
 
-  async deleteTenantData(tenantId: string) {
+  async deleteTenantData(tenantId: string): Promise<void> {
     assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<void>(tenantId, (repo) =>
+        repo.deleteTenantData(tenantId),
+      );
+    }
     await this.db.delete(tenants).where(eq(tenants.id, tenantId));
   }
 
@@ -2301,6 +2746,11 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     options: { now?: Date; retentionDays?: number } = {},
   ): Promise<{ cutoff: Date | null; deletedConversations: number }> {
     assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope(tenantId, (repo) =>
+        repo.deleteTenantDataOlderThanRetention(tenantId, options),
+      );
+    }
     const tenant = await this.getTenant(tenantId);
     if (!tenant) {
       throw new Error("Tenant not found.");

@@ -6,7 +6,7 @@
  */
 import { sql } from "drizzle-orm";
 import type { Channel } from "@assaddar/core";
-import type { Database } from "./client";
+import type { DbExecutor } from "./client";
 import type { ContactProfileInput, RoleName } from "./repository";
 import { assertTenantId } from "./tenant-scope";
 
@@ -220,7 +220,7 @@ export function retentionCutoff(
   return new Date(now.getTime() - retentionDays * millisPerDay);
 }
 
-export async function setTenantSession(db: Database, tenantId: string) {
+export async function setTenantSession(db: DbExecutor, tenantId: string) {
   assertTenantId(tenantId);
   await db.execute(
     sql`select set_config('app.current_tenant_id', ${tenantId}, true)`,

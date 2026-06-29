@@ -20,6 +20,8 @@ export type EmbeddingProviderEnv = {
   OPENAI_API_KEY?: string;
   OPENAI_EMBEDDING_MODEL?: string;
   OPENAI_BASE_URL?: string;
+  OPENAI_EMBEDDING_TIMEOUT_MS?: string;
+  OPENAI_TIMEOUT_MS?: string;
 };
 
 class OpenAIEmbeddingProvider implements EmbeddingProvider {
@@ -27,11 +29,18 @@ class OpenAIEmbeddingProvider implements EmbeddingProvider {
   readonly dimensions = EMBEDDING_DIMENSIONS;
   private readonly apiKey: string;
   private readonly baseUrl: string;
+  private readonly timeoutMs: number;
 
-  constructor(apiKey: string, model: string, baseUrl: string) {
+  constructor(
+    apiKey: string,
+    model: string,
+    baseUrl: string,
+    timeoutMs: number,
+  ) {
     this.apiKey = apiKey;
     this.model = model;
     this.baseUrl = baseUrl.replace(/\/$/, "");
+    this.timeoutMs = timeoutMs;
   }
 
   async embed(texts: string[]): Promise<number[][]> {
@@ -49,6 +58,7 @@ class OpenAIEmbeddingProvider implements EmbeddingProvider {
         input: texts,
         dimensions: this.dimensions,
       }),
+      signal: AbortSignal.timeout(this.timeoutMs),
     });
     if (!response.ok) {
       const detail = await response.text().catch(() => "");
@@ -77,7 +87,19 @@ export function createEmbeddingProvider(
   }
   const model = env.OPENAI_EMBEDDING_MODEL?.trim() || "text-embedding-3-small";
   const baseUrl = env.OPENAI_BASE_URL?.trim() || "https://api.openai.com/v1";
-  return new OpenAIEmbeddingProvider(apiKey, model, baseUrl);
+  const timeoutMs = readTimeoutMs(
+    env.OPENAI_EMBEDDING_TIMEOUT_MS ?? env.OPENAI_TIMEOUT_MS,
+    10_000,
+  );
+  return new OpenAIEmbeddingProvider(apiKey, model, baseUrl, timeoutMs);
+}
+
+function readTimeoutMs(value: string | undefined, fallback: number) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 1_000 || parsed > 60_000) {
+    return fallback;
+  }
+  return Math.trunc(parsed);
 }
 
 /** Cosine similarity in [-1, 1]; used for in-memory scoring and tests. */

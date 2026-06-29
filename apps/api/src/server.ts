@@ -22,6 +22,7 @@ import Fastify, {
 } from "fastify";
 import { Buffer } from "node:buffer";
 import { createHash, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
+import { lookup } from "node:dns/promises";
 import net from "node:net";
 import { Readable } from "node:stream";
 import tls from "node:tls";
@@ -448,6 +449,11 @@ export async function buildServer(
   });
 
   const allowedOrigins = options.allowedOrigins ?? [];
+  if (allowedOrigins.includes("*") && process.env.NODE_ENV === "production") {
+    throw new Error(
+      "WIDGET_ALLOWED_ORIGINS must not contain '*' when credentialed CORS is enabled in production.",
+    );
+  }
   await app.register(cors, {
     credentials: true,
     origin(origin, callback) {
@@ -559,6 +565,9 @@ export async function buildServer(
       },
     },
     async (request, reply) => {
+      if (!isTrustedStateChangeOrigin(request, options)) {
+        return reply.code(403).send({ error: "Untrusted request origin." });
+      }
       const body = LoginSchema.parse(request.body);
       const user = await options.store.findUserByEmailForAuth(body.email);
       if (
@@ -590,6 +599,12 @@ export async function buildServer(
   );
 
   app.post("/auth/logout", async (request, reply) => {
+    if (
+      getSessionToken(request) &&
+      !isTrustedStateChangeOrigin(request, options)
+    ) {
+      return reply.code(403).send({ error: "Untrusted request origin." });
+    }
     const token = getSessionToken(request);
     if (token) {
       await options.store.deleteUserSession(hashSecret(token));
@@ -605,6 +620,9 @@ export async function buildServer(
   );
 
   app.post("/auth/invites/accept", async (request, reply) => {
+    if (!isTrustedStateChangeOrigin(request, options)) {
+      return reply.code(403).send({ error: "Untrusted request origin." });
+    }
     const body = AcceptTenantInviteSchema.parse(request.body);
     const user = await options.store.acceptTenantInvite({
       tokenHash: hashSecret(body.token),
@@ -2127,6 +2145,9 @@ function requireAuth(options: BuildServerOptions) {
     if (!auth) {
       return reply.code(401).send({ error: "Unauthorized." });
     }
+    if (!authorizeCredentialedStateChange(request, reply, options, auth)) {
+      return;
+    }
     requestAuthContext.set(request, auth);
   };
 }
@@ -2136,6 +2157,9 @@ function requirePlatformOwner(options: BuildServerOptions) {
     const auth = await authenticateRequest(request, options);
     if (!auth || !isPlatformOwner(auth)) {
       return reply.code(403).send({ error: "Forbidden." });
+    }
+    if (!authorizeCredentialedStateChange(request, reply, options, auth)) {
+      return;
     }
     requestAuthContext.set(request, auth);
   };
@@ -2149,6 +2173,9 @@ function requireTenantAccess(
     const auth = await authenticateRequest(request, options);
     if (!auth) {
       return reply.code(401).send({ error: "Unauthorized." });
+    }
+    if (!authorizeCredentialedStateChange(request, reply, options, auth)) {
+      return;
     }
     if (auth.kind === "admin" || isPlatformOwner(auth)) {
       requestAuthContext.set(request, auth);
@@ -2175,7 +2202,10 @@ async function authenticateRequest(
   options: BuildServerOptions,
 ): Promise<RequestAuth | null> {
   const adminToken = request.headers["x-admin-token"];
-  if (adminToken === options.adminToken) {
+  if (
+    typeof adminToken === "string" &&
+    safeCompareSecret(adminToken, options.adminToken)
+  ) {
     return {
       kind: "admin",
       user: {
@@ -2202,6 +2232,68 @@ async function authenticateRequest(
     user: session.user,
     memberships: session.memberships,
   };
+}
+
+const safeHttpMethods = new Set(["GET", "HEAD", "OPTIONS"]);
+
+function authorizeCredentialedStateChange(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  options: BuildServerOptions,
+  auth: RequestAuth,
+) {
+  if (auth.kind !== "user" || safeHttpMethods.has(request.method)) {
+    return true;
+  }
+  if (isTrustedStateChangeOrigin(request, options)) {
+    return true;
+  }
+  reply.code(403).send({ error: "Untrusted request origin." });
+  return false;
+}
+
+function isTrustedStateChangeOrigin(
+  request: FastifyRequest,
+  options: BuildServerOptions,
+) {
+  const origin = firstHeader(request.headers.origin);
+  if (!origin) {
+    return process.env.NODE_ENV !== "production";
+  }
+  const allowedOrigins = options.allowedOrigins ?? [];
+  if (
+    allowedOrigins.includes(origin) ||
+    (allowedOrigins.includes("*") && process.env.NODE_ENV !== "production")
+  ) {
+    return true;
+  }
+  const sameHostOrigin = requestOriginFromHost(request);
+  return Boolean(sameHostOrigin && sameHostOrigin === origin);
+}
+
+function requestOriginFromHost(request: FastifyRequest) {
+  const host = firstHeader(request.headers.host);
+  if (!host) {
+    return null;
+  }
+  const proto = firstHeader(request.headers["x-forwarded-proto"]) ?? "http";
+  return `${proto.split(",")[0]?.trim() ?? "http"}://${host}`;
+}
+
+function firstHeader(value: string | string[] | undefined) {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function safeCompareSecret(provided: string, expected: string) {
+  if (!expected) {
+    return false;
+  }
+  const providedBuffer = Buffer.from(provided);
+  const expectedBuffer = Buffer.from(expected);
+  return (
+    providedBuffer.length === expectedBuffer.length &&
+    timingSafeEqual(providedBuffer, expectedBuffer)
+  );
 }
 
 function getRequestAuth(request: FastifyRequest) {
@@ -3044,7 +3136,7 @@ function buildChannelConnectionDashboard(input: {
         typeof connection?.externalAccountId === "string"
           ? connection.externalAccountId
           : null,
-      settings: asRecord(connection?.settings),
+      settings: redactSecretSettings(asRecord(connection?.settings)),
       updatedAt: connection?.updatedAt,
       ...dashboardExtras,
     };
@@ -3321,27 +3413,138 @@ async function crawlTextDocuments(url: string, maxPages: number) {
   ];
 }
 
-async function fetchTextDocument(url: string) {
+async function fetchTextDocument(url: string, redirectsRemaining = 3) {
   const parsed = new URL(url);
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new Error("Only HTTP and HTTPS URLs can be scanned.");
-  }
+  await assertPublicHttpScanUrl(parsed);
 
   const response = await fetch(parsed.toString(), {
     headers: {
       accept: "text/html,application/xhtml+xml,text/plain;q=0.8,*/*;q=0.5",
       "user-agent": "AssaddarAI-WebsiteScanner/1.0",
     },
-    redirect: "follow",
+    redirect: "manual",
     signal: AbortSignal.timeout(10_000),
   });
-  const html = (await response.text()).slice(0, 900_000);
+  if (isRedirect(response.status)) {
+    if (redirectsRemaining <= 0) {
+      throw new Error("Too many redirects while scanning URL.");
+    }
+    const location = response.headers.get("location");
+    if (!location) {
+      throw new Error("Redirect response did not include a Location header.");
+    }
+    return fetchTextDocument(
+      new URL(location, parsed).toString(),
+      redirectsRemaining - 1,
+    );
+  }
+  if (!isTextResponse(response)) {
+    throw new Error("Only HTML or plain-text URLs can be scanned.");
+  }
+  const html = await readLimitedResponseText(response, 900_000);
 
   return {
     finalUrl: response.url || parsed.toString(),
     status: response.status,
     html,
   };
+}
+
+async function assertPublicHttpScanUrl(parsed: URL) {
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("Only HTTP and HTTPS URLs can be scanned.");
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error("Credentialed URLs cannot be scanned.");
+  }
+  const hostname = parsed.hostname.toLowerCase();
+  if (
+    hostname === "localhost" ||
+    hostname.endsWith(".localhost") ||
+    hostname.endsWith(".local")
+  ) {
+    throw new Error("Private or local network URLs cannot be scanned.");
+  }
+
+  const addresses = net.isIP(hostname)
+    ? [{ address: hostname }]
+    : await lookup(hostname, { all: true, verbatim: true });
+  if (
+    addresses.length === 0 ||
+    addresses.some((entry) => isPrivateOrReservedAddress(entry.address))
+  ) {
+    throw new Error("Private or local network URLs cannot be scanned.");
+  }
+}
+
+function isRedirect(status: number) {
+  return status >= 300 && status < 400;
+}
+
+function isTextResponse(response: Response) {
+  const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+  return (
+    !contentType ||
+    contentType.includes("text/html") ||
+    contentType.includes("application/xhtml+xml") ||
+    contentType.includes("text/plain")
+  );
+}
+
+async function readLimitedResponseText(response: Response, maxBytes: number) {
+  const declaredLength = Number(response.headers.get("content-length") ?? 0);
+  if (declaredLength > maxBytes) {
+    throw new Error("Scanned document is too large.");
+  }
+  if (!response.body) {
+    return "";
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let bytes = 0;
+  let text = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    bytes += value.byteLength;
+    if (bytes > maxBytes) {
+      await reader.cancel();
+      throw new Error("Scanned document is too large.");
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+  return text + decoder.decode();
+}
+
+function isPrivateOrReservedAddress(address: string) {
+  if (net.isIPv4(address)) {
+    const [first = 0, second = 0] = address.split(".").map(Number);
+    return (
+      first === 0 ||
+      first === 10 ||
+      first === 127 ||
+      (first === 169 && second === 254) ||
+      (first === 172 && second >= 16 && second <= 31) ||
+      (first === 192 && second === 168) ||
+      (first === 100 && second >= 64 && second <= 127) ||
+      first >= 224
+    );
+  }
+
+  const normalized = address.toLowerCase();
+  return (
+    normalized === "::1" ||
+    normalized === "::" ||
+    normalized.startsWith("fc") ||
+    normalized.startsWith("fd") ||
+    normalized.startsWith("fe80") ||
+    normalized.startsWith("::ffff:127.") ||
+    normalized.startsWith("::ffff:10.") ||
+    normalized.startsWith("::ffff:192.168.") ||
+    /^::ffff:172\.(1[6-9]|2\d|3[01])\./.test(normalized)
+  );
 }
 
 function extractSameOriginLinks(html: string, sourceUrl: string) {
@@ -3926,6 +4129,32 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object"
     ? (value as Record<string, unknown>)
     : {};
+}
+
+const secretLikeKeyPattern =
+  /token|secret|password|api[_-]?key|apikey|authorization|credential|private[_-]?key/i;
+
+function redactSecretSettings(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  const output: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (secretLikeKeyPattern.test(key)) {
+      output[key] = "[redacted]";
+    } else if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+      output[key] = redactSecretSettings(entry);
+    } else if (Array.isArray(entry)) {
+      output[key] = entry.map((item) =>
+        item && typeof item === "object" && !Array.isArray(item)
+          ? redactSecretSettings(item)
+          : item,
+      );
+    } else {
+      output[key] = entry;
+    }
+  }
+  return output;
 }
 
 function getStringProperty(value: unknown, key: string) {

@@ -71,6 +71,9 @@ Voice:
 ```text
 VOICE_PUBLIC_URL=https://your-voice-domain
 VOICE_SIP_DOMAIN=<sip-target-domain-for-provider-trunks>
+VOICE_EDGE_SECRET=<shared-secret-for-sip-edge-hmac>
+VOICE_RATE_LIMIT_MAX=120
+VOICE_RATE_LIMIT_WINDOW=1 minute
 TWILIO_ACCOUNT_SID=<legacy Twilio route only>
 TWILIO_AUTH_TOKEN=<legacy Twilio route only>
 TWILIO_FROM_NUMBER=<legacy outbound calling only>
@@ -86,6 +89,7 @@ OPENAI_API_KEY=<only when provider-backed generation is enabled>
 OPENAI_TEXT_MODEL=gpt-4.1-mini
 OPENAI_EMBEDDING_MODEL=text-embedding-3-small
 OPENAI_VOICE_MODEL=gpt-4o-mini-tts
+OPENAI_TIMEOUT_MS=10000
 ```
 
 ## Enabling Semantic Retrieval

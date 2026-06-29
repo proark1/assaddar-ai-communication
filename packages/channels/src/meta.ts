@@ -7,6 +7,8 @@ import type {
   WebhookVerificationRequest,
 } from "./types";
 
+const META_GRAPH_TIMEOUT_MS = 10_000;
+
 export class WhatsAppCloudAdapter implements ChannelAdapter {
   readonly channel = "whatsapp" as const;
   readonly provider = "meta-whatsapp-cloud";
@@ -128,6 +130,7 @@ export class WhatsAppCloudAdapter implements ChannelAdapter {
             body: truncateMessage(message.text),
           },
         }),
+        signal: AbortSignal.timeout(META_GRAPH_TIMEOUT_MS),
       },
     );
 
@@ -258,6 +261,7 @@ export class MetaMessengerAdapter implements ChannelAdapter {
             text: truncateMessage(message.text),
           },
         }),
+        signal: AbortSignal.timeout(META_GRAPH_TIMEOUT_MS),
       },
     );
 

@@ -81,11 +81,13 @@ Required env for the Railway voice bridge:
 
 - `VOICE_PUBLIC_URL`
 - `VOICE_SIP_DOMAIN` or `VOICE_EDGE_SIP_DOMAIN` once a SIP edge is deployed
+- `VOICE_EDGE_SECRET` shared only with the SIP/RTP edge
 - `TWILIO_TRANSFER_PHONE_NUMBER` only for the legacy Twilio route
 
 Voice edge contract:
 
 - `POST /voice/turn?assistantId=<public assistant id>`
+- Headers: `x-voice-edge-timestamp` as Unix seconds and `x-voice-edge-signature` as HMAC-SHA256 over `<timestamp>.<raw JSON body>` using `VOICE_EDGE_SECRET`. `sha256=<hex>` and plain hex are accepted.
 - JSON body: `text`, optional `callId`, `from`, `to`, `provider`, `locale`, and metadata.
 - JSON response: `reply`, `status`, `confidence`, `handoffRecommended`, and optional `transferPhoneNumber`.
 

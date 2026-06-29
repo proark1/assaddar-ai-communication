@@ -901,9 +901,17 @@ export default function DashboardPage() {
   ]);
 
   useEffect(() => {
-    const savedToken = window.localStorage.getItem("assaddar_admin_token");
+    const legacySavedToken = window.localStorage.getItem(
+      "assaddar_admin_token",
+    );
+    const savedToken =
+      window.sessionStorage.getItem("assaddar_admin_token") ?? legacySavedToken;
     const savedApiBase = window.localStorage.getItem("assaddar_api_base");
     const savedSiteUrl = window.localStorage.getItem("assaddar_site_url");
+
+    if (legacySavedToken) {
+      window.localStorage.removeItem("assaddar_admin_token");
+    }
 
     if (savedToken) {
       setAdminToken(savedToken);
@@ -920,8 +928,11 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (adminToken) {
-      window.localStorage.setItem("assaddar_admin_token", adminToken);
+      window.sessionStorage.setItem("assaddar_admin_token", adminToken);
+    } else {
+      window.sessionStorage.removeItem("assaddar_admin_token");
     }
+    window.localStorage.removeItem("assaddar_admin_token");
   }, [adminToken]);
 
   useEffect(() => {
@@ -1129,6 +1140,7 @@ export default function DashboardPage() {
         }),
       });
       setAdminToken("");
+      window.sessionStorage.removeItem("assaddar_admin_token");
       window.localStorage.removeItem("assaddar_admin_token");
       setAdminSession(session);
       setConnectionAttempted(true);
@@ -1159,6 +1171,7 @@ export default function DashboardPage() {
       setSelectedTenantId("");
       setConnectionAttempted(false);
       setAdminToken("");
+      window.sessionStorage.removeItem("assaddar_admin_token");
       window.localStorage.removeItem("assaddar_admin_token");
       setBusy(false);
       setStatus("Logged out");

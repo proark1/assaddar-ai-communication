@@ -332,13 +332,19 @@ void (() => {
     const locale =
       config.theme.locale ?? config.theme.language ?? config.defaultLocale;
     const t = makeTranslator(locale);
-    const primaryColor = config.theme.primaryColor ?? "#a66e2f";
-    const backgroundColor = config.theme.backgroundColor ?? "#ffffff";
-    const textColor = config.theme.textColor ?? "#16191e";
+    const primaryColor = sanitizeCssColor(config.theme.primaryColor, "#a66e2f");
+    const backgroundColor = sanitizeCssColor(
+      config.theme.backgroundColor,
+      "#ffffff",
+    );
+    const textColor = sanitizeCssColor(config.theme.textColor, "#16191e");
     const launcherLabel = config.theme.launcherLabel ?? "Chat";
     const assistantName = config.theme.assistantName ?? config.tenantName;
     const position = config.theme.position ?? "bottom-right";
     const leadFields = normalizeLeadFields(config.theme.leadCaptureFields);
+    const maxMessageLength = sanitizeMaxMessageLength(
+      config.limits.maxMessageLength,
+    );
     const leadCaptureAvailable =
       Boolean(config.theme.leadCaptureEnabled) && !state.leadCaptured;
     const consentVisible =
@@ -720,7 +726,7 @@ void (() => {
           <button>${escapeHtml(t("leadSubmit"))}</button>
         </form>
         <form class="composer">
-          <input maxlength="${config.limits.maxMessageLength}" autocomplete="off" aria-label="${escapeHtml(t("composerInputLabel"))}" placeholder="${escapeHtml(t("composerInputPlaceholder"))}" />
+          <input maxlength="${maxMessageLength}" autocomplete="off" aria-label="${escapeHtml(t("composerInputLabel"))}" placeholder="${escapeHtml(t("composerInputPlaceholder"))}" />
           <button type="submit" aria-label="${escapeHtml(t("sendMessage"))}">›</button>
         </form>
       </div>
@@ -1198,7 +1204,13 @@ void (() => {
       "contactPreference",
     ];
     const values = fields?.length ? fields : defaults;
-    return Array.from(new Set(values)).slice(0, 8);
+    return Array.from(
+      new Set(
+        values
+          .map((field) => normalizeLeadFieldName(field))
+          .filter((field): field is string => Boolean(field)),
+      ),
+    ).slice(0, 8);
   }
 
   function renderLeadField(
@@ -1206,19 +1218,20 @@ void (() => {
     t: (key: StringKey, vars?: Record<string, string | number>) => string,
   ) {
     const label = escapeHtml(leadFieldLabel(field, t));
+    const fieldName = escapeHtml(field);
     if (field === "message") {
-      return `<textarea name="${field}" rows="3" aria-label="${label}" placeholder="${label}"></textarea>`;
+      return `<textarea name="${fieldName}" rows="3" aria-label="${label}" placeholder="${label}"></textarea>`;
     }
     if (field === "contactPreference") {
       const email = escapeHtml(t("contactPreferenceEmail"));
       const phone = escapeHtml(t("contactPreferencePhone"));
       const videoCall = escapeHtml(t("contactPreferenceVideoCall"));
-      return `<select name="${field}" aria-label="${label}"><option value="">${label}</option><option value="Email">${email}</option><option value="Phone">${phone}</option><option value="Video call">${videoCall}</option></select>`;
+      return `<select name="${fieldName}" aria-label="${label}"><option value="">${label}</option><option value="Email">${email}</option><option value="Phone">${phone}</option><option value="Video call">${videoCall}</option></select>`;
     }
     const inputType =
       field === "email" ? "email" : field === "phone" ? "tel" : "text";
     const required = field === "name" || field === "email" ? "required" : "";
-    return `<input name="${field}" type="${inputType}" ${required} aria-label="${label}" placeholder="${label}" />`;
+    return `<input name="${fieldName}" type="${inputType}" ${required} aria-label="${label}" placeholder="${label}" />`;
   }
 
   function normalizeQuickReplies(replies?: string[]) {
@@ -1392,6 +1405,49 @@ void (() => {
       };
       return replacements[character] ?? character;
     });
+  }
+
+  const SAFE_LEAD_FIELD_NAME = /^[A-Za-z][A-Za-z0-9_-]{0,39}$/;
+
+  function normalizeLeadFieldName(value: string): string | null {
+    const trimmed = value.trim();
+    if (!SAFE_LEAD_FIELD_NAME.test(trimmed)) {
+      return null;
+    }
+    return trimmed;
+  }
+
+  function sanitizeMaxMessageLength(value: unknown) {
+    const parsed =
+      typeof value === "number"
+        ? value
+        : typeof value === "string"
+          ? Number.parseInt(value, 10)
+          : 1200;
+    if (!Number.isFinite(parsed)) {
+      return 1200;
+    }
+    return Math.min(4000, Math.max(200, Math.trunc(parsed)));
+  }
+
+  function sanitizeCssColor(value: string | undefined, fallback: string) {
+    const candidate = value?.trim();
+    if (!candidate) {
+      return fallback;
+    }
+    if (
+      candidate.length > 64 ||
+      /[<>{};]/.test(candidate) ||
+      /\b(?:expression|url|import)\s*\(/i.test(candidate)
+    ) {
+      return fallback;
+    }
+    if (window.CSS?.supports?.("color", candidate)) {
+      return candidate;
+    }
+    return /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(candidate)
+      ? candidate
+      : fallback;
   }
 
   const ALLOWED_URL_PROTOCOLS = new Set(["http:", "https:", "mailto:", "tel:"]);
