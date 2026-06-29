@@ -76,6 +76,10 @@ export class WhatsAppCloudAdapter implements ChannelAdapter {
             },
           };
 
+          if (typeof message.id === "string") {
+            event.providerEventId = message.id;
+          }
+
           if (phoneNumberId) {
             event.providerAccountId = phoneNumberId;
           }
@@ -214,6 +218,10 @@ export class MetaMessengerAdapter implements ChannelAdapter {
           text,
           raw: item,
         };
+
+        if (typeof item.message.mid === "string") {
+          event.providerEventId = item.message.mid;
+        }
 
         if (accountId) {
           event.providerAccountId = accountId;

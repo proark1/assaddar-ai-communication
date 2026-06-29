@@ -316,7 +316,13 @@ export const channelWebhookEvents = pgTable(
       .defaultNow(),
     processedAt: timestamp("processed_at", { withTimezone: true }),
   },
-  (table) => [index("channel_webhook_events_tenant_idx").on(table.tenantId)],
+  (table) => [
+    index("channel_webhook_events_tenant_idx").on(table.tenantId),
+    uniqueIndex("channel_webhook_events_provider_event_idx").on(
+      table.channel,
+      table.providerEventId,
+    ),
+  ],
 );
 
 export const contacts = pgTable(

@@ -28,6 +28,7 @@ import {
   auditLogs,
   blockedTopics,
   channelConnections,
+  channelWebhookEvents,
   conversationContacts,
   contacts,
   conversations,
@@ -69,6 +70,7 @@ import {
   setTenantSession,
   titleCase,
 } from "./repository-helpers";
+import type { ChannelCredentialCipher } from "./secrets";
 
 export {
   createPublicAssistantId,
@@ -213,6 +215,9 @@ export type ContactRecord = typeof contacts.$inferSelect;
 
 export type ChannelConnectionRecord = typeof channelConnections.$inferSelect;
 
+export type ChannelWebhookEventRecord =
+  typeof channelWebhookEvents.$inferSelect;
+
 export type TenantInviteRecord = typeof tenantInvites.$inferSelect;
 
 export type KnowledgeSourceRecord = typeof knowledgeSources.$inferSelect;
@@ -222,6 +227,11 @@ export type KnowledgeDocumentRecord = typeof knowledgeDocuments.$inferSelect;
 export type KnowledgeChunkRecord = typeof knowledgeChunks.$inferSelect;
 
 export type MessageDeliveryRecord = typeof messageDeliveries.$inferSelect;
+
+export type RecordChannelWebhookEventResult = {
+  event: ChannelWebhookEventRecord;
+  duplicate: boolean;
+};
 
 export type HandoffRecord = typeof handoffRequests.$inferSelect;
 
@@ -345,6 +355,18 @@ export type ChannelConnectionInput = {
   settings?: Record<string, unknown> | undefined;
 };
 
+export type ChannelConnectionCredentialInput = {
+  channel: Channel;
+  provider: string;
+  accessToken?: string | null | undefined;
+  refreshToken?: string | null | undefined;
+};
+
+export type ChannelConnectionCredentials = {
+  accessToken: string | null;
+  refreshToken: string | null;
+};
+
 const secretLikeSettingsKeyPattern =
   /token|secret|password|api[_-]?key|apikey|authorization|credential|private[_-]?key/i;
 
@@ -418,7 +440,12 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
   /** Tenant id already set on the current transaction via app.current_tenant_id. */
   private readonly tenantScope: string | undefined;
 
-  constructor(db: Database, executor: DbExecutor = db, tenantScope?: string) {
+  constructor(
+    db: Database,
+    executor: DbExecutor = db,
+    tenantScope?: string,
+    private readonly credentialCipher?: ChannelCredentialCipher | null,
+  ) {
     this.rootDb = db;
     this.db = executor;
     this.tenantScope = tenantScope;
@@ -437,7 +464,14 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       return fn(this);
     }
     return this.rootDb.transaction((tx: Transaction) =>
-      fn(new TenantRepository(this.rootDb, tx, this.tenantScope)),
+      fn(
+        new TenantRepository(
+          this.rootDb,
+          tx,
+          this.tenantScope,
+          this.credentialCipher,
+        ),
+      ),
     );
   }
 
@@ -451,11 +485,20 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     }
     if (this.db !== this.rootDb) {
       await setTenantSession(this.db, tenantId);
-      return fn(new TenantRepository(this.rootDb, this.db, tenantId));
+      return fn(
+        new TenantRepository(
+          this.rootDb,
+          this.db,
+          tenantId,
+          this.credentialCipher,
+        ),
+      );
     }
     return this.rootDb.transaction(async (tx: Transaction) => {
       await setTenantSession(tx, tenantId);
-      return fn(new TenantRepository(this.rootDb, tx, tenantId));
+      return fn(
+        new TenantRepository(this.rootDb, tx, tenantId, this.credentialCipher),
+      );
     });
   }
 
@@ -673,6 +716,113 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     return connection;
   }
 
+  async saveChannelConnectionCredentials(
+    tenantId: string,
+    input: ChannelConnectionCredentialInput,
+  ): Promise<ChannelConnectionRecord> {
+    assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<ChannelConnectionRecord>(tenantId, (repo) =>
+        repo.saveChannelConnectionCredentials(tenantId, input),
+      );
+    }
+
+    const values: Partial<typeof channelConnections.$inferInsert> = {
+      updatedAt: sql`now()` as unknown as Date,
+    };
+    if (input.accessToken !== undefined) {
+      values.encryptedAccessToken =
+        input.accessToken === null
+          ? null
+          : this.encryptChannelCredential(tenantId, input, "access_token");
+    }
+    if (input.refreshToken !== undefined) {
+      values.encryptedRefreshToken =
+        input.refreshToken === null
+          ? null
+          : this.encryptChannelCredential(tenantId, input, "refresh_token");
+    }
+
+    const [connection] = await this.db
+      .update(channelConnections)
+      .set(values)
+      .where(
+        and(
+          eq(channelConnections.tenantId, tenantId),
+          eq(channelConnections.channel, input.channel),
+          eq(channelConnections.provider, input.provider),
+        ),
+      )
+      .returning();
+
+    if (!connection) {
+      throw new Error("Channel connection not found.");
+    }
+
+    await this.audit(
+      tenantId,
+      "channel_connection.credentials_updated",
+      "channel_connection",
+      connection.id,
+      {
+        channel: connection.channel,
+        provider: connection.provider,
+        accessTokenUpdated: input.accessToken !== undefined,
+        refreshTokenUpdated: input.refreshToken !== undefined,
+      },
+    );
+
+    return connection;
+  }
+
+  async getChannelConnectionCredentials(
+    tenantId: string,
+    input: Pick<ChannelConnectionCredentialInput, "channel" | "provider">,
+  ): Promise<ChannelConnectionCredentials | null> {
+    assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<ChannelConnectionCredentials | null>(
+        tenantId,
+        (repo) => repo.getChannelConnectionCredentials(tenantId, input),
+      );
+    }
+
+    const [connection] = await this.db
+      .select()
+      .from(channelConnections)
+      .where(
+        and(
+          eq(channelConnections.tenantId, tenantId),
+          eq(channelConnections.channel, input.channel),
+          eq(channelConnections.provider, input.provider),
+        ),
+      )
+      .limit(1);
+
+    if (!connection) {
+      return null;
+    }
+
+    return {
+      accessToken: connection.encryptedAccessToken
+        ? this.decryptChannelCredential(
+            tenantId,
+            input,
+            "access_token",
+            connection.encryptedAccessToken,
+          )
+        : null,
+      refreshToken: connection.encryptedRefreshToken
+        ? this.decryptChannelCredential(
+            tenantId,
+            input,
+            "refresh_token",
+            connection.encryptedRefreshToken,
+          )
+        : null,
+    };
+  }
+
   async getTenantByChannelConnection(
     channel: Channel,
     provider: string,
@@ -694,6 +844,91 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       .limit(1);
 
     return row?.tenant ?? null;
+  }
+
+  async recordChannelWebhookEvent(input: {
+    tenantId?: string | null;
+    channel: Channel;
+    providerEventId?: string | null;
+    eventType: string;
+    payload: Record<string, unknown>;
+    status?: string;
+  }): Promise<RecordChannelWebhookEventResult> {
+    if (input.tenantId) {
+      assertTenantId(input.tenantId);
+    }
+    const values = {
+      tenantId: input.tenantId ?? null,
+      channel: input.channel,
+      providerEventId: input.providerEventId ?? null,
+      eventType: input.eventType,
+      payload: input.payload,
+      status: input.status ?? "received",
+    };
+
+    const [event] = await this.db
+      .insert(channelWebhookEvents)
+      .values(values)
+      .onConflictDoNothing({
+        target: [
+          channelWebhookEvents.channel,
+          channelWebhookEvents.providerEventId,
+        ],
+      })
+      .returning();
+
+    if (event) {
+      return { event, duplicate: false };
+    }
+
+    if (!input.providerEventId) {
+      throw new Error("Failed to record channel webhook event.");
+    }
+
+    const [existing] = await this.db
+      .select()
+      .from(channelWebhookEvents)
+      .where(
+        and(
+          eq(channelWebhookEvents.channel, input.channel),
+          eq(channelWebhookEvents.providerEventId, input.providerEventId),
+        ),
+      )
+      .limit(1);
+
+    if (!existing) {
+      throw new Error("Failed to load duplicate channel webhook event.");
+    }
+
+    return { event: existing, duplicate: true };
+  }
+
+  async markChannelWebhookEventProcessed(
+    eventId: string,
+    status = "processed",
+  ): Promise<void> {
+    await this.db
+      .update(channelWebhookEvents)
+      .set({
+        status,
+        error: null,
+        processedAt: sql`now()`,
+      })
+      .where(eq(channelWebhookEvents.id, eventId));
+  }
+
+  async markChannelWebhookEventFailed(
+    eventId: string,
+    error: string,
+  ): Promise<void> {
+    await this.db
+      .update(channelWebhookEvents)
+      .set({
+        status: "failed",
+        error,
+        processedAt: sql`now()`,
+      })
+      .where(eq(channelWebhookEvents.id, eventId));
   }
 
   async getWidgetConfig(publicId: string) {
@@ -3102,6 +3337,48 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     }
 
     return role.id;
+  }
+
+  private encryptChannelCredential(
+    tenantId: string,
+    input: ChannelConnectionCredentialInput,
+    credential: "access_token" | "refresh_token",
+  ) {
+    if (!this.credentialCipher) {
+      throw new Error(
+        "Channel credential encryption is not configured. Set CHANNEL_CREDENTIAL_MASTER_KEY.",
+      );
+    }
+    const plaintext =
+      credential === "access_token" ? input.accessToken : input.refreshToken;
+    if (!plaintext) {
+      throw new Error("Channel credential value is empty.");
+    }
+    return this.credentialCipher.encrypt(plaintext, {
+      tenantId,
+      channel: input.channel,
+      provider: input.provider,
+      credential,
+    });
+  }
+
+  private decryptChannelCredential(
+    tenantId: string,
+    input: Pick<ChannelConnectionCredentialInput, "channel" | "provider">,
+    credential: "access_token" | "refresh_token",
+    ciphertext: string,
+  ) {
+    if (!this.credentialCipher) {
+      throw new Error(
+        "Channel credential encryption is not configured. Set CHANNEL_CREDENTIAL_MASTER_KEY.",
+      );
+    }
+    return this.credentialCipher.decrypt(ciphertext, {
+      tenantId,
+      channel: input.channel,
+      provider: input.provider,
+      credential,
+    });
   }
 
   private async audit(

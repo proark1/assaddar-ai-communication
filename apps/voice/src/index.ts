@@ -8,7 +8,11 @@ import {
   verifyTwilioSignature,
 } from "@assaddar/channels";
 import { createAnswerEngine, InboundMessageSchema } from "@assaddar/core";
-import { createDbClient, TenantRepository } from "@assaddar/db";
+import {
+  createDbClient,
+  createEnvChannelCredentialCipher,
+  TenantRepository,
+} from "@assaddar/db";
 import formBody from "@fastify/formbody";
 import rateLimit from "@fastify/rate-limit";
 import Fastify from "fastify";
@@ -198,7 +202,12 @@ function firstHeader(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
 }
 const client = createDbClient();
-const store = new TenantRepository(client.db);
+const store = new TenantRepository(
+  client.db,
+  client.db,
+  undefined,
+  createEnvChannelCredentialCipher(process.env),
+);
 const engine = createAnswerEngine({
   dataStore: store,
   handoffStore: store,

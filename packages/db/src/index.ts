@@ -1,4 +1,5 @@
 export * from "./client";
 export * from "./repository";
 export * from "./schema";
+export * from "./secrets";
 export * from "./tenant-scope";

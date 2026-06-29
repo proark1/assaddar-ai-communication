@@ -68,6 +68,18 @@ class MemoryPlatformStore
     updatedAt: Date;
   }> = [];
   deliveries: Array<Record<string, unknown>> = [];
+  webhookEvents: Array<{
+    id: string;
+    tenantId?: string | null;
+    channel: Channel;
+    providerEventId?: string | null;
+    eventType: string;
+    payload: Record<string, unknown>;
+    status: string;
+    error?: string | null;
+    processedAt?: Date | null;
+    createdAt: Date;
+  }> = [];
   channelConnections: Array<{
     id: string;
     tenantId: string;
@@ -516,6 +528,62 @@ class MemoryPlatformStore
       return null;
     }
     return this.getTenant(connection.tenantId);
+  }
+
+  async recordChannelWebhookEvent(input: {
+    tenantId?: string | null;
+    channel: Channel;
+    providerEventId?: string | null;
+    eventType: string;
+    payload: Record<string, unknown>;
+    status?: string;
+  }) {
+    const existing = input.providerEventId
+      ? this.webhookEvents.find(
+          (event) =>
+            event.channel === input.channel &&
+            event.providerEventId === input.providerEventId,
+        )
+      : undefined;
+    if (existing) {
+      return { event: existing, duplicate: true };
+    }
+
+    const event = {
+      id: crypto.randomUUID(),
+      tenantId: input.tenantId ?? null,
+      channel: input.channel,
+      providerEventId: input.providerEventId ?? null,
+      eventType: input.eventType,
+      payload: input.payload,
+      status: input.status ?? "received",
+      error: null,
+      processedAt: null,
+      createdAt: new Date(),
+    };
+    this.webhookEvents.push(event);
+    return { event, duplicate: false };
+  }
+
+  async markChannelWebhookEventProcessed(
+    eventId: string,
+    status = "processed",
+  ) {
+    const event = this.webhookEvents.find((item) => item.id === eventId);
+    if (event) {
+      event.status = status;
+      event.error = null;
+      event.processedAt = new Date();
+    }
+  }
+
+  async markChannelWebhookEventFailed(eventId: string, error: string) {
+    const event = this.webhookEvents.find((item) => item.id === eventId);
+    if (event) {
+      event.status = "failed";
+      event.error = error;
+      event.processedAt = new Date();
+    }
   }
 
   async addFaq(
@@ -2332,6 +2400,7 @@ describe("API", () => {
                   },
                   messages: [
                     {
+                      id: "wamid.inbound.1",
                       from: "491701234567",
                       text: {
                         body: "What do you do?",
@@ -2359,12 +2428,164 @@ describe("API", () => {
         providerMessageId: "wamid.1",
       },
     });
+    expect(store.deliveries[0]).toMatchObject({
+      messageId: store.messages[1]?.id,
+      status: "sent",
+      providerMessageId: "wamid.1",
+    });
+    expect(store.webhookEvents[0]).toMatchObject({
+      providerEventId: "wamid.inbound.1",
+      status: "processed",
+    });
     expect(globalThis.fetch).toHaveBeenCalledWith(
       "https://graph.facebook.com/v25.0/phone-number-1/messages",
       expect.objectContaining({
         method: "POST",
       }),
     );
+    await app.close();
+  });
+
+  it("deduplicates provider webhook events before creating messages or replies", async () => {
+    const store = new MemoryPlatformStore();
+    globalThis.fetch = vi.fn(async () => {
+      return new Response(JSON.stringify({ messages: [{ id: "wamid.1" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+      whatsappAccessToken: "whatsapp-token",
+    });
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+    await store.addFaq(tenant.id, {
+      question: "What do you do?",
+      answer: "We implement practical AI automation.",
+    });
+    await store.upsertChannelConnection(tenant.id, {
+      channel: "whatsapp",
+      provider: "meta-whatsapp-cloud",
+      externalAccountId: "phone-number-1",
+      status: "connected",
+    });
+
+    const payload = {
+      entry: [
+        {
+          changes: [
+            {
+              value: {
+                metadata: { phone_number_id: "phone-number-1" },
+                messages: [
+                  {
+                    id: "wamid.duplicate",
+                    from: "491701234567",
+                    text: { body: "What do you do?" },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    const first = await app.inject({
+      method: "POST",
+      url: "/webhooks/meta/whatsapp",
+      payload,
+    });
+    const second = await app.inject({
+      method: "POST",
+      url: "/webhooks/meta/whatsapp",
+      payload,
+    });
+
+    expect(first.statusCode).toBe(200);
+    expect(second.statusCode).toBe(200);
+    expect(
+      second.json<{ results: Array<{ status?: string }> }>().results,
+    ).toEqual([expect.objectContaining({ status: "duplicate" })]);
+    expect(store.messages).toHaveLength(2);
+    expect(store.webhookEvents).toHaveLength(1);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    await app.close();
+  });
+
+  it("blocks stale freeform channel replies before calling the provider", async () => {
+    const store = new MemoryPlatformStore();
+    const originalAddMessage = store.addMessage.bind(store);
+    store.addMessage = async (input: Record<string, unknown>) => {
+      const message = await originalAddMessage(input);
+      if (input.direction === "inbound") {
+        message.createdAt = new Date(Date.now() - 25 * 60 * 60 * 1000);
+      }
+      return message;
+    };
+    globalThis.fetch = vi.fn(async () => {
+      return new Response(JSON.stringify({ messages: [{ id: "wamid.1" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+      whatsappAccessToken: "whatsapp-token",
+    });
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+    await store.addFaq(tenant.id, {
+      question: "What do you do?",
+      answer: "We implement practical AI automation.",
+    });
+    await store.upsertChannelConnection(tenant.id, {
+      channel: "whatsapp",
+      provider: "meta-whatsapp-cloud",
+      externalAccountId: "phone-number-1",
+      status: "connected",
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/webhooks/meta/whatsapp",
+      payload: {
+        entry: [
+          {
+            changes: [
+              {
+                value: {
+                  metadata: { phone_number_id: "phone-number-1" },
+                  messages: [
+                    {
+                      id: "wamid.stale",
+                      from: "491701234567",
+                      text: { body: "What do you do?" },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(store.deliveries[0]).toMatchObject({
+      status: "skipped",
+      detail: expect.stringContaining("24-hour customer-service window"),
+    });
     await app.close();
   });
 

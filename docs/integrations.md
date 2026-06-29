@@ -19,11 +19,14 @@ Current foundation:
 - Meta webhook verification using `hub.mode`, `hub.verify_token`, and `hub.challenge`
 - Meta webhook POST signature verification using `X-Hub-Signature-256`; production startup requires `META_APP_SECRET`
 - Incoming payload normalization for text messages
+- Provider message IDs are stored as webhook event IDs and deduplicated before
+  answer generation, message creation, usage logging, or outbound replies.
 - Outgoing sender is credential-gated until `WHATSAPP_ACCESS_TOKEN` and phone number mapping are configured
+- Automated freeform replies are hard-blocked outside the 24-hour customer-service window.
 - Tenant-level template storage for draft/submitted/approved/rejected WhatsApp templates
 - Compliance endpoint showing the last inbound message, 24-hour freeform reply window, template counts, and recent delivery outcomes
 - Provider delivery outcomes are recorded for troubleshooting and future retries
-- Customer-service messaging-window enforcement is surfaced in the admin UI; hard blocking before production sending is still required
+- Customer-service messaging-window enforcement is surfaced in the admin UI and enforced in the automated reply path.
 
 Official docs checked:
 
@@ -38,7 +41,10 @@ Current foundation:
 
 - Shared Meta webhook verification
 - Incoming text normalization for `messaging` payloads
+- Provider message IDs are stored as webhook event IDs and deduplicated before
+  answer generation, message creation, usage logging, or outbound replies.
 - 24-hour response window awareness represented as policy metadata
+- Automated freeform replies are hard-blocked outside the 24-hour customer-service window.
 - Outgoing sender is credential-gated until page/account connection mapping is configured
 
 Official docs checked:
@@ -107,9 +113,7 @@ Planned provider expansion:
 
 ## TODOs Before Production Credentials
 
-- Encrypt/decrypt channel tokens with a KMS-backed provider.
-- Persist provider webhook event IDs for idempotent processing where each provider exposes stable IDs.
-- Enforce WhatsApp and Messenger/Instagram response windows before sending.
+- Replace the env-key channel credential cipher with a KMS-backed provider and key rotation process.
 - Add retry queues and dead-letter handling for outbound delivery.
 - Add richer voice callback workflows and call summaries.
 - Add provider-specific integration health dashboards.

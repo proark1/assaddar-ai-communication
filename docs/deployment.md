@@ -36,11 +36,20 @@ API_PUBLIC_URL=https://your-api-domain
 ADMIN_PUBLIC_URL=https://your-admin-domain
 META_VERIFY_TOKEN=<random verify token>
 META_GRAPH_API_VERSION=v25.0
+CHANNEL_CREDENTIAL_MASTER_KEY=base64:<32-byte-base64-key>
 WHATSAPP_ACCESS_TOKEN=<only when WhatsApp sending is enabled>
 MESSENGER_PAGE_ACCESS_TOKEN=<only when Messenger/Instagram sending is enabled>
 ```
 
 `ADMIN_API_TOKEN` remains the root/bootstrap fallback. Normal project users log in through `/auth/login`; sessions are stored in Railway Postgres and sent as HttpOnly cookies by the API. Keep the admin domain in `WIDGET_ALLOWED_ORIGINS` because the API enables credentialed CORS for the admin app.
+
+`CHANNEL_CREDENTIAL_MASTER_KEY` enables app-managed encryption for channel
+tokens saved in Postgres. Generate a 32-byte key, store it only in the platform
+secret manager, and set the same value on API, voice, and workers. Example:
+
+```bash
+openssl rand -base64 32
+```
 
 Optional lead notifications:
 

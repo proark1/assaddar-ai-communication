@@ -1,6 +1,7 @@
 import {
   MetaMessengerAdapter,
   type NormalizedInboundEvent,
+  type DeliveryResult,
   verifyMetaSignature,
   WhatsAppCloudAdapter,
   WebsiteAdapter,
@@ -232,6 +233,25 @@ export type PlatformStore = AnswerDataStore &
       provider: string,
       externalAccountId: string,
     ): Promise<StoreTenant | null>;
+    recordChannelWebhookEvent(input: {
+      tenantId?: string | null;
+      channel: Channel;
+      providerEventId?: string | null;
+      eventType: string;
+      payload: Record<string, unknown>;
+      status?: string;
+    }): Promise<{
+      event: { id: string; status: string; processedAt?: Date | null };
+      duplicate: boolean;
+    }>;
+    markChannelWebhookEventProcessed(
+      eventId: string,
+      status?: string,
+    ): Promise<void>;
+    markChannelWebhookEventFailed(
+      eventId: string,
+      error: string,
+    ): Promise<void>;
     listConversationMessages(
       tenantId: string,
       conversationId: string,
@@ -2083,15 +2103,52 @@ export async function buildServer(
       const events = adapter.normalizeInbound(request.body, tenant.id);
       const results = [];
       for (const event of events) {
-        results.push(
-          await processChannelInboundEvent({
+        const webhookEvent = await options.store.recordChannelWebhookEvent({
+          tenantId: tenant.id,
+          channel: event.channel,
+          providerEventId: event.providerEventId ?? null,
+          eventType: "message.inbound",
+          payload: {
+            provider: event.provider,
+            providerAccountId: event.providerAccountId,
+            externalConversationId: event.externalConversationId,
+            externalUserId: event.externalUserId,
+            raw: event.raw,
+          },
+        });
+
+        if (webhookEvent.duplicate) {
+          results.push({
+            status: "duplicate",
+            webhookEventId: webhookEvent.event.id,
+            providerEventId: event.providerEventId,
+          });
+          continue;
+        }
+
+        try {
+          const result = await processChannelInboundEvent({
             options,
             engine,
             adapter,
             tenant,
             event,
-          }),
-        );
+          });
+          await options.store.markChannelWebhookEventProcessed(
+            webhookEvent.event.id,
+          );
+          results.push({
+            ...result,
+            webhookEventId: webhookEvent.event.id,
+            providerEventId: event.providerEventId,
+          });
+        } catch (error) {
+          await options.store.markChannelWebhookEventFailed(
+            webhookEvent.event.id,
+            error instanceof Error ? error.message : String(error),
+          );
+          throw error;
+        }
       }
 
       return {
@@ -3245,7 +3302,7 @@ async function processChannelInboundEvent(input: {
   const conversation =
     await input.options.store.findOrCreateConversation(conversationInput);
 
-  const outboundRecord = await input.options.store.addMessage({
+  const inboundRecord = await input.options.store.addMessage({
     tenantId: input.tenant.id,
     conversationId: conversation.id,
     channel: input.event.channel,
@@ -3295,9 +3352,20 @@ async function processChannelInboundEvent(input: {
       externalUserId: input.event.externalUserId,
     });
   }
-  const delivery = await input.adapter.sendMessage(outboundMessage);
+  const sendPolicy = evaluateAutomatedReplyPolicy({
+    channel: input.event.channel,
+    provider: input.adapter.provider,
+    lastInboundAt: getDateProperty(inboundRecord, "createdAt") ?? new Date(),
+  });
+  const delivery: DeliveryResult = sendPolicy.allowed
+    ? await input.adapter.sendMessage(outboundMessage)
+    : {
+        status: "skipped" as const,
+        detail:
+          sendPolicy.reason ?? "Outbound reply blocked by channel policy.",
+      };
 
-  await input.options.store.addMessage({
+  const outboundRecord = await input.options.store.addMessage({
     tenantId: input.tenant.id,
     conversationId: conversation.id,
     channel: input.event.channel,
@@ -3307,6 +3375,7 @@ async function processChannelInboundEvent(input: {
     trace: {
       answer,
       delivery,
+      sendPolicy,
     },
   });
 
@@ -3323,6 +3392,7 @@ async function processChannelInboundEvent(input: {
       providerAccountId: input.event.providerAccountId,
       externalConversationId: input.event.externalConversationId,
       externalUserId: input.event.externalUserId,
+      sendPolicy,
     },
   });
 
@@ -4194,6 +4264,40 @@ function redactSecretSettings(value: unknown): Record<string, unknown> {
 function getStringProperty(value: unknown, key: string) {
   const record = asRecord(value);
   return typeof record[key] === "string" ? record[key] : undefined;
+}
+
+function getDateProperty(value: unknown, key: string) {
+  const raw = asRecord(value)[key];
+  if (raw instanceof Date) {
+    return raw;
+  }
+  if (typeof raw === "string" || typeof raw === "number") {
+    const date = new Date(raw);
+    return Number.isFinite(date.getTime()) ? date : undefined;
+  }
+  return undefined;
+}
+
+function evaluateAutomatedReplyPolicy(input: {
+  channel: Channel;
+  provider: string;
+  lastInboundAt: Date;
+  now?: Date;
+}): { allowed: boolean; reason?: string } {
+  if (!["whatsapp", "messenger", "instagram"].includes(input.channel)) {
+    return { allowed: true };
+  }
+
+  const now = input.now ?? new Date();
+  const ageMs = now.getTime() - input.lastInboundAt.getTime();
+  if (ageMs <= 24 * 60 * 60 * 1000) {
+    return { allowed: true };
+  }
+
+  return {
+    allowed: false,
+    reason: `${input.channel} freeform replies are blocked outside the 24-hour customer-service window.`,
+  };
 }
 
 /**

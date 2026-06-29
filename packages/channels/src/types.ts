@@ -5,6 +5,7 @@ export const NormalizedInboundEventSchema = z.object({
   tenantId: z.string().uuid(),
   channel: ChannelSchema,
   provider: z.string().min(1),
+  providerEventId: z.string().min(1).optional(),
   providerAccountId: z.string().min(1).optional(),
   externalConversationId: z.string().min(1).optional(),
   externalUserId: z.string().min(1).optional(),

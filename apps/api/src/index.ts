@@ -1,7 +1,11 @@
 import { config } from "dotenv";
 import * as Sentry from "@sentry/node";
 import { createEmbeddingProvider } from "@assaddar/core";
-import { createDbClient, TenantRepository } from "@assaddar/db";
+import {
+  createDbClient,
+  createEnvChannelCredentialCipher,
+  TenantRepository,
+} from "@assaddar/db";
 import { loadEnv } from "./env";
 import { buildServer, type BuildServerOptions } from "./server";
 
@@ -28,7 +32,12 @@ async function main() {
   initSentry();
   const env = loadEnv();
   const client = createDbClient();
-  const store = new TenantRepository(client.db);
+  const store = new TenantRepository(
+    client.db,
+    client.db,
+    undefined,
+    createEnvChannelCredentialCipher(process.env),
+  );
   const embeddingProvider = createEmbeddingProvider(process.env);
   const serverOptions: BuildServerOptions = {
     store,

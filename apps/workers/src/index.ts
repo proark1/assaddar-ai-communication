@@ -2,7 +2,11 @@ import { config } from "dotenv";
 import * as Sentry from "@sentry/node";
 import { Queue, Worker, type JobsOptions } from "bullmq";
 import { createEmbeddingProvider } from "@assaddar/core";
-import { createDbClient, TenantRepository } from "@assaddar/db";
+import {
+  createDbClient,
+  createEnvChannelCredentialCipher,
+  TenantRepository,
+} from "@assaddar/db";
 import { backfillMissingEmbeddings } from "./backfill-embeddings";
 import { jobSchemas, type WorkerJobName } from "./jobs";
 
@@ -30,7 +34,12 @@ initSentry();
 const QUEUE_NAME = "assaddar-platform";
 
 const dbClient = createDbClient();
-const repository = new TenantRepository(dbClient.db);
+const repository = new TenantRepository(
+  dbClient.db,
+  dbClient.db,
+  undefined,
+  createEnvChannelCredentialCipher(process.env),
+);
 const embeddingProvider = createEmbeddingProvider(process.env);
 
 const redisUrl = process.env.REDIS_URL ?? "redis://localhost:6379";

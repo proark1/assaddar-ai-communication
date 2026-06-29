@@ -13,7 +13,11 @@
 
 - Real secrets belong in a secret manager, not `.env` files committed to Git.
 - Railway/Postgres `DATABASE_URL` must stay server-side only.
-- Channel access tokens are modeled as encrypted database values.
+- Channel access tokens are stored through an AES-256-GCM credential cipher when
+  `CHANNEL_CREDENTIAL_MASTER_KEY` is configured. Ciphertexts are bound to the
+  tenant, channel, provider, and credential type so copied ciphertext cannot be
+  decrypted in a different context. A future KMS/envelope-encryption provider
+  can replace the env-key implementation behind the same interface.
 - API keys should be stored as hashes, not plaintext.
 - `ADMIN_API_TOKEN` is retained as an internal/root fallback. Normal project access uses Railway Postgres-backed users, memberships, and HttpOnly session cookies.
 - User passwords are stored as salted `scrypt` hashes. Session and invite tokens are stored only as SHA-256 hashes.
