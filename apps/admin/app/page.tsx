@@ -48,6 +48,7 @@ import {
   useState,
 } from "react";
 import { APP_CONFIG } from "./config";
+import { AdminSidebar } from "./AdminSidebar";
 import { DeleteKnowledgeModal } from "./DeleteKnowledgeModal";
 import { DashboardMetrics } from "./DashboardMetrics";
 import { useDialogA11y, useToasts } from "./dashboard-hooks";
@@ -105,6 +106,7 @@ import type {
   Conversation,
   ConversationMessage,
   ContactProfile,
+  DashboardBootstrap,
   Handoff,
   HandoffFilter,
   InboxFilter,
@@ -118,6 +120,7 @@ import type {
   TenantInvite,
   TenantRole,
   TenantUser,
+  ProductionReadinessResult,
   TelephoneNumberType,
   TelephoneProvider,
   TelephoneSetupMode,
@@ -251,6 +254,8 @@ export default function DashboardPage() {
     useState<WhatsappCompliance | null>(null);
   const [workflowSuggestions, setWorkflowSuggestions] =
     useState<WorkflowSuggestionsResult | null>(null);
+  const [productionReadiness, setProductionReadiness] =
+    useState<ProductionReadinessResult | null>(null);
   const [tenantUsers, setTenantUsers] = useState<TenantUser[]>([]);
   const [tenantInvites, setTenantInvites] = useState<TenantInvite[]>([]);
   const [newUserEmail, setNewUserEmail] = useState("");
@@ -1354,110 +1359,66 @@ export default function DashboardPage() {
     workspaceRefreshId.current = refreshId;
     setWorkspaceLoading(true);
 
-    const canLoadUsers = canManageUsers(tenantId);
-    const results = await Promise.allSettled([
-      apiFetch<KnowledgeItem[]>(
-        buildListPath(`/admin/tenants/${tenantId}/knowledge`),
-      ),
-      apiFetch<TenantAnalytics>(`/admin/tenants/${tenantId}/analytics`),
-      apiFetch<Conversation[]>(
-        buildListPath(`/admin/tenants/${tenantId}/conversations`),
-      ),
-      apiFetch<UnifiedInboxItem[]>(
-        buildListPath(`/admin/tenants/${tenantId}/inbox`),
-      ),
-      apiFetch<ContactProfile[]>(
-        buildListPath(`/admin/tenants/${tenantId}/contacts`),
-      ),
-      apiFetch<Handoff[]>(
-        buildListPath(`/admin/tenants/${tenantId}/handoffs`),
-      ),
-      apiFetch<ChannelConnection[]>(
-        `/admin/tenants/${tenantId}/channel-connections`,
-      ),
-      apiFetch<WhatsappTemplate[]>(
-        `/admin/tenants/${tenantId}/whatsapp/templates`,
-      ),
-      apiFetch<WhatsappCompliance>(
-        `/admin/tenants/${tenantId}/whatsapp/compliance`,
-      ),
-      apiFetch<UnansweredQuestion[]>(`/admin/tenants/${tenantId}/unanswered`),
-      apiFetch<WorkflowSuggestionsResult>(
-        `/admin/tenants/${tenantId}/workflows/suggestions`,
-      ),
-      canLoadUsers
-        ? apiFetch<TenantUser[]>(`/admin/tenants/${tenantId}/users`)
-        : Promise.resolve([] as TenantUser[]),
-      canLoadUsers
-        ? apiFetch<TenantInvite[]>(`/admin/tenants/${tenantId}/invites`)
-        : Promise.resolve([] as TenantInvite[]),
-    ]);
+    try {
+      const bootstrap = await apiFetch<DashboardBootstrap>(
+        `/admin/tenants/${tenantId}/dashboard`,
+      );
 
-    if (workspaceRefreshId.current !== refreshId) {
-      return;
-    }
-
-    const firstError = results.find(
-      (result) => result.status === "rejected",
-    ) as PromiseRejectedResult | undefined;
-
-    const resultValue = <T,>(
-      result: PromiseSettledResult<T>,
-      fallback: T,
-    ): T => (result.status === "fulfilled" ? result.value : fallback);
-
-    const nextKnowledge = resultValue(results[0], [] as KnowledgeItem[]);
-    const nextAnalytics = resultValue(results[1], null as TenantAnalytics | null);
-    const nextConversations = resultValue(results[2], [] as Conversation[]);
-    const nextInbox = resultValue(results[3], [] as UnifiedInboxItem[]);
-    const nextContacts = resultValue(results[4], [] as ContactProfile[]);
-    const nextHandoffs = resultValue(results[5], [] as Handoff[]);
-    const nextConnections = resultValue(results[6], [] as ChannelConnection[]);
-
-    setKnowledge(nextKnowledge);
-    setAnalytics(nextAnalytics);
-    setConversations(nextConversations);
-    setUnifiedInbox(nextInbox);
-    setContacts(nextContacts);
-    setHandoffs(nextHandoffs);
-    setChannelConnections(nextConnections);
-    setWhatsappTemplates(resultValue(results[7], [] as WhatsappTemplate[]));
-    setWhatsappCompliance(
-      resultValue(results[8], null as WhatsappCompliance | null),
-    );
-    setUnansweredQuestions(resultValue(results[9], [] as UnansweredQuestion[]));
-    setWorkflowSuggestions(
-      resultValue(results[10], null as WorkflowSuggestionsResult | null),
-    );
-    setTenantUsers(resultValue(results[11], [] as TenantUser[]));
-    setTenantInvites(resultValue(results[12], [] as TenantInvite[]));
-    setChannelAccountDrafts(
-      Object.fromEntries(
-        nextConnections.map((item) => [
-          item.channel,
-          item.externalAccountId ?? "",
-        ]),
-      ),
-    );
-    setKnowledgeHasMore(nextKnowledge.length === listPageSize);
-    setInboxHasMore(nextInbox.length === listPageSize);
-    setContactsHasMore(nextContacts.length === listPageSize);
-    setHandoffsHasMore(nextHandoffs.length === listPageSize);
-    setSelectedConversationId((current) => {
-      if (
-        current &&
-        (nextInbox.some((conversation) => conversation.id === current) ||
-          nextConversations.some((conversation) => conversation.id === current))
-      ) {
-        return current;
+      if (workspaceRefreshId.current !== refreshId) {
+        return;
       }
-      return nextInbox[0]?.id ?? nextConversations[0]?.id ?? "";
-    });
 
-    if (firstError) {
-      setStatus(readableError(firstError.reason));
+      setKnowledge(bootstrap.knowledge);
+      setAnalytics(bootstrap.analytics);
+      setConversations(bootstrap.conversations);
+      setUnifiedInbox(bootstrap.unifiedInbox);
+      setContacts(bootstrap.contacts);
+      setHandoffs(bootstrap.handoffs);
+      setChannelConnections(bootstrap.channelConnections);
+      setWhatsappTemplates(bootstrap.whatsappTemplates);
+      setWhatsappCompliance(bootstrap.whatsappCompliance);
+      setUnansweredQuestions(bootstrap.unansweredQuestions);
+      setWorkflowSuggestions(bootstrap.workflowSuggestions);
+      setProductionReadiness(bootstrap.productionReadiness);
+      setTenantUsers(bootstrap.tenantUsers);
+      setTenantInvites(bootstrap.tenantInvites);
+      setChannelAccountDrafts(
+        Object.fromEntries(
+          bootstrap.channelConnections.map((item) => [
+            item.channel,
+            item.externalAccountId ?? "",
+          ]),
+        ),
+      );
+      setKnowledgeHasMore(bootstrap.knowledge.length === listPageSize);
+      setInboxHasMore(bootstrap.unifiedInbox.length === listPageSize);
+      setContactsHasMore(bootstrap.contacts.length === listPageSize);
+      setHandoffsHasMore(bootstrap.handoffs.length === listPageSize);
+      setSelectedConversationId((current) => {
+        if (
+          current &&
+          (bootstrap.unifiedInbox.some(
+            (conversation) => conversation.id === current,
+          ) ||
+            bootstrap.conversations.some(
+              (conversation) => conversation.id === current,
+            ))
+        ) {
+          return current;
+        }
+        return (
+          bootstrap.unifiedInbox[0]?.id ?? bootstrap.conversations[0]?.id ?? ""
+        );
+      });
+    } catch (error) {
+      if (workspaceRefreshId.current === refreshId) {
+        setStatus(readableError(error));
+      }
+    } finally {
+      if (workspaceRefreshId.current === refreshId) {
+        setWorkspaceLoading(false);
+      }
     }
-    setWorkspaceLoading(false);
   }
 
   async function refreshKnowledge(
@@ -1590,7 +1551,9 @@ export default function DashboardPage() {
           q: contactSearch,
         }),
       );
-      setContacts((current) => (options.append ? [...current, ...items] : items));
+      setContacts((current) =>
+        options.append ? [...current, ...items] : items,
+      );
       setContactsHasMore(items.length === listPageSize);
     } catch {
       setContacts([]);
@@ -2707,7 +2670,9 @@ export default function DashboardPage() {
   function renderMetrics() {
     return (
       <DashboardMetrics
-        loading={(busy || workspaceLoading) && !analytics && knowledge.length === 0}
+        loading={
+          (busy || workspaceLoading) && !analytics && knowledge.length === 0
+        }
         conversations={analytics?.conversations ?? 0}
         messages={analytics?.messages ?? 0}
         contacts={knownContactCount}
@@ -2856,6 +2821,105 @@ export default function DashboardPage() {
     );
   }
 
+  function readinessActionTab(checkId: string): TabKey {
+    if (checkId.startsWith("provider.") || checkId.startsWith("voice.")) {
+      return "channels";
+    }
+    if (checkId.startsWith("handoff.")) {
+      return "leads";
+    }
+    if (checkId.startsWith("ai.")) {
+      return "knowledge";
+    }
+    return "settings";
+  }
+
+  function renderProductionReadiness() {
+    const score = productionReadiness?.score ?? 0;
+    const statusLabel =
+      productionReadiness?.status === "ready_for_beta"
+        ? "Beta ready"
+        : productionReadiness?.status === "needs_work"
+          ? "Needs work"
+          : productionReadiness
+            ? "Not ready"
+            : "Checking";
+    const nextActions = productionReadiness?.summary.nextActions ?? [];
+
+    return (
+      <section className="panel operationalPanel">
+        <div className="panelHeader">
+          <div className="panelTitle">
+            <ShieldCheck size={18} />
+            <h2>Production readiness</h2>
+          </div>
+          <span
+            className="countPill"
+            data-tone={
+              productionReadiness?.status === "ready_for_beta" ? "good" : "warn"
+            }
+          >
+            {score}/100
+          </span>
+        </div>
+        <div className="progressTrack">
+          <span style={{ width: `${score}%` }} />
+        </div>
+        <div className="operationalGrid">
+          <article
+            data-alert={productionReadiness?.summary.failed ? "true" : "false"}
+          >
+            <span>Status</span>
+            <strong>{statusLabel}</strong>
+            <small>Production beta gate across the top 10 areas</small>
+          </article>
+          <article>
+            <span>Passed</span>
+            <strong>{productionReadiness?.summary.passed ?? 0}</strong>
+            <small>Checks already satisfied</small>
+          </article>
+          <article
+            data-alert={
+              productionReadiness?.summary.warnings ? "true" : "false"
+            }
+          >
+            <span>Warnings</span>
+            <strong>{productionReadiness?.summary.warnings ?? 0}</strong>
+            <small>Useful before launch</small>
+          </article>
+          <article
+            data-alert={productionReadiness?.summary.failed ? "true" : "false"}
+          >
+            <span>Blockers</span>
+            <strong>{productionReadiness?.summary.failed ?? 0}</strong>
+            <small>Must resolve before production selling</small>
+          </article>
+        </div>
+        <div className="nextActionList">
+          {nextActions.length ? (
+            nextActions.slice(0, 4).map((check) => (
+              <button
+                className="actionItem"
+                data-tone={check.status === "fail" ? "urgent" : "warn"}
+                key={check.id}
+                type="button"
+                onClick={() => setActiveTab(readinessActionTab(check.id))}
+              >
+                <span>{check.status}</span>
+                <strong>{check.title}</strong>
+                <small>{check.detail}</small>
+              </button>
+            ))
+          ) : (
+            <div className="emptyState compact">
+              Production readiness has no open actions.
+            </div>
+          )}
+        </div>
+      </section>
+    );
+  }
+
   function renderWorkflowSuggestions() {
     const suggestions = workflowSuggestions?.suggestions ?? [];
 
@@ -2907,6 +2971,7 @@ export default function DashboardPage() {
     return (
       <div className="workspaceStack">
         {renderMetrics()}
+        {renderProductionReadiness()}
         {renderOperationalHealth()}
         {renderTodayPanel()}
         {renderWorkflowSuggestions()}
@@ -7766,168 +7831,30 @@ export default function DashboardPage() {
           onClick={() => setSidebarOpen(false)}
         />
       ) : null}
-      <aside className="sidebar" id="primary-sidebar">
-        <div className="brand">
-          <span className="brandMark">
-            <Bot size={20} />
-          </span>
-          <div>
-            <strong>{APP_CONFIG.brand.name}</strong>
-            <span>Communication Admin</span>
-          </div>
-          <button
-            type="button"
-            className="iconButton neutral sidebarClose"
-            aria-label="Close navigation"
-            onClick={() => setSidebarOpen(false)}
-          >
-            <X size={18} />
-          </button>
-        </div>
-
-        <section className="sidebarSection">
-          <div className="sectionTitle">
-            <Globe2 size={16} />
-            <span>Access</span>
-          </div>
-
-          <label className="field">
-            <span>Bootstrap token</span>
-            <div className="inputIcon">
-              <KeyRound size={16} />
-              <input
-                type="password"
-                value={adminToken}
-                onChange={(event) => setAdminToken(event.target.value)}
-                autoComplete="off"
-              />
-            </div>
-          </label>
-
-          <button
-            className="textToggle"
-            type="button"
-            onClick={() => setShowAdvancedConnection((current) => !current)}
-          >
-            {showAdvancedConnection ? "Hide advanced" : "Advanced"}
-          </button>
-
-          {showAdvancedConnection ? (
-            <label className="field">
-              <span>API base</span>
-              <input
-                value={apiBase}
-                onChange={(event) => setApiBase(event.target.value)}
-              />
-            </label>
-          ) : null}
-
-          <div
-            className="connectionState"
-            data-state={tenants.length ? "connected" : "idle"}
-          >
-            {tenants.length ? (
-              <CheckCircle2 size={15} />
-            ) : (
-              <AlertCircle size={15} />
-            )}
-            <span>
-              {tenants.length
-                ? `${tenants.length} tenants loaded`
-                : "Not connected"}
-            </span>
-          </div>
-
-          <button
-            className="primaryButton full"
-            disabled={busy || (!adminToken && !adminSession)}
-            onClick={refreshTenants}
-          >
-            {busy ? (
-              <Loader2 className="spin" size={16} />
-            ) : (
-              <RefreshCw size={16} />
-            )}
-            {tenants.length ? "Refresh tenants" : "Connect"}
-          </button>
-          {adminSession ? (
-            <button
-              className="secondaryButton full"
-              disabled={busy}
-              type="button"
-              onClick={logout}
-            >
-              <X size={16} />
-              Logout
-            </button>
-          ) : null}
-
-          <a className="sidebarProductLink" href="/landing">
-            <ExternalLink size={15} />
-            Product page
-          </a>
-        </section>
-
-        <section className="sidebarSection grow">
-          <div className="sectionTitle">
-            <Building2 size={16} />
-            <span>Tenants</span>
-            <span className="countPill">{tenants.length}</span>
-          </div>
-
-          <div className="tenantList">
-            {tenants.length ? (
-              tenants.map((tenant) => (
-                <button
-                  className={
-                    tenant.id === selectedTenant?.id
-                      ? "tenantButton active"
-                      : "tenantButton"
-                  }
-                  key={tenant.id}
-                  onClick={() => {
-                    setSelectedTenantId(tenant.id);
-                    setSidebarOpen(false);
-                  }}
-                >
-                  <Building2 size={16} />
-                  <span>{tenant.name}</span>
-                  <small>{tenant.slug}</small>
-                </button>
-              ))
-            ) : (
-              <div className="emptyState compact">Connect to load tenants.</div>
-            )}
-          </div>
-        </section>
-
-        <details className="newTenant">
-          <summary>
-            <Plus size={16} />
-            New tenant
-          </summary>
-          <form className="form" onSubmit={createTenant}>
-            <label className="field">
-              <span>Name</span>
-              <input
-                value={tenantName}
-                onChange={(event) => setTenantName(event.target.value)}
-              />
-            </label>
-            <label className="field">
-              <span>Slug</span>
-              <input
-                value={tenantSlug}
-                onChange={(event) => setTenantSlug(event.target.value)}
-              />
-            </label>
-            <button className="secondaryButton" disabled={busy || !adminToken}>
-              <Plus size={16} />
-              Create tenant
-            </button>
-          </form>
-        </details>
-      </aside>
+      <AdminSidebar
+        adminSession={adminSession}
+        adminToken={adminToken}
+        apiBase={apiBase}
+        busy={busy}
+        selectedTenant={selectedTenant}
+        showAdvancedConnection={showAdvancedConnection}
+        tenantName={tenantName}
+        tenantSlug={tenantSlug}
+        tenants={tenants}
+        onAdminTokenChange={setAdminToken}
+        onApiBaseChange={setApiBase}
+        onCloseSidebar={() => setSidebarOpen(false)}
+        onCreateTenant={createTenant}
+        onLogout={logout}
+        onRefreshTenants={refreshTenants}
+        onSelectTenant={(tenantId) => {
+          setSelectedTenantId(tenantId);
+          setSidebarOpen(false);
+        }}
+        onShowAdvancedConnectionChange={setShowAdvancedConnection}
+        onTenantNameChange={setTenantName}
+        onTenantSlugChange={setTenantSlug}
+      />
 
       <section className="workspace">
         <header className="topbar">

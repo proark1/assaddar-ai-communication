@@ -147,12 +147,14 @@ Returns the reply, status, citations, and conversation ID. The API stores inboun
 ## Admin Operations
 
 ```http
+GET /admin/tenants/{tenantId}/dashboard
+GET /admin/tenants/{tenantId}/production-readiness
 GET /admin/tenants/{tenantId}/inbox
 GET /admin/tenants/{tenantId}/contacts
 GET /admin/tenants/{tenantId}/workflows/suggestions
 ```
 
-The inbox endpoint returns conversations enriched with contact profile, latest message, open handoffs, message count, and next action. Contacts are tenant-scoped profiles merged from channel IDs, email, phone, company, and lead form fields. Workflow suggestions are deterministic operational recommendations for handoffs, WhatsApp readiness, and contact completion.
+The dashboard endpoint returns the admin workspace bootstrap payload in one request. The production-readiness endpoint returns a conservative 0-100 score, blockers, and next actions across beta scope, provider delivery, voice, handoff operations, AI quality, security/GDPR, reliability, observability, onboarding, and SaaS controls. The inbox endpoint returns conversations enriched with contact profile, latest message, open handoffs, message count, and next action. Contacts are tenant-scoped profiles merged from channel IDs, email, phone, company, and lead form fields. Workflow suggestions are deterministic operational recommendations for handoffs, WhatsApp readiness, and contact completion.
 
 ## WhatsApp Operations
 

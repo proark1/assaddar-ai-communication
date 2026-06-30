@@ -197,9 +197,11 @@ function resolvePagination(options?: PaginationOptions): {
   return { limit, offset };
 }
 
-function normalizeListQuery(options?: PaginationOptions): string | undefined {
-  const value = options?.q?.trim().toLowerCase();
-  return value ? `%${value}%` : undefined;
+function normalizeFullTextQuery(
+  options?: PaginationOptions,
+): string | undefined {
+  const value = options?.q?.trim();
+  return value ? value : undefined;
 }
 
 function normalizeListStatus(options?: PaginationOptions): string | undefined {
@@ -1467,15 +1469,16 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       );
     }
     const { limit, offset } = resolvePagination(options);
-    const query = normalizeListQuery(options);
+    const query = normalizeFullTextQuery(options);
     const status = normalizeListStatus(options);
     const filters: SQL[] = [eq(knowledgeChunks.tenantId, tenantId)];
     if (status) {
       filters.push(eq(knowledgeChunks.status, status));
     }
     if (query) {
+      const searchQuery = sql`websearch_to_tsquery('simple'::regconfig, ${query})`;
       filters.push(
-        sql`lower(concat_ws(' ', ${knowledgeChunks.title}, ${knowledgeChunks.content}, ${knowledgeChunks.tags}::text)) like ${query}`,
+        sql`to_tsvector('simple'::regconfig, knowledge_chunk_search_text(${knowledgeChunks.title}, ${knowledgeChunks.content}, ${knowledgeChunks.tags})) @@ ${searchQuery}`,
       );
     }
     return this.db
@@ -2178,15 +2181,16 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       );
     }
     const { limit, offset } = resolvePagination(options);
-    const query = normalizeListQuery(options);
+    const query = normalizeFullTextQuery(options);
     const status = normalizeListStatus(options);
     const filters: SQL[] = [eq(conversations.tenantId, tenantId)];
     if (status) {
       filters.push(eq(conversations.status, status));
     }
     if (query) {
+      const searchQuery = sql`websearch_to_tsquery('simple'::regconfig, ${query})`;
       filters.push(
-        sql`lower(concat_ws(' ', ${conversations.publicId}, ${conversations.channel}, ${conversations.externalUserId}, ${conversations.locale})) like ${query}`,
+        sql`to_tsvector('simple'::regconfig, concat_ws(' ', ${conversations.publicId}, ${conversations.channel}, ${conversations.externalUserId}, ${conversations.locale})) @@ ${searchQuery}`,
       );
     }
     return this.db
@@ -2209,15 +2213,19 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       );
     }
     const { limit, offset } = resolvePagination(options);
-    const query = normalizeListQuery(options);
+    const query = normalizeFullTextQuery(options);
     const status = normalizeListStatus(options);
     const filters: SQL[] = [eq(conversations.tenantId, tenantId)];
     if (status) {
       filters.push(eq(conversations.status, status));
     }
     if (query) {
+      const searchQuery = sql`websearch_to_tsquery('simple'::regconfig, ${query})`;
       filters.push(
-        sql`lower(concat_ws(' ', ${conversations.publicId}, ${conversations.channel}, ${conversations.externalUserId}, ${contacts.displayName}, ${contacts.email}, ${contacts.phone}, ${contacts.company})) like ${query}`,
+        sql`(
+          to_tsvector('simple'::regconfig, concat_ws(' ', ${conversations.publicId}, ${conversations.channel}, ${conversations.externalUserId}, ${conversations.locale})) @@ ${searchQuery}
+          or to_tsvector('simple'::regconfig, concat_ws(' ', ${contacts.displayName}, ${contacts.email}, ${contacts.phone}, ${contacts.company}, ${contacts.identifiers}::text)) @@ ${searchQuery}
+        )`,
       );
     }
     const conversationRows = await this.db
@@ -2250,8 +2258,7 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       return [];
     }
 
-    const messageFetchLimit = conversationIds.length * 4;
-    const [recentMessages, openHandoffs] = await Promise.all([
+    const [recentMessages, messageCounts, openHandoffs] = await Promise.all([
       this.db
         .select()
         .from(messages)
@@ -2259,10 +2266,28 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
           and(
             eq(messages.tenantId, tenantId),
             inArray(messages.conversationId, conversationIds),
+            sql`${messages.createdAt} = (
+              select max(latest_messages.created_at)
+              from messages latest_messages
+              where latest_messages.tenant_id = ${tenantId}
+                and latest_messages.conversation_id = ${messages.conversationId}
+            )`,
           ),
         )
-        .orderBy(desc(messages.createdAt))
-        .limit(messageFetchLimit),
+        .orderBy(desc(messages.createdAt)),
+      this.db
+        .select({
+          conversationId: messages.conversationId,
+          total: sql<number>`count(*)::int`,
+        })
+        .from(messages)
+        .where(
+          and(
+            eq(messages.tenantId, tenantId),
+            inArray(messages.conversationId, conversationIds),
+          ),
+        )
+        .groupBy(messages.conversationId),
       this.db
         .select()
         .from(handoffRequests)
@@ -2281,13 +2306,12 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     const lastMessageByConversation = new Map<string, MessageRecord>();
     const messageCountByConversation = new Map<string, number>();
     for (const message of recentMessages) {
-      messageCountByConversation.set(
-        message.conversationId,
-        (messageCountByConversation.get(message.conversationId) ?? 0) + 1,
-      );
       if (!lastMessageByConversation.has(message.conversationId)) {
         lastMessageByConversation.set(message.conversationId, message);
       }
+    }
+    for (const item of messageCounts) {
+      messageCountByConversation.set(item.conversationId, item.total);
     }
 
     const handoffsByConversation = new Map<string, typeof openHandoffs>();
@@ -2350,11 +2374,12 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       );
     }
     const { limit, offset } = resolvePagination(options);
-    const query = normalizeListQuery(options);
+    const query = normalizeFullTextQuery(options);
     const filters: SQL[] = [eq(contacts.tenantId, tenantId)];
     if (query) {
+      const searchQuery = sql`websearch_to_tsquery('simple'::regconfig, ${query})`;
       filters.push(
-        sql`lower(concat_ws(' ', ${contacts.displayName}, ${contacts.email}, ${contacts.phone}, ${contacts.company}, ${contacts.identifiers}::text)) like ${query}`,
+        sql`to_tsvector('simple'::regconfig, concat_ws(' ', ${contacts.displayName}, ${contacts.email}, ${contacts.phone}, ${contacts.company}, ${contacts.identifiers}::text)) @@ ${searchQuery}`,
       );
     }
     return this.db
@@ -2377,15 +2402,16 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       );
     }
     const { limit, offset } = resolvePagination(options);
-    const query = normalizeListQuery(options);
+    const query = normalizeFullTextQuery(options);
     const status = normalizeListStatus(options);
     const filters: SQL[] = [eq(handoffRequests.tenantId, tenantId)];
     if (status) {
       filters.push(eq(handoffRequests.status, status));
     }
     if (query) {
+      const searchQuery = sql`websearch_to_tsquery('simple'::regconfig, ${query})`;
       filters.push(
-        sql`lower(concat_ws(' ', ${handoffRequests.reason}, ${handoffRequests.requesterMessage}, ${handoffRequests.channel}, ${handoffRequests.assignedTo}, ${handoffRequests.metadata}::text)) like ${query}`,
+        sql`to_tsvector('simple'::regconfig, concat_ws(' ', ${handoffRequests.reason}, ${handoffRequests.requesterMessage}, ${handoffRequests.channel}, ${handoffRequests.assignedTo}, ${handoffRequests.metadata}::text)) @@ ${searchQuery}`,
       );
     }
     return this.db

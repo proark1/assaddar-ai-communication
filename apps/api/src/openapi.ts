@@ -82,6 +82,20 @@ export const openApiDocument = {
         summary: "Fetch tenant conversation and handoff analytics",
       },
     },
+    "/admin/tenants/{tenantId}/dashboard": {
+      get: {
+        summary:
+          "Fetch the dashboard bootstrap payload for the admin workspace",
+        "x-minimum-role": "viewer",
+      },
+    },
+    "/admin/tenants/{tenantId}/production-readiness": {
+      get: {
+        summary:
+          "Score tenant production-readiness across channels, AI quality, handoff operations, security, reliability, observability, onboarding, and SaaS controls",
+        "x-minimum-role": "viewer",
+      },
+    },
     "/admin/tenants/{tenantId}/conversations": {
       get: {
         summary: "List tenant conversations",

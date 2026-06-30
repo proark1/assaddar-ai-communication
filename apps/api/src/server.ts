@@ -106,8 +106,12 @@ type StoreTenant = {
   publicId: string;
   name: string;
   slug?: string;
+  status?: string;
   defaultLocale: string;
   theme?: WidgetThemeInput | null;
+  retentionDays?: number | null;
+  confidenceThreshold?: number | string | null;
+  maxMessageLength?: number | null;
 };
 
 type StoreAuthUser = {
@@ -394,6 +398,39 @@ type LeadNotificationEmail = {
   from: string;
   subject: string;
   text: string;
+};
+
+type ProductionReadinessStatus = "pass" | "warn" | "fail";
+
+type ProductionReadinessCheck = {
+  id: string;
+  title: string;
+  detail: string;
+  status: ProductionReadinessStatus;
+  actionLabel: string;
+  weight: number;
+  score: number;
+};
+
+type ProductionReadinessSection = {
+  id: string;
+  title: string;
+  score: number;
+  checks: ProductionReadinessCheck[];
+};
+
+type ProductionReadinessResult = {
+  generatedAt: string;
+  score: number;
+  status: "ready_for_beta" | "needs_work" | "not_ready";
+  summary: {
+    passed: number;
+    warnings: number;
+    failed: number;
+    blockers: ProductionReadinessCheck[];
+    nextActions: ProductionReadinessCheck[];
+  };
+  sections: ProductionReadinessSection[];
 };
 
 const defaultAutomationSettings: AutomationSettings = {
@@ -1345,6 +1382,32 @@ export async function buildServer(
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       return options.store.getTenantAnalytics(tenantId);
+    },
+  );
+
+  app.get(
+    "/admin/tenants/:tenantId/dashboard",
+    { preHandler: requireTenantAccess(options, "viewer") },
+    async (request) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      return buildDashboardBootstrap(options, request, tenantId);
+    },
+  );
+
+  app.get(
+    "/admin/tenants/:tenantId/production-readiness",
+    { preHandler: requireTenantAccess(options, "viewer") },
+    async (request, reply) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      const readiness = await buildProductionReadinessForTenant(
+        options,
+        request,
+        tenantId,
+      );
+      if (!readiness) {
+        return reply.code(404).send({ error: "Tenant not found." });
+      }
+      return readiness;
     },
   );
 
@@ -2552,6 +2615,20 @@ function canGrantTenantRole(
   return membership ? roleAtLeast(membership.role, targetRole) : false;
 }
 
+function canAccessTenantRole(
+  auth: RequestAuth,
+  tenantId: string,
+  minimumRole: RoleName,
+) {
+  if (auth.kind === "admin" || isPlatformOwner(auth)) {
+    return true;
+  }
+  const membership = auth.memberships.find(
+    (item) => item.tenantId === tenantId,
+  );
+  return membership ? roleAtLeast(membership.role, minimumRole) : false;
+}
+
 function roleRank(role: RoleName) {
   const ranks: Record<RoleName, number> = {
     viewer: 10,
@@ -3704,6 +3781,621 @@ function buildUnansweredQueue(handoffs: unknown[]) {
         Boolean,
       ),
     }));
+}
+
+async function buildProductionReadinessForTenant(
+  options: BuildServerOptions,
+  request: FastifyRequest,
+  tenantId: string,
+): Promise<ProductionReadinessResult | null> {
+  const auth = requestAuthContext.get(request);
+  const canLoadUsers = auth
+    ? canAccessTenantRole(auth, tenantId, "tenant_admin")
+    : false;
+  const [
+    tenant,
+    knowledge,
+    analytics,
+    conversations,
+    unifiedInbox,
+    contacts,
+    handoffs,
+    rawChannelConnections,
+    whatsappTemplates,
+    whatsappCompliance,
+    tenantUsers,
+  ] = await Promise.all([
+    options.store.getTenant(tenantId),
+    options.store.listKnowledge(tenantId, { limit: 50, offset: 0 }),
+    options.store.getTenantAnalytics(tenantId),
+    options.store.listConversations(tenantId, { limit: 50, offset: 0 }),
+    options.store.listUnifiedInbox(tenantId, { limit: 50, offset: 0 }),
+    options.store.listContacts(tenantId, { limit: 50, offset: 0 }),
+    options.store.listHandoffs(tenantId, { limit: 50, offset: 0 }),
+    options.store.listChannelConnections(tenantId),
+    options.store.listWhatsappTemplates(tenantId),
+    options.store.getWhatsappCompliance(tenantId),
+    canLoadUsers
+      ? options.store.listTenantUsers(tenantId, { limit: 50, offset: 0 })
+      : Promise.resolve([]),
+  ]);
+
+  if (!tenant) {
+    return null;
+  }
+
+  const channelConnections = buildChannelConnectionDashboard({
+    tenant,
+    connections: rawChannelConnections,
+    options,
+  });
+
+  return buildProductionReadiness({
+    tenant,
+    knowledge,
+    analytics,
+    conversations,
+    unifiedInbox,
+    contacts,
+    handoffs,
+    channelConnections,
+    whatsappTemplates,
+    whatsappCompliance,
+    tenantUsers,
+    options,
+  });
+}
+
+async function buildDashboardBootstrap(
+  options: BuildServerOptions,
+  request: FastifyRequest,
+  tenantId: string,
+) {
+  const auth = requestAuthContext.get(request);
+  const canLoadUsers = auth
+    ? canAccessTenantRole(auth, tenantId, "tenant_admin")
+    : false;
+  const [
+    tenant,
+    knowledge,
+    analytics,
+    conversations,
+    unifiedInbox,
+    contacts,
+    handoffs,
+    rawChannelConnections,
+    whatsappTemplates,
+    whatsappCompliance,
+    tenantUsers,
+    tenantInvites,
+  ] = await Promise.all([
+    options.store.getTenant(tenantId),
+    options.store.listKnowledge(tenantId, { limit: 50, offset: 0 }),
+    options.store.getTenantAnalytics(tenantId),
+    options.store.listConversations(tenantId, { limit: 50, offset: 0 }),
+    options.store.listUnifiedInbox(tenantId, { limit: 50, offset: 0 }),
+    options.store.listContacts(tenantId, { limit: 50, offset: 0 }),
+    options.store.listHandoffs(tenantId, { limit: 50, offset: 0 }),
+    options.store.listChannelConnections(tenantId),
+    options.store.listWhatsappTemplates(tenantId),
+    options.store.getWhatsappCompliance(tenantId),
+    canLoadUsers
+      ? options.store.listTenantUsers(tenantId, { limit: 50, offset: 0 })
+      : Promise.resolve([]),
+    canLoadUsers
+      ? options.store.listTenantInvites(tenantId)
+      : Promise.resolve([]),
+  ]);
+  const channelConnections = buildChannelConnectionDashboard({
+    tenant,
+    connections: rawChannelConnections,
+    options,
+  });
+  const productionReadiness = tenant
+    ? buildProductionReadiness({
+        tenant,
+        knowledge,
+        analytics,
+        conversations,
+        unifiedInbox,
+        contacts,
+        handoffs,
+        channelConnections,
+        whatsappTemplates,
+        whatsappCompliance,
+        tenantUsers,
+        options,
+      })
+    : null;
+
+  return {
+    knowledge,
+    analytics,
+    conversations,
+    unifiedInbox,
+    contacts,
+    handoffs,
+    channelConnections,
+    whatsappTemplates,
+    whatsappCompliance,
+    unansweredQuestions: buildUnansweredQueue(handoffs),
+    workflowSuggestions: buildWorkflowSuggestions({
+      analytics,
+      handoffs,
+      contacts,
+      templates: whatsappTemplates,
+      compliance: whatsappCompliance,
+    }),
+    productionReadiness,
+    tenantUsers,
+    tenantInvites,
+  };
+}
+
+function buildProductionReadiness(input: {
+  tenant: StoreTenant;
+  knowledge: unknown[];
+  analytics: unknown;
+  conversations: unknown[];
+  unifiedInbox: unknown[];
+  contacts: unknown[];
+  handoffs: unknown[];
+  channelConnections: ChannelDashboardItem[];
+  whatsappTemplates: unknown[];
+  whatsappCompliance: unknown;
+  tenantUsers: unknown[];
+  options: BuildServerOptions;
+}): ProductionReadinessResult {
+  const tenant = asRecord(input.tenant);
+  const analytics = asRecord(input.analytics);
+  const usageByStatus = asArray(analytics.usageByStatus);
+  const channelByName = new Map<string, Record<string, unknown>>();
+  for (const connection of input.channelConnections) {
+    channelByName.set(String(connection.channel), asRecord(connection));
+  }
+
+  const website = channelByName.get("website");
+  const whatsapp = channelByName.get("whatsapp");
+  const messenger = channelByName.get("messenger");
+  const instagram = channelByName.get("instagram");
+  const telephone = channelByName.get("telephone");
+  const telephoneSettings = asRecord(telephone?.settings);
+  const telephoneChecklist = asRecord(telephoneSettings.setupChecklist);
+  const telephoneGdpr = asRecord(telephoneSettings.gdpr);
+  const compliance = asRecord(input.whatsappCompliance);
+  const templateStats = asRecord(compliance.templates);
+  const recentDeliveries = asArray(compliance.recentDeliveries);
+  const theme = asRecord(tenant.theme);
+
+  const approvedKnowledge =
+    numberValue(analytics.approvedKnowledge) ??
+    input.knowledge.filter((item) => asRecord(item).status === "approved")
+      .length;
+  const answered = usageTotal(usageByStatus, ["answered"]);
+  const needsHuman = usageTotal(usageByStatus, ["handoff", "refused"]);
+  const outcomeTotal = answered + needsHuman;
+  const unresolvedRate = outcomeTotal > 0 ? needsHuman / outcomeTotal : 0;
+  const approvedTemplates =
+    numberValue(templateStats.approved) ??
+    input.whatsappTemplates.filter(
+      (template) => asRecord(template).status === "approved",
+    ).length;
+  const failedDeliveries = recentDeliveries.filter((delivery) =>
+    ["failed", "error", "blocked"].includes(String(asRecord(delivery).status)),
+  );
+  const openHandoffs = input.handoffs
+    .map((handoff) => asRecord(handoff))
+    .filter((handoff) => handoff.status === "open");
+  const assignedOpenHandoffs = openHandoffs.filter(
+    (handoff) =>
+      typeof handoff.assignedTo === "string" && handoff.assignedTo.trim(),
+  );
+  const contactsWithReachableDetail = input.contacts
+    .map((contact) => asRecord(contact))
+    .filter((contact) => Boolean(contact.email || contact.phone));
+  const contactCompletionRate = input.contacts.length
+    ? contactsWithReachableDetail.length / input.contacts.length
+    : 0;
+
+  const websiteReady = channelReady(website);
+  const whatsappConnected = channelReady(whatsapp);
+  const whatsappCredentialed = credentialReady(whatsapp);
+  const metaSignatureConfigured = Boolean(
+    input.options.metaAppSecret || process.env.META_APP_SECRET,
+  );
+  const socialCredentialed = [whatsapp, messenger, instagram].some(
+    (connection) => credentialReady(connection) && channelReady(connection),
+  );
+  const telephoneConnected = channelReady(telephone);
+  const telephoneHasNumber =
+    typeof telephone?.externalAccountId === "string" &&
+    telephone.externalAccountId.trim().length > 0;
+  const telephoneHasDisclosure = Boolean(
+    telephoneChecklist.disclosureConfirmed || telephoneGdpr.disclosureText,
+  );
+  const telephoneHasFallback = Boolean(
+    telephoneChecklist.fallbackSet ||
+    telephoneSettings.fallbackNumber ||
+    telephoneSettings.transferPhoneNumber,
+  );
+  const telephoneLaunchReady = Boolean(
+    telephoneConnected &&
+    telephoneHasNumber &&
+    telephoneChecklist.sipConfigured &&
+    telephoneChecklist.testCallCompleted &&
+    telephoneHasDisclosure &&
+    telephoneHasFallback,
+  );
+  const whatsappLaunchReady = Boolean(
+    whatsappConnected &&
+    whatsappCredentialed &&
+    approvedTemplates > 0 &&
+    metaSignatureConfigured,
+  );
+  const credentialEncryptionConfigured = Boolean(
+    process.env.CHANNEL_CREDENTIAL_MASTER_KEY ||
+    process.env.CHANNEL_CREDENTIAL_KMS_KEY_ID,
+  );
+  const retentionDays = numberValue(tenant.retentionDays);
+  const hasTenantTeam = input.tenantUsers.length > 0;
+  const usageMetered = usageByStatus.length > 0;
+  const leadCaptureEnabled = theme.leadCaptureEnabled !== false;
+  const readinessEnabled = theme.readinessEnabled !== false;
+  const billingConfigured = Boolean(
+    process.env.STRIPE_SECRET_KEY ||
+    process.env.BILLING_PROVIDER ||
+    process.env.PLAN_LIMITS_ENABLED === "true",
+  );
+
+  const sections = [
+    readinessSection("beta_scope", "Production beta scope", [
+      readinessCheck({
+        id: "beta.website_plus_channel",
+        title: "Website plus one production channel",
+        detail:
+          "Launch with website chat and at least one real WhatsApp or telephone path before adding more channels.",
+        status:
+          websiteReady && (whatsappLaunchReady || telephoneLaunchReady)
+            ? "pass"
+            : websiteReady && approvedKnowledge > 0
+              ? "warn"
+              : "fail",
+        actionLabel: "Finish WhatsApp or telephone launch",
+        weight: 10,
+      }),
+    ]),
+    readinessSection("provider_delivery", "Provider delivery and rules", [
+      readinessCheck({
+        id: "provider.whatsapp_send_path",
+        title: "WhatsApp send path and templates",
+        detail:
+          "Requires a connected WhatsApp channel, access token, Meta signature verification, and at least one approved utility template.",
+        status: whatsappLaunchReady
+          ? "pass"
+          : whatsappConnected || whatsappCredentialed || approvedTemplates > 0
+            ? "warn"
+            : "fail",
+        actionLabel: "Complete WhatsApp Cloud API setup",
+        weight: 7,
+      }),
+      readinessCheck({
+        id: "provider.meta_accounts",
+        title: "Messenger and Instagram account mapping",
+        detail:
+          "Messenger and Instagram should have connected page/account mappings before automated replies are enabled.",
+        status:
+          channelReady(messenger) || channelReady(instagram)
+            ? credentialReady(messenger) || credentialReady(instagram)
+              ? "pass"
+              : "warn"
+            : "warn",
+        actionLabel: "Connect Meta accounts",
+        weight: 3,
+      }),
+    ]),
+    readinessSection("voice", "Production voice", [
+      readinessCheck({
+        id: "voice.media_edge",
+        title: "SIP/RTP voice edge and launch checklist",
+        detail:
+          "Phone AI needs a routed number/SIP trunk, successful test call, caller disclosure, and a human fallback.",
+        status: telephoneLaunchReady
+          ? "pass"
+          : telephoneConnected || telephoneHasNumber
+            ? "warn"
+            : "fail",
+        actionLabel: "Finish telephone launch checklist",
+        weight: 10,
+      }),
+    ]),
+    readinessSection("handoff", "Human handoff operations", [
+      readinessCheck({
+        id: "handoff.assignment",
+        title: "Open handoffs have owners",
+        detail:
+          "Uncertain, risky, or lead conversations should be assigned so no customer request stalls.",
+        status:
+          openHandoffs.length === 0 ||
+          assignedOpenHandoffs.length === openHandoffs.length
+            ? "pass"
+            : assignedOpenHandoffs.length > 0
+              ? "warn"
+              : "fail",
+        actionLabel: "Assign open handoffs",
+        weight: 5,
+      }),
+      readinessCheck({
+        id: "handoff.contact_details",
+        title: "Contacts are reachable",
+        detail:
+          "At least 70% of known contacts should have an email or phone number for follow-up and callbacks.",
+        status:
+          input.contacts.length === 0 || contactCompletionRate >= 0.7
+            ? "pass"
+            : contactCompletionRate >= 0.4
+              ? "warn"
+              : "fail",
+        actionLabel: "Complete contact profiles",
+        weight: 5,
+      }),
+    ]),
+    readinessSection("ai_quality", "AI quality and evaluation", [
+      readinessCheck({
+        id: "ai.knowledge_coverage",
+        title: "Approved knowledge coverage",
+        detail:
+          "Production tenants should have enough approved FAQ and policy coverage before the assistant is exposed to live traffic.",
+        status:
+          approvedKnowledge >= 8
+            ? "pass"
+            : approvedKnowledge >= 3
+              ? "warn"
+              : "fail",
+        actionLabel: "Add approved knowledge",
+        weight: 5,
+      }),
+      readinessCheck({
+        id: "ai.outcome_regression",
+        title: "Answer outcome regression signal",
+        detail:
+          "Use tenant examples and live outcomes to keep refusal, handoff, and answer behavior stable before releases.",
+        status:
+          process.env.AI_EVAL_ENABLED === "true" || process.env.AI_EVAL_SET_PATH
+            ? "pass"
+            : outcomeTotal > 0 && unresolvedRate <= 0.25
+              ? "warn"
+              : "fail",
+        actionLabel: "Add tenant evaluation set",
+        weight: 5,
+      }),
+    ]),
+    readinessSection("security_gdpr", "Security and GDPR", [
+      readinessCheck({
+        id: "security.credential_encryption",
+        title: "Channel credential encryption",
+        detail:
+          "Production channel tokens need a configured master key or KMS-backed envelope encryption path.",
+        status: credentialEncryptionConfigured
+          ? "pass"
+          : socialCredentialed
+            ? "fail"
+            : "warn",
+        actionLabel: "Configure credential encryption",
+        weight: 5,
+      }),
+      readinessCheck({
+        id: "security.retention",
+        title: "Retention window configured",
+        detail:
+          "Set tenant retention days before handling production personal data.",
+        status:
+          retentionDays && retentionDays >= 30 && retentionDays <= 730
+            ? "pass"
+            : retentionDays && retentionDays > 0
+              ? "warn"
+              : "fail",
+        actionLabel: "Set retention policy",
+        weight: 5,
+      }),
+    ]),
+    readinessSection("reliability", "Reliability and replay", [
+      readinessCheck({
+        id: "reliability.redis_workers",
+        title: "Worker queue configured",
+        detail:
+          "Redis-backed workers are required for retries, dead-letter inspection, embeddings, and retention cleanup.",
+        status: process.env.REDIS_URL ? "pass" : "warn",
+        actionLabel: "Configure worker Redis",
+        weight: 4,
+      }),
+      readinessCheck({
+        id: "reliability.retention_job",
+        title: "Retention cleanup job enabled",
+        detail:
+          "Retention cleanup remains off until explicitly enabled because it deletes old conversation history.",
+        status:
+          process.env.RETENTION_CLEANUP_ENABLED === "true" ? "pass" : "warn",
+        actionLabel: "Enable retention cleanup",
+        weight: 3,
+      }),
+      readinessCheck({
+        id: "reliability.delivery_failures",
+        title: "Provider delivery failures reviewed",
+        detail:
+          "Recent delivery failures should be resolved or replayed before launch.",
+        status: failedDeliveries.length === 0 ? "pass" : "fail",
+        actionLabel: "Review delivery failures",
+        weight: 3,
+      }),
+    ]),
+    readinessSection("observability", "Observability and cost", [
+      readinessCheck({
+        id: "observability.metrics",
+        title: "Metrics and request tracing",
+        detail:
+          "The API exposes Prometheus metrics and request IDs for production health checks.",
+        status: "pass",
+        actionLabel: "Review dashboards",
+        weight: 3,
+      }),
+      readinessCheck({
+        id: "observability.error_reporting",
+        title: "Error reporting configured",
+        detail:
+          "Sentry or equivalent error reporting should be enabled before live customer traffic.",
+        status: process.env.SENTRY_DSN ? "pass" : "warn",
+        actionLabel: "Configure Sentry",
+        weight: 3,
+      }),
+      readinessCheck({
+        id: "observability.usage_metering",
+        title: "Usage and outcome metering",
+        detail:
+          "Usage events should exist so cost, answer outcomes, and channel behavior can be monitored.",
+        status: usageMetered ? "pass" : "warn",
+        actionLabel: "Generate smoke traffic",
+        weight: 4,
+      }),
+    ]),
+    readinessSection("onboarding", "Onboarding and launch UX", [
+      readinessCheck({
+        id: "onboarding.widget_setup",
+        title: "Widget and lead capture configured",
+        detail:
+          "The tenant should have a branded widget, consent copy, lead capture, and readiness flow before public launch.",
+        status:
+          theme.openingMessage && leadCaptureEnabled && readinessEnabled
+            ? "pass"
+            : theme.openingMessage
+              ? "warn"
+              : "fail",
+        actionLabel: "Finish widget setup",
+        weight: 6,
+      }),
+      readinessCheck({
+        id: "onboarding.live_test",
+        title: "Live conversation tested",
+        detail:
+          "Run at least one real website or channel conversation and confirm it appears in the inbox.",
+        status: input.conversations.length > 0 ? "pass" : "warn",
+        actionLabel: "Run live test",
+        weight: 4,
+      }),
+    ]),
+    readinessSection("commercial", "Commercial SaaS controls", [
+      readinessCheck({
+        id: "commercial.billing_limits",
+        title: "Billing and plan limits",
+        detail:
+          "Usage metering exists, but production selling needs billing enforcement, plan limits, and overage handling.",
+        status: billingConfigured ? "pass" : usageMetered ? "warn" : "fail",
+        actionLabel: "Configure billing limits",
+        weight: 5,
+      }),
+      readinessCheck({
+        id: "commercial.team_access",
+        title: "Customer team access",
+        detail:
+          "A tenant owner or admin user should exist so the customer can operate the workspace without a bootstrap token.",
+        status: hasTenantTeam ? "pass" : "warn",
+        actionLabel: "Invite tenant users",
+        weight: 5,
+      }),
+    ]),
+  ];
+
+  const checks = sections.flatMap((section) => section.checks);
+  const totalWeight = checks.reduce((total, check) => total + check.weight, 0);
+  const earned = checks.reduce((total, check) => total + check.score, 0);
+  const score = totalWeight ? Math.round((earned / totalWeight) * 100) : 0;
+  const failed = checks.filter((check) => check.status === "fail");
+  const warnings = checks.filter((check) => check.status === "warn");
+  const actionable = [...failed, ...warnings].sort(
+    (a, b) => b.weight - a.weight,
+  );
+
+  return {
+    generatedAt: new Date().toISOString(),
+    score,
+    status:
+      score >= 85 && failed.length === 0
+        ? "ready_for_beta"
+        : score >= 65
+          ? "needs_work"
+          : "not_ready",
+    summary: {
+      passed: checks.filter((check) => check.status === "pass").length,
+      warnings: warnings.length,
+      failed: failed.length,
+      blockers: failed.sort((a, b) => b.weight - a.weight).slice(0, 5),
+      nextActions: actionable.slice(0, 6),
+    },
+    sections,
+  };
+}
+
+function readinessSection(
+  id: string,
+  title: string,
+  checks: ProductionReadinessCheck[],
+): ProductionReadinessSection {
+  const totalWeight = checks.reduce((total, check) => total + check.weight, 0);
+  const score = checks.reduce((total, check) => total + check.score, 0);
+  return {
+    id,
+    title,
+    score: totalWeight ? Math.round((score / totalWeight) * 100) : 0,
+    checks,
+  };
+}
+
+function readinessCheck(input: {
+  id: string;
+  title: string;
+  detail: string;
+  status: ProductionReadinessStatus;
+  actionLabel: string;
+  weight: number;
+}): ProductionReadinessCheck {
+  return {
+    ...input,
+    score:
+      input.status === "pass"
+        ? input.weight
+        : input.status === "warn"
+          ? input.weight / 2
+          : 0,
+  };
+}
+
+function channelReady(connection: Record<string, unknown> | undefined) {
+  return connection?.status === "connected";
+}
+
+function credentialReady(connection: Record<string, unknown> | undefined) {
+  return Boolean(connection?.credentialConfigured);
+}
+
+function numberValue(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
+function usageTotal(usageByStatus: unknown[], eventTypes: string[]): number {
+  const wanted = new Set(eventTypes);
+  return usageByStatus.reduce<number>((total, item) => {
+    const record = asRecord(item);
+    if (!wanted.has(String(record.eventType))) {
+      return total;
+    }
+    return total + (numberValue(record.total) ?? 0);
+  }, 0);
 }
 
 async function notifyLead(

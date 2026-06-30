@@ -455,11 +455,13 @@ textarea {
   color: var(--green);
 }
 
+.connectionDetails,
 .newTenant {
   border-top: 1px solid var(--line);
   padding-top: 14px;
 }
 
+.connectionDetails summary,
 .newTenant summary {
   display: flex;
   align-items: center;
@@ -472,8 +474,25 @@ textarea {
   list-style: none;
 }
 
+.connectionDetails summary::-webkit-details-marker,
 .newTenant summary::-webkit-details-marker {
   display: none;
+}
+
+.connectionDetails .sidebarSection {
+  margin-top: 10px;
+}
+
+.connectionDot {
+  width: 9px;
+  height: 9px;
+  margin-left: auto;
+  border-radius: 999px;
+  background: var(--amber);
+}
+
+.connectionDot[data-state="connected"] {
+  background: var(--green);
 }
 
 .newTenant .form {

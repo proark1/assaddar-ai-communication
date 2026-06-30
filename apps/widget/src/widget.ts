@@ -69,6 +69,14 @@ type WidgetState = {
   updatedAt: number;
 };
 
+type WidgetViewState = {
+  consentVisible: boolean;
+  modeChooserVisible: boolean;
+  quickRepliesVisible: boolean;
+  readinessVisible: boolean;
+  leadCaptureVisible: boolean;
+};
+
 type StringKey =
   | "closeChat"
   | "clearConversation"
@@ -243,8 +251,7 @@ const STRINGS: Record<string, StringSet> = {
     leadError:
       "I couldn't send your details right now. Please try again later.",
     chatError: "I can't send this message right now. Please try again later.",
-    chatRateLimited:
-      "Please wait a moment before sending more messages.",
+    chatRateLimited: "Please wait a moment before sending more messages.",
     typing: "Typing ...",
     openingMessage: "Hi, how can I help?",
     leadFieldName: "Name",
@@ -360,32 +367,8 @@ void (() => {
     const maxMessageLength = sanitizeMaxMessageLength(
       config.limits.maxMessageLength,
     );
-    const leadCaptureAvailable =
-      Boolean(config.theme.leadCaptureEnabled) && !state.leadCaptured;
-    const consentVisible =
-      Boolean(config.theme.consentEnabled) && !state.consentAccepted;
     const quickReplies = normalizeQuickReplies(config.theme.quickReplies);
-    const hasQuickReplies = quickReplies.length > 0;
-    const readinessAvailable =
-      Boolean(config.theme.readinessEnabled) && !state.readinessCaptured;
-    const modeChooserVisible =
-      !consentVisible &&
-      (hasQuickReplies || readinessAvailable || leadCaptureAvailable) &&
-      !state.leadCaptured &&
-      !state.readinessCaptured;
-    const quickRepliesVisible =
-      hasQuickReplies && !consentVisible && !modeChooserVisible;
-    const readinessVisible =
-      readinessAvailable &&
-      !consentVisible &&
-      !modeChooserVisible &&
-      !hasQuickReplies;
-    const leadCaptureVisible =
-      leadCaptureAvailable &&
-      !consentVisible &&
-      !modeChooserVisible &&
-      !readinessAvailable &&
-      !hasQuickReplies;
+    const viewState = getWidgetViewState(config.theme, state, quickReplies);
     const shellSide =
       position === "bottom-left"
         ? "left: 20px; right: auto;"
@@ -750,25 +733,25 @@ void (() => {
           </div>
         </div>
         <div class="messages" part="messages" role="log" aria-live="polite" aria-relevant="additions text" aria-label="${escapeHtml(t("messagesAriaLabel"))}"></div>
-	        <div class="consent" data-visible="${consentVisible ? "true" : "false"}">
+	        <div class="consent" data-visible="${viewState.consentVisible ? "true" : "false"}">
 	          <p>${escapeHtml(config.theme.consentText ?? t("consentText"))}</p>
 	          <button type="button">${escapeHtml(t("consentAccept"))}</button>
 	        </div>
-	        <div class="intake-modes" data-visible="${modeChooserVisible ? "true" : "false"}" role="group" aria-label="${escapeHtml(t("intakePrompt"))}">
+	        <div class="intake-modes" data-visible="${viewState.modeChooserVisible ? "true" : "false"}" role="group" aria-label="${escapeHtml(t("intakePrompt"))}">
 	          <p>${escapeHtml(t("intakePrompt"))}</p>
 	          <button type="button" data-mode="question" aria-label="${escapeHtml(t("intakeQuestion"))}"><span>${escapeHtml(t("intakeQuestion"))}</span><strong>${escapeHtml(t("intakeQuestionTag"))}</strong></button>
 	          ${
-              readinessAvailable
+              Boolean(config.theme.readinessEnabled) && !state.readinessCaptured
                 ? `<button type="button" data-mode="readiness" aria-label="${escapeHtml(t("intakeReadiness"))}"><span>${escapeHtml(t("intakeReadiness"))}</span><strong>${escapeHtml(t("intakeReadinessTag"))}</strong></button>`
                 : ""
             }
 	          ${
-              leadCaptureAvailable
+              Boolean(config.theme.leadCaptureEnabled) && !state.leadCaptured
                 ? `<button type="button" data-mode="lead" aria-label="${escapeHtml(t("intakeLead"))}"><span>${escapeHtml(t("intakeLead"))}</span><strong>${escapeHtml(t("intakeLeadTag"))}</strong></button>`
                 : ""
             }
 	        </div>
-	        <div class="quick-replies" data-visible="${quickRepliesVisible ? "true" : "false"}" role="group" aria-label="${escapeHtml(t("intakePrompt"))}">
+	        <div class="quick-replies" data-visible="${viewState.quickRepliesVisible ? "true" : "false"}" role="group" aria-label="${escapeHtml(t("intakePrompt"))}">
 	          ${quickReplies
               .map(
                 (reply) =>
@@ -776,7 +759,7 @@ void (() => {
               )
               .join("")}
         </div>
-        <form class="readiness-form" data-visible="${readinessVisible && !consentVisible ? "true" : "false"}" aria-label="${escapeHtml(t("readinessSubmit"))}">
+        <form class="readiness-form" data-visible="${viewState.readinessVisible ? "true" : "false"}" aria-label="${escapeHtml(t("readinessSubmit"))}">
           <p>${escapeHtml(config.theme.readinessIntro ?? t("readinessIntro"))}</p>
           <input name="goal" aria-label="${escapeHtml(t("readinessGoal"))}" placeholder="${escapeHtml(t("readinessGoal"))}" />
           <textarea name="processPain" rows="2" aria-label="${escapeHtml(t("readinessProcessPain"))}" placeholder="${escapeHtml(t("readinessProcessPain"))}"></textarea>
@@ -785,7 +768,7 @@ void (() => {
           <input name="budget" aria-label="${escapeHtml(t("readinessBudget"))}" placeholder="${escapeHtml(t("readinessBudget"))}" />
           <button class="primary">${escapeHtml(t("readinessSubmit"))}</button>
         </form>
-	        <form class="lead-form" data-visible="${leadCaptureVisible && !consentVisible ? "true" : "false"}" aria-label="${escapeHtml(t("leadSubmit"))}">
+	        <form class="lead-form" data-visible="${viewState.leadCaptureVisible ? "true" : "false"}" aria-label="${escapeHtml(t("leadSubmit"))}">
 	          <strong>${escapeHtml(config.theme.leadCaptureIntro ?? t("leadIntro"))}</strong>
 	          ${leadFields.map((field) => renderLeadField(field, t)).join("")}
           <button>${escapeHtml(t("leadSubmit"))}</button>
@@ -897,33 +880,10 @@ void (() => {
     consentButton?.addEventListener("click", () => {
       state.consentAccepted = true;
       persistState(context.config.assistantId, state);
-      consent.dataset.visible = "false";
-      if (
-        quickReplyButtons.length ||
-        (context.config.theme.readinessEnabled && !state.readinessCaptured) ||
-        (context.config.theme.leadCaptureEnabled && !state.leadCaptured)
-      ) {
-        modeChooser.dataset.visible = "true";
-        return;
-      }
-      if (quickReplyButtons.length) {
-        quickRepliesNode.dataset.visible = "true";
-      }
-      if (
-        readinessForm &&
-        context.config.theme.readinessEnabled &&
-        !state.readinessCaptured &&
-        !quickReplyButtons.length
-      ) {
-        readinessForm.dataset.visible = "true";
-      }
-      if (
-        leadForm &&
-        context.config.theme.leadCaptureEnabled &&
-        !state.leadCaptured
-      ) {
-        leadForm.dataset.visible = "true";
-      }
+      applyWidgetView(
+        { consent, modeChooser, quickRepliesNode, readinessForm, leadForm },
+        getWidgetViewState(context.config.theme, state, quickReplies),
+      );
     });
 
     modeButtons.forEach((button) => {
@@ -1176,7 +1136,12 @@ void (() => {
       sendButtonEl.disabled = true;
       state.messages.push({ role: "user", text });
       statusEl.textContent = t("typing");
-      drawMessages(messagesEl, state.messages, context.config.theme, t("typing"));
+      drawMessages(
+        messagesEl,
+        state.messages,
+        context.config.theme,
+        t("typing"),
+      );
       state.sentAt.push(Date.now());
 
       try {
@@ -1266,6 +1231,64 @@ void (() => {
     state.sentAt = next.sentAt;
     state.messages = next.messages;
     state.updatedAt = next.updatedAt;
+  }
+
+  function getWidgetViewState(
+    theme: WidgetTheme,
+    state: WidgetState,
+    quickReplies: string[],
+  ): WidgetViewState {
+    const leadCaptureAvailable =
+      Boolean(theme.leadCaptureEnabled) && !state.leadCaptured;
+    const consentVisible =
+      Boolean(theme.consentEnabled) && !state.consentAccepted;
+    const hasQuickReplies = quickReplies.length > 0;
+    const readinessAvailable =
+      Boolean(theme.readinessEnabled) && !state.readinessCaptured;
+    const modeChooserVisible =
+      !consentVisible &&
+      (hasQuickReplies || readinessAvailable || leadCaptureAvailable) &&
+      !state.leadCaptured &&
+      !state.readinessCaptured;
+
+    return {
+      consentVisible,
+      modeChooserVisible,
+      quickRepliesVisible:
+        hasQuickReplies && !consentVisible && !modeChooserVisible,
+      readinessVisible:
+        readinessAvailable &&
+        !consentVisible &&
+        !modeChooserVisible &&
+        !hasQuickReplies,
+      leadCaptureVisible:
+        leadCaptureAvailable &&
+        !consentVisible &&
+        !modeChooserVisible &&
+        !readinessAvailable &&
+        !hasQuickReplies,
+    };
+  }
+
+  function applyWidgetView(
+    nodes: {
+      consent: HTMLElement;
+      modeChooser: HTMLElement;
+      quickRepliesNode: HTMLElement;
+      readinessForm: HTMLElement;
+      leadForm: HTMLElement;
+    },
+    viewState: WidgetViewState,
+  ) {
+    setVisible(nodes.consent, viewState.consentVisible);
+    setVisible(nodes.modeChooser, viewState.modeChooserVisible);
+    setVisible(nodes.quickRepliesNode, viewState.quickRepliesVisible);
+    setVisible(nodes.readinessForm, viewState.readinessVisible);
+    setVisible(nodes.leadForm, viewState.leadCaptureVisible);
+  }
+
+  function setVisible(element: HTMLElement, visible: boolean) {
+    element.dataset.visible = visible ? "true" : "false";
   }
 
   function readState(assistantId: string): WidgetState | null {

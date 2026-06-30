@@ -195,6 +195,54 @@ export type WorkflowSuggestionsResult = {
   };
 };
 
+export type ProductionReadinessCheck = {
+  id: string;
+  title: string;
+  detail: string;
+  status: "pass" | "warn" | "fail";
+  actionLabel: string;
+  weight: number;
+  score: number;
+};
+
+export type ProductionReadinessSection = {
+  id: string;
+  title: string;
+  score: number;
+  checks: ProductionReadinessCheck[];
+};
+
+export type ProductionReadinessResult = {
+  generatedAt: string;
+  score: number;
+  status: "ready_for_beta" | "needs_work" | "not_ready";
+  summary: {
+    passed: number;
+    warnings: number;
+    failed: number;
+    blockers: ProductionReadinessCheck[];
+    nextActions: ProductionReadinessCheck[];
+  };
+  sections: ProductionReadinessSection[];
+};
+
+export type DashboardBootstrap = {
+  knowledge: KnowledgeItem[];
+  analytics: TenantAnalytics | null;
+  conversations: Conversation[];
+  unifiedInbox: UnifiedInboxItem[];
+  contacts: ContactProfile[];
+  handoffs: Handoff[];
+  channelConnections: ChannelConnection[];
+  whatsappTemplates: WhatsappTemplate[];
+  whatsappCompliance: WhatsappCompliance | null;
+  unansweredQuestions: UnansweredQuestion[];
+  workflowSuggestions: WorkflowSuggestionsResult | null;
+  productionReadiness: ProductionReadinessResult | null;
+  tenantUsers: TenantUser[];
+  tenantInvites: TenantInvite[];
+};
+
 export type WebsiteImportResult = {
   sourceUrl: string;
   statusCode: number;

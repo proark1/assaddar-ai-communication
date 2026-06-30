@@ -2870,6 +2870,44 @@ describe("API", () => {
       question: "Tell me about a competitor",
     });
 
+    const dashboardResponse = await app.inject({
+      method: "GET",
+      url: `/admin/tenants/${tenant.id}/dashboard`,
+      headers: { "x-admin-token": "test-token" },
+    });
+    expect(dashboardResponse.statusCode).toBe(200);
+    expect(
+      dashboardResponse.json<{
+        analytics: { conversations: number; totalHandoffs: number };
+        conversations: unknown[];
+        unifiedInbox: unknown[];
+        handoffs: unknown[];
+        unansweredQuestions: unknown[];
+        workflowSuggestions: { counts: { suggestions: number } };
+        productionReadiness: { score: number; summary: { failed: number } };
+      }>(),
+    ).toMatchObject({
+      analytics: {
+        conversations: 2,
+        totalHandoffs: 1,
+      },
+      conversations: expect.any(Array),
+      unifiedInbox: expect.any(Array),
+      handoffs: expect.any(Array),
+      unansweredQuestions: expect.any(Array),
+      workflowSuggestions: {
+        counts: {
+          suggestions: expect.any(Number),
+        },
+      },
+      productionReadiness: {
+        score: expect.any(Number),
+        summary: {
+          failed: expect.any(Number),
+        },
+      },
+    });
+
     const updateHandoffResponse = await app.inject({
       method: "PATCH",
       url: `/admin/tenants/${tenant.id}/handoffs/${handoff.id}`,
@@ -2888,6 +2926,122 @@ describe("API", () => {
     });
 
     await app.close();
+  });
+
+  it("scores production readiness from tenant, channel, quality, and ops signals", async () => {
+    const previousEnv = {
+      CHANNEL_CREDENTIAL_MASTER_KEY: process.env.CHANNEL_CREDENTIAL_MASTER_KEY,
+      REDIS_URL: process.env.REDIS_URL,
+      RETENTION_CLEANUP_ENABLED: process.env.RETENTION_CLEANUP_ENABLED,
+      SENTRY_DSN: process.env.SENTRY_DSN,
+      AI_EVAL_ENABLED: process.env.AI_EVAL_ENABLED,
+      STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY,
+    };
+    process.env.CHANNEL_CREDENTIAL_MASTER_KEY = "test-master-key";
+    process.env.REDIS_URL = "redis://localhost:6379";
+    process.env.RETENTION_CLEANUP_ENABLED = "true";
+    process.env.SENTRY_DSN = "https://example@sentry.invalid/1";
+    process.env.AI_EVAL_ENABLED = "true";
+    process.env.STRIPE_SECRET_KEY = "sk_test_ready";
+
+    const store = new MemoryPlatformStore();
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+      metaAppSecret: "meta-secret",
+      whatsappAccessToken: "whatsapp-token",
+    });
+
+    try {
+      const tenant = await store.createTenant({
+        name: "Tenant One",
+        slug: "tenant-one",
+      });
+      await store.updateTenant(tenant.id, { retentionDays: 90 });
+      await store.upsertTenantUser(tenant.id, {
+        email: "owner@example.com",
+        name: "Owner",
+        role: "tenant_owner",
+      });
+      for (let index = 0; index < 8; index += 1) {
+        await store.addFaq(tenant.id, {
+          question: `Approved question ${index}?`,
+          answer: `Approved answer ${index} about services and privacy.`,
+        });
+      }
+      await store.upsertChannelConnection(tenant.id, {
+        channel: "whatsapp",
+        provider: "meta-whatsapp-cloud",
+        externalAccountId: "15551234567",
+        status: "connected",
+      });
+      await store.upsertWhatsappTemplate(tenant.id, {
+        name: "continue conversation",
+        language: "de",
+        category: "utility",
+        status: "approved",
+        body: "Hallo {{name}}, wir koennen Ihre Anfrage weiter bearbeiten.",
+      });
+      await store.upsertChannelConnection(tenant.id, {
+        channel: "telephone",
+        provider: "easybell",
+        externalAccountId: "+49123456789",
+        status: "connected",
+        settings: {
+          setupChecklist: {
+            numberOrdered: true,
+            sipConfigured: true,
+            testCallCompleted: true,
+            fallbackSet: true,
+            disclosureConfirmed: true,
+          },
+          gdpr: {
+            disclosureText: "This call may be handled by an AI assistant.",
+          },
+          fallbackNumber: "+49111111111",
+        },
+      });
+
+      const chatResponse = await app.inject({
+        method: "POST",
+        url: "/widget/chat",
+        payload: {
+          assistantId: tenant.publicId,
+          message: "What services do you offer?",
+        },
+      });
+      expect(chatResponse.statusCode).toBe(200);
+
+      const readinessResponse = await app.inject({
+        method: "GET",
+        url: `/admin/tenants/${tenant.id}/production-readiness`,
+        headers: { "x-admin-token": "test-token" },
+      });
+
+      expect(readinessResponse.statusCode).toBe(200);
+      const readiness = readinessResponse.json<{
+        score: number;
+        status: string;
+        summary: { failed: number; nextActions: Array<{ id: string }> };
+        sections: Array<{ id: string; score: number }>;
+      }>();
+      expect(readiness.score).toBeGreaterThanOrEqual(85);
+      expect(readiness.status).toBe("ready_for_beta");
+      expect(readiness.summary.failed).toBe(0);
+      expect(
+        readiness.sections.find((section) => section.id === "voice")?.score,
+      ).toBe(100);
+    } finally {
+      await app.close();
+      for (const [key, value] of Object.entries(previousEnv)) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
+    }
   });
 
   it("rejects Meta webhooks with an invalid signature when the app secret is configured", async () => {

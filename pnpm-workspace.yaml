@@ -2,5 +2,10 @@ packages:
   - "apps/*"
   - "packages/*"
 
+allowBuilds:
+  esbuild: true
+  msgpackr-extract: true
+  sharp: true
+
 overrides:
   postcss: ">=8.5.10"
