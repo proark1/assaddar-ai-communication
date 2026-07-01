@@ -1412,6 +1412,15 @@ export async function buildServer(
   );
 
   app.get(
+    "/admin/tenants/:tenantId/workspace-summary",
+    { preHandler: requireTenantAccess(options, "viewer") },
+    async (request) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      return buildWorkspaceSummary(options.store, tenantId);
+    },
+  );
+
+  app.get(
     "/admin/tenants/:tenantId/conversations",
     { preHandler: requireTenantAccess(options, "viewer") },
     async (request) => {
@@ -1697,7 +1706,24 @@ export async function buildServer(
       return reply.code(404).send({ error: "Assistant not found." });
     }
 
-    return config;
+    const payload = JSON.stringify(config);
+    const etag = `"${createHash("sha256").update(payload).digest("base64url")}"`;
+    const ifNoneMatch = request.headers["if-none-match"];
+    const etagMatches = Array.isArray(ifNoneMatch)
+      ? ifNoneMatch.includes(etag)
+      : ifNoneMatch === etag;
+
+    reply.header(
+      "Cache-Control",
+      "public, max-age=60, stale-while-revalidate=300",
+    );
+    reply.header("ETag", etag);
+
+    if (etagMatches) {
+      return reply.code(304).send();
+    }
+
+    return reply.type("application/json").send(payload);
   });
 
   app.post(
@@ -3808,8 +3834,8 @@ async function buildProductionReadinessForTenant(
     options.store.getTenant(tenantId),
     options.store.listKnowledge(tenantId, { limit: 50, offset: 0 }),
     options.store.getTenantAnalytics(tenantId),
-    options.store.listConversations(tenantId, { limit: 50, offset: 0 }),
-    options.store.listUnifiedInbox(tenantId, { limit: 50, offset: 0 }),
+    options.store.listConversations(tenantId, { limit: 4, offset: 0 }),
+    Promise.resolve([]),
     options.store.listContacts(tenantId, { limit: 50, offset: 0 }),
     options.store.listHandoffs(tenantId, { limit: 50, offset: 0 }),
     options.store.listChannelConnections(tenantId),
@@ -4892,6 +4918,48 @@ function buildWorkflowSuggestions(input: {
       contacts: input.contacts.length,
       whatsappTemplates: input.templates.length,
     },
+  };
+}
+
+async function buildWorkspaceSummary(store: PlatformStore, tenantId: string) {
+  const [
+    analytics,
+    handoffs,
+    contacts,
+    recentConversations,
+    connections,
+    templates,
+    compliance,
+  ] = await Promise.all([
+    store.getTenantAnalytics(tenantId),
+    store.listHandoffs(tenantId),
+    store.listContacts(tenantId),
+    store.listConversations(tenantId, { limit: 4 }),
+    store.listChannelConnections(tenantId),
+    store.listWhatsappTemplates(tenantId),
+    store.getWhatsappCompliance(tenantId),
+  ]);
+  const unanswered = buildUnansweredQueue(handoffs);
+  const workflowSuggestions = buildWorkflowSuggestions({
+    analytics,
+    handoffs,
+    contacts,
+    templates,
+    compliance,
+  });
+
+  return {
+    analytics,
+    handoffs,
+    contacts,
+    recentConversations,
+    channelConnections: connections,
+    whatsapp: {
+      templates,
+      compliance,
+    },
+    unanswered,
+    workflowSuggestions,
   };
 }
 

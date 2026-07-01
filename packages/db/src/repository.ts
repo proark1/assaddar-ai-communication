@@ -2190,7 +2190,7 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     if (query) {
       const searchQuery = sql`websearch_to_tsquery('simple'::regconfig, ${query})`;
       filters.push(
-        sql`to_tsvector('simple'::regconfig, concat_ws(' ', ${conversations.publicId}, ${conversations.channel}, ${conversations.externalUserId}, ${conversations.locale})) @@ ${searchQuery}`,
+        sql`to_tsvector('simple'::regconfig, admin_conversation_search_text(${conversations.publicId}, ${conversations.channel}, ${conversations.externalUserId}, ${conversations.locale})) @@ ${searchQuery}`,
       );
     }
     return this.db
@@ -2223,8 +2223,8 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       const searchQuery = sql`websearch_to_tsquery('simple'::regconfig, ${query})`;
       filters.push(
         sql`(
-          to_tsvector('simple'::regconfig, concat_ws(' ', ${conversations.publicId}, ${conversations.channel}, ${conversations.externalUserId}, ${conversations.locale})) @@ ${searchQuery}
-          or to_tsvector('simple'::regconfig, concat_ws(' ', ${contacts.displayName}, ${contacts.email}, ${contacts.phone}, ${contacts.company}, ${contacts.identifiers}::text)) @@ ${searchQuery}
+          to_tsvector('simple'::regconfig, admin_conversation_search_text(${conversations.publicId}, ${conversations.channel}, ${conversations.externalUserId}, ${conversations.locale})) @@ ${searchQuery}
+          or to_tsvector('simple'::regconfig, admin_contact_search_text(${contacts.displayName}, ${contacts.email}, ${contacts.phone}, ${contacts.company}, ${contacts.identifiers})) @@ ${searchQuery}
         )`,
       );
     }
@@ -2260,7 +2260,14 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
 
     const [recentMessages, messageCounts, openHandoffs] = await Promise.all([
       this.db
-        .select()
+        .select({
+          id: messages.id,
+          conversationId: messages.conversationId,
+          direction: messages.direction,
+          role: messages.role,
+          content: messages.content,
+          createdAt: messages.createdAt,
+        })
         .from(messages)
         .where(
           and(
@@ -2303,7 +2310,10 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
         ),
     ]);
 
-    const lastMessageByConversation = new Map<string, MessageRecord>();
+    const lastMessageByConversation = new Map<
+      string,
+      (typeof recentMessages)[number]
+    >();
     const messageCountByConversation = new Map<string, number>();
     for (const message of recentMessages) {
       if (!lastMessageByConversation.has(message.conversationId)) {
@@ -2379,7 +2389,7 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     if (query) {
       const searchQuery = sql`websearch_to_tsquery('simple'::regconfig, ${query})`;
       filters.push(
-        sql`to_tsvector('simple'::regconfig, concat_ws(' ', ${contacts.displayName}, ${contacts.email}, ${contacts.phone}, ${contacts.company}, ${contacts.identifiers}::text)) @@ ${searchQuery}`,
+        sql`to_tsvector('simple'::regconfig, admin_contact_search_text(${contacts.displayName}, ${contacts.email}, ${contacts.phone}, ${contacts.company}, ${contacts.identifiers})) @@ ${searchQuery}`,
       );
     }
     return this.db
@@ -2411,7 +2421,7 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     if (query) {
       const searchQuery = sql`websearch_to_tsquery('simple'::regconfig, ${query})`;
       filters.push(
-        sql`to_tsvector('simple'::regconfig, concat_ws(' ', ${handoffRequests.reason}, ${handoffRequests.requesterMessage}, ${handoffRequests.channel}, ${handoffRequests.assignedTo}, ${handoffRequests.metadata}::text)) @@ ${searchQuery}`,
+        sql`to_tsvector('simple'::regconfig, admin_handoff_search_text(${handoffRequests.reason}, ${handoffRequests.requesterMessage}, ${handoffRequests.channel}, ${handoffRequests.assignedTo}, ${handoffRequests.metadata})) @@ ${searchQuery}`,
       );
     }
     return this.db

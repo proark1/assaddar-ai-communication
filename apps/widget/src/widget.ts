@@ -90,11 +90,17 @@ type StringKey =
   | "consentAccept"
   | "intakePrompt"
   | "intakeQuestion"
+  | "intakeQuestionDetail"
   | "intakeQuestionTag"
   | "intakeReadiness"
+  | "intakeReadinessDetail"
   | "intakeReadinessTag"
   | "intakeLead"
+  | "intakeLeadDetail"
   | "intakeLeadTag"
+  | "intakeCta"
+  | "intakeCtaDetail"
+  | "intakeCtaTag"
   | "readinessIntro"
   | "readinessGoal"
   | "readinessProcessPain"
@@ -150,11 +156,17 @@ const STRINGS: Record<string, StringSet> = {
     consentAccept: "Akzeptieren",
     intakePrompt: "Was möchten Sie als Nächstes tun?",
     intakeQuestion: "Eine Frage stellen",
+    intakeQuestionDetail: "Antwort aus freigegebenem Wissen erhalten.",
     intakeQuestionTag: "Chat",
     intakeReadiness: "KI-Readiness prüfen",
+    intakeReadinessDetail: "In wenigen Fragen Projektchancen einschaetzen.",
     intakeReadinessTag: "Check",
     intakeLead: "Beratung anfragen",
+    intakeLeadDetail: "Kontaktdaten senden und passend nachfassen lassen.",
     intakeLeadTag: "Kontakt",
+    intakeCta: "Termin buchen",
+    intakeCtaDetail: "Direkt einen passenden Beratungstermin oeffnen.",
+    intakeCtaTag: "Termin",
     readinessIntro:
       "Prüfen Sie, ob Ihr Unternehmen bereit für ein sinnvolles KI-Automatisierungsprojekt ist.",
     readinessGoal: "Wichtigstes KI-Ziel",
@@ -218,11 +230,17 @@ const STRINGS: Record<string, StringSet> = {
     consentAccept: "Accept",
     intakePrompt: "What would you like to do next?",
     intakeQuestion: "Ask a question",
+    intakeQuestionDetail: "Get an answer from approved business knowledge.",
     intakeQuestionTag: "Chat",
     intakeReadiness: "Check AI readiness",
+    intakeReadinessDetail: "Estimate project fit in a few focused questions.",
     intakeReadinessTag: "Check",
     intakeLead: "Request a consultation",
+    intakeLeadDetail: "Send your details so the team can follow up.",
     intakeLeadTag: "Contact",
+    intakeCta: "Book a consultation",
+    intakeCtaDetail: "Open the booking page for a direct next step.",
+    intakeCtaTag: "Book",
     readinessIntro:
       "Check whether your company is ready for a useful AI automation project.",
     readinessGoal: "Main AI goal",
@@ -583,10 +601,23 @@ void (() => {
 	        text-align: left;
 	      }
 	      .intake-modes button span {
+	        display: grid;
+	        gap: 2px;
 	        min-width: 0;
 	        overflow: hidden;
+	      }
+	      .intake-modes button b {
+	        overflow: hidden;
+	        color: ${textColor};
 	        text-overflow: ellipsis;
 	        white-space: nowrap;
+	        font-size: 13px;
+	      }
+	      .intake-modes button small {
+	        color: rgba(22, 25, 30, 0.66);
+	        font-size: 11px;
+	        font-weight: 700;
+	        line-height: 1.25;
 	      }
 	      .intake-modes button strong {
 	        color: ${primaryColor};
@@ -739,15 +770,20 @@ void (() => {
 	        </div>
 	        <div class="intake-modes" data-visible="${viewState.modeChooserVisible ? "true" : "false"}" role="group" aria-label="${escapeHtml(t("intakePrompt"))}">
 	          <p>${escapeHtml(t("intakePrompt"))}</p>
-	          <button type="button" data-mode="question" aria-label="${escapeHtml(t("intakeQuestion"))}"><span>${escapeHtml(t("intakeQuestion"))}</span><strong>${escapeHtml(t("intakeQuestionTag"))}</strong></button>
+	          <button type="button" data-mode="question" aria-label="${escapeHtml(t("intakeQuestion"))}"><span><b>${escapeHtml(t("intakeQuestion"))}</b><small>${escapeHtml(t("intakeQuestionDetail"))}</small></span><strong>${escapeHtml(t("intakeQuestionTag"))}</strong></button>
 	          ${
               Boolean(config.theme.readinessEnabled) && !state.readinessCaptured
-                ? `<button type="button" data-mode="readiness" aria-label="${escapeHtml(t("intakeReadiness"))}"><span>${escapeHtml(t("intakeReadiness"))}</span><strong>${escapeHtml(t("intakeReadinessTag"))}</strong></button>`
+                ? `<button type="button" data-mode="readiness" aria-label="${escapeHtml(t("intakeReadiness"))}"><span><b>${escapeHtml(t("intakeReadiness"))}</b><small>${escapeHtml(t("intakeReadinessDetail"))}</small></span><strong>${escapeHtml(t("intakeReadinessTag"))}</strong></button>`
                 : ""
             }
 	          ${
               Boolean(config.theme.leadCaptureEnabled) && !state.leadCaptured
-                ? `<button type="button" data-mode="lead" aria-label="${escapeHtml(t("intakeLead"))}"><span>${escapeHtml(t("intakeLead"))}</span><strong>${escapeHtml(t("intakeLeadTag"))}</strong></button>`
+                ? `<button type="button" data-mode="lead" aria-label="${escapeHtml(t("intakeLead"))}"><span><b>${escapeHtml(t("intakeLead"))}</b><small>${escapeHtml(t("intakeLeadDetail"))}</small></span><strong>${escapeHtml(t("intakeLeadTag"))}</strong></button>`
+                : ""
+            }
+	          ${
+              getPrimaryCtaUrl(config.theme)
+                ? `<button type="button" data-mode="cta" aria-label="${escapeHtml(t("intakeCta"))}"><span><b>${escapeHtml(t("intakeCta"))}</b><small>${escapeHtml(t("intakeCtaDetail"))}</small></span><strong>${escapeHtml(t("intakeCtaTag"))}</strong></button>`
                 : ""
             }
 	        </div>
@@ -915,6 +951,24 @@ void (() => {
           persistState(context.config.assistantId, state);
           drawMessages(messagesEl, state.messages, context.config.theme);
           return;
+        }
+
+        if (mode === "cta") {
+          const ctaUrl = getPrimaryCtaUrl(context.config.theme);
+          if (ctaUrl) {
+            void trackWidgetEvent(context, state, "cta_clicked", {
+              label: context.config.theme.ctaLabel ?? t("intakeCta"),
+              url: ctaUrl,
+            });
+            state.messages.push({
+              role: "assistant",
+              text: t("leadBooking", { url: ctaUrl }),
+            });
+            persistState(context.config.assistantId, state);
+            drawMessages(messagesEl, state.messages, context.config.theme);
+            window.open(ctaUrl, "_blank", "noopener,noreferrer");
+            return;
+          }
         }
 
         if (quickReplyButtons.length) {
@@ -1245,9 +1299,13 @@ void (() => {
     const hasQuickReplies = quickReplies.length > 0;
     const readinessAvailable =
       Boolean(theme.readinessEnabled) && !state.readinessCaptured;
+    const ctaAvailable = Boolean(getPrimaryCtaUrl(theme));
     const modeChooserVisible =
       !consentVisible &&
-      (hasQuickReplies || readinessAvailable || leadCaptureAvailable) &&
+      (hasQuickReplies ||
+        readinessAvailable ||
+        leadCaptureAvailable ||
+        ctaAvailable) &&
       !state.leadCaptured &&
       !state.readinessCaptured;
 
@@ -1387,25 +1445,44 @@ void (() => {
     theme?: WidgetTheme,
     pendingText?: string,
   ) {
-    container.innerHTML = messages
-      .map(
-        (message) =>
-          `<div class="bubble ${message.role}">${escapeHtml(message.text)}</div>`,
-      )
-      .join("");
-    if (pendingText) {
-      container.insertAdjacentHTML(
-        "beforeend",
-        `<div class="bubble assistant typing" aria-label="${escapeHtml(pendingText)}"><span>${escapeHtml(pendingText)}</span><span class="typing-dots" aria-hidden="true"><span></span><span></span><span></span></span></div>`,
-      );
+    const fragment = document.createDocumentFragment();
+    for (const message of messages) {
+      const bubble = document.createElement("div");
+      bubble.className = `bubble ${message.role}`;
+      bubble.textContent = message.text;
+      fragment.appendChild(bubble);
     }
+
+    if (pendingText) {
+      const bubble = document.createElement("div");
+      bubble.className = "bubble assistant typing";
+      bubble.setAttribute("aria-label", pendingText);
+      const label = document.createElement("span");
+      label.textContent = pendingText;
+      const dots = document.createElement("span");
+      dots.className = "typing-dots";
+      dots.setAttribute("aria-hidden", "true");
+      dots.append(
+        document.createElement("span"),
+        document.createElement("span"),
+        document.createElement("span"),
+      );
+      bubble.append(label, dots);
+      fragment.appendChild(bubble);
+    }
+
     const ctaUrl = getPrimaryCtaUrl(theme);
     if (ctaUrl && theme?.ctaLabel) {
-      container.insertAdjacentHTML(
-        "beforeend",
-        `<a class="cta" href="${escapeHtml(ctaUrl)}" target="_blank" rel="noreferrer noopener">${escapeHtml(theme.ctaLabel)}</a>`,
-      );
+      const cta = document.createElement("a");
+      cta.className = "cta";
+      cta.href = ctaUrl;
+      cta.target = "_blank";
+      cta.rel = "noreferrer noopener";
+      cta.textContent = theme.ctaLabel;
+      fragment.appendChild(cta);
     }
+
+    container.replaceChildren(fragment);
     container.scrollTop = container.scrollHeight;
   }
 

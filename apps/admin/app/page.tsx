@@ -467,80 +467,139 @@ export default function DashboardPage() {
       tenants.find((tenant) => tenant.id === selectedTenantId) ?? tenants[0],
     [selectedTenantId, tenants],
   );
-  const selectedConversation = conversations.find(
-    (conversation) => conversation.id === selectedConversationId,
+  const selectedConversation = useMemo(
+    () =>
+      conversations.find(
+        (conversation) => conversation.id === selectedConversationId,
+      ),
+    [conversations, selectedConversationId],
   );
-  const handoffConversationIds = new Set(
-    handoffs
-      .filter((handoff) => handoff.status === "open")
-      .map((handoff) => handoff.conversationId)
-      .filter(Boolean),
+  const handoffConversationIds = useMemo(
+    () =>
+      new Set(
+        handoffs
+          .filter((handoff) => handoff.status === "open")
+          .map((handoff) => handoff.conversationId)
+          .filter(Boolean),
+      ),
+    [handoffs],
   );
-  const inboxItems: UnifiedInboxItem[] = unifiedInbox.length
-    ? unifiedInbox
-    : conversations.map((conversation) => ({
-        ...conversation,
-        contact: null,
-        lastMessage: null,
-        messageCount: 0,
-        openHandoffs: [],
-        nextAction: handoffConversationIds.has(conversation.id)
-          ? "Human follow-up"
-          : "Monitor",
-      }));
-  const selectedInboxItem =
-    inboxItems.find(
-      (conversation) => conversation.id === selectedConversationId,
-    ) ?? null;
-  const openHandoffs = handoffs.filter((handoff) => handoff.status === "open");
-  const leadHandoffs = handoffs.filter((handoff) =>
-    ["lead_capture", "readiness_assessment"].includes(handoff.reason),
+  const inboxItems: UnifiedInboxItem[] = useMemo(
+    () =>
+      unifiedInbox.length
+        ? unifiedInbox
+        : conversations.map((conversation) => ({
+            ...conversation,
+            contact: null,
+            lastMessage: null,
+            messageCount: 0,
+            openHandoffs: [],
+            nextAction: handoffConversationIds.has(conversation.id)
+              ? "Human follow-up"
+              : "Monitor",
+          })),
+    [conversations, handoffConversationIds, unifiedInbox],
   );
-  const openLeads = leadHandoffs.filter((handoff) => handoff.status === "open");
-  const readinessLeads = handoffs.filter(
-    (handoff) => handoff.reason === "readiness_assessment",
+  const selectedInboxItem = useMemo(
+    () =>
+      inboxItems.find(
+        (conversation) => conversation.id === selectedConversationId,
+      ) ?? null,
+    [inboxItems, selectedConversationId],
   );
-  const selectedLead =
-    leadHandoffs.find((handoff) => handoff.id === selectedLeadId) ?? null;
+  const openHandoffs = useMemo(
+    () => handoffs.filter((handoff) => handoff.status === "open"),
+    [handoffs],
+  );
+  const leadHandoffs = useMemo(
+    () =>
+      handoffs.filter((handoff) =>
+        ["lead_capture", "readiness_assessment"].includes(handoff.reason),
+      ),
+    [handoffs],
+  );
+  const openLeads = useMemo(
+    () => leadHandoffs.filter((handoff) => handoff.status === "open"),
+    [leadHandoffs],
+  );
+  const readinessLeads = useMemo(
+    () =>
+      handoffs.filter((handoff) => handoff.reason === "readiness_assessment"),
+    [handoffs],
+  );
+  const selectedLead = useMemo(
+    () => leadHandoffs.find((handoff) => handoff.id === selectedLeadId) ?? null,
+    [leadHandoffs, selectedLeadId],
+  );
   const closeLeadDrawer = useCallback(() => setSelectedLeadId(""), []);
   // Focus trap + Escape-to-close + focus restore for the lead details drawer.
   const leadDrawerRef = useDialogA11y(Boolean(selectedLead), closeLeadDrawer);
-  const staleLeads = leadHandoffs.filter(
-    (handoff) =>
-      ["open", "in_progress"].includes(handoff.status) &&
-      isLeadOlderThan(handoff, automationSettings.staleLeadReminderDays),
+  const staleLeads = useMemo(
+    () =>
+      leadHandoffs.filter(
+        (handoff) =>
+          ["open", "in_progress"].includes(handoff.status) &&
+          isLeadOlderThan(handoff, automationSettings.staleLeadReminderDays),
+      ),
+    [automationSettings.staleLeadReminderDays, leadHandoffs],
   );
-  const highIntentLeads = leadHandoffs.filter(
-    (handoff) =>
-      getLeadScore(handoff) >= automationSettings.readinessQualificationScore ||
-      ["qualified", "proposal"].includes(getPipelineStage(handoff)),
+  const highIntentLeads = useMemo(
+    () =>
+      leadHandoffs.filter(
+        (handoff) =>
+          getLeadScore(handoff) >=
+            automationSettings.readinessQualificationScore ||
+          ["qualified", "proposal"].includes(getPipelineStage(handoff)),
+      ),
+    [automationSettings.readinessQualificationScore, leadHandoffs],
   );
-  const dueLeads = leadHandoffs.filter(isFollowUpDue);
-  const hotLeads = leadHandoffs.filter(
-    (handoff) =>
-      !["resolved", "dismissed"].includes(handoff.status) &&
-      getLeadScore(handoff) >= automationSettings.readinessQualificationScore,
+  const dueLeads = useMemo(
+    () => leadHandoffs.filter(isFollowUpDue),
+    [leadHandoffs],
   );
-  const waitingLeads = leadHandoffs.filter(
-    (handoff) =>
-      !["resolved", "dismissed"].includes(handoff.status) &&
-      ["contacted", "proposal"].includes(getPipelineStage(handoff)),
+  const hotLeads = useMemo(
+    () =>
+      leadHandoffs.filter(
+        (handoff) =>
+          !["resolved", "dismissed"].includes(handoff.status) &&
+          getLeadScore(handoff) >=
+            automationSettings.readinessQualificationScore,
+      ),
+    [automationSettings.readinessQualificationScore, leadHandoffs],
   );
-  const newLeadsThisWeek = leadHandoffs.filter((handoff) =>
-    isLeadRecent(handoff, 7),
+  const waitingLeads = useMemo(
+    () =>
+      leadHandoffs.filter(
+        (handoff) =>
+          !["resolved", "dismissed"].includes(handoff.status) &&
+          ["contacted", "proposal"].includes(getPipelineStage(handoff)),
+      ),
+    [leadHandoffs],
   );
-  const averageLeadScore = leadHandoffs.length
-    ? Math.round(
-        leadHandoffs.reduce(
-          (total, handoff) => total + getLeadScore(handoff),
-          0,
-        ) / leadHandoffs.length,
-      )
-    : 0;
-  const connectedChannelCount = channelConnections.filter(
-    (connection) =>
-      connection.status === "connected" || connection.channel === "website",
-  ).length;
+  const newLeadsThisWeek = useMemo(
+    () => leadHandoffs.filter((handoff) => isLeadRecent(handoff, 7)),
+    [leadHandoffs],
+  );
+  const averageLeadScore = useMemo(
+    () =>
+      leadHandoffs.length
+        ? Math.round(
+            leadHandoffs.reduce(
+              (total, handoff) => total + getLeadScore(handoff),
+              0,
+            ) / leadHandoffs.length,
+          )
+        : 0,
+    [leadHandoffs],
+  );
+  const connectedChannelCount = useMemo(
+    () =>
+      channelConnections.filter(
+        (connection) =>
+          connection.status === "connected" || connection.channel === "website",
+      ).length,
+    [channelConnections],
+  );
   const knownContactCount = analytics?.contacts ?? contacts.length;
   const telephoneConnection = channelConnections.find(
     (connection) => connection.channel === "telephone",
@@ -616,36 +675,49 @@ export default function DashboardPage() {
     pushToast(tone === "neutral" ? "info" : tone, status);
   }, [status, pushToast]);
 
-  const filteredKnowledge = knowledge.filter((item) => {
-    const text = getKnowledgeText(item).toLowerCase();
-    const matchesSearch =
-      !knowledgeSearch || text.includes(knowledgeSearch.toLowerCase());
-    const matchesStatus =
-      knowledgeStatusFilter === "all" || item.status === knowledgeStatusFilter;
+  const filteredKnowledge = useMemo(
+    () =>
+      knowledge.filter((item) => {
+        const text = getKnowledgeText(item).toLowerCase();
+        const matchesSearch =
+          !knowledgeSearch || text.includes(knowledgeSearch.toLowerCase());
+        const matchesStatus =
+          knowledgeStatusFilter === "all" ||
+          item.status === knowledgeStatusFilter;
 
-    return matchesSearch && matchesStatus;
-  });
+        return matchesSearch && matchesStatus;
+      }),
+    [knowledge, knowledgeSearch, knowledgeStatusFilter],
+  );
 
-  const filteredInboxItems = inboxItems.filter((conversation) => {
-    if (inboxFilter === "needs_human") {
-      return (
-        conversation.openHandoffs.length > 0 ||
-        handoffConversationIds.has(conversation.id)
-      );
-    }
-    if (inboxFilter === "recent") {
-      const createdAt = new Date(conversation.createdAt).getTime();
-      return Date.now() - createdAt < 1000 * 60 * 60 * 24 * 7;
-    }
-    return true;
-  });
+  const filteredInboxItems = useMemo(
+    () =>
+      inboxItems.filter((conversation) => {
+        if (inboxFilter === "needs_human") {
+          return (
+            conversation.openHandoffs.length > 0 ||
+            handoffConversationIds.has(conversation.id)
+          );
+        }
+        if (inboxFilter === "recent") {
+          const createdAt = new Date(conversation.createdAt).getTime();
+          return Date.now() - createdAt < 1000 * 60 * 60 * 24 * 7;
+        }
+        return true;
+      }),
+    [handoffConversationIds, inboxFilter, inboxItems],
+  );
 
-  const filteredHandoffs = handoffs.filter((handoff) => {
-    if (handoffFilter === "all") {
-      return true;
-    }
-    return handoff.status === handoffFilter;
-  });
+  const filteredHandoffs = useMemo(
+    () =>
+      handoffs.filter((handoff) => {
+        if (handoffFilter === "all") {
+          return true;
+        }
+        return handoff.status === handoffFilter;
+      }),
+    [handoffFilter, handoffs],
+  );
   const widgetOpenCount = getUsageTotal(analytics, ["widget_open"]);
   const quickReplyCount = getUsageTotal(analytics, ["quick_reply_clicked"]);
   const ctaClickCount = getUsageTotal(analytics, ["cta_clicked"]);
@@ -657,9 +729,12 @@ export default function DashboardPage() {
   const conversionBase = widgetOpenCount || chatOutcomeCount;
   const leadConversionRate = rate(leadHandoffs.length, conversionBase);
   const unansweredRate = rate(unansweredCount, answeredCount + unansweredCount);
-  const wonLeadCount = leadHandoffs.filter(
-    (handoff) => getPipelineStage(handoff) === "won",
-  ).length;
+  const wonLeadCount = useMemo(
+    () =>
+      leadHandoffs.filter((handoff) => getPipelineStage(handoff) === "won")
+        .length,
+    [leadHandoffs],
+  );
   const activeTabLabel =
     tabs.find((tab) => tab.key === activeTab)?.label ?? "Today";
   const activeTabDescription: Record<TabKey, string> = {
@@ -676,6 +751,9 @@ export default function DashboardPage() {
           title: "Follow up open leads",
           detail: `${openLeads.length} lead${openLeads.length === 1 ? "" : "s"} waiting for action.`,
           tab: "leads" as TabKey,
+          impact: `Protect ${openLeads.length} active opportunity${openLeads.length === 1 ? "" : "ies"}.`,
+          reward: "+Lead momentum",
+          source: "Lead loop",
         }
       : null,
     staleLeads.length
@@ -684,6 +762,9 @@ export default function DashboardPage() {
           title: "Stale lead follow-up",
           detail: `${staleLeads.length} lead${staleLeads.length === 1 ? "" : "s"} older than ${automationSettings.staleLeadReminderDays} days.`,
           tab: "leads" as TabKey,
+          impact: "Recover deals before they go cold.",
+          reward: "+Response discipline",
+          source: "Lead loop",
         }
       : null,
     unansweredQuestions.length
@@ -692,6 +773,9 @@ export default function DashboardPage() {
           title: "Answer unanswered questions",
           detail: `${unansweredQuestions.length} question${unansweredQuestions.length === 1 ? "" : "s"} can become approved FAQs.`,
           tab: "knowledge" as TabKey,
+          impact: "Turn real customer friction into reusable answers.",
+          reward: "+Answer quality",
+          source: "Knowledge loop",
         }
       : null,
     missingKnowledgeChecks.length
@@ -703,6 +787,9 @@ export default function DashboardPage() {
             .slice(0, 3)
             .join(", "),
           tab: "knowledge" as TabKey,
+          impact: "Cover the topics buyers ask before they book.",
+          reward: "+Coverage",
+          source: "Knowledge loop",
         }
       : null,
     !installCheck?.installed
@@ -711,6 +798,9 @@ export default function DashboardPage() {
           title: "Verify website widget",
           detail: "Run the install check after every website or widget deploy.",
           tab: "settings" as TabKey,
+          impact: "Confirm visitors can actually reach the assistant.",
+          reward: "+Launch readiness",
+          source: "Launch loop",
         }
       : null,
     !leadCaptureEnabled
@@ -719,6 +809,9 @@ export default function DashboardPage() {
           title: "Enable lead capture",
           detail: "Lead capture is currently off for the widget.",
           tab: "settings" as TabKey,
+          impact: "Give high-intent visitors a way to convert.",
+          reward: "+Conversion path",
+          source: "Widget loop",
         }
       : null,
     !telephoneConnection?.externalAccountId
@@ -727,6 +820,9 @@ export default function DashboardPage() {
           title: "Connect telephone",
           detail: "Add a provider number, forwarding setup, or SIP trunk.",
           tab: "channels" as TabKey,
+          impact: "Bring phone conversations into the same workflow.",
+          reward: "+Channel coverage",
+          source: "Channel loop",
         }
       : null,
     !automationSettings.visitorConfirmationEmailEnabled
@@ -735,6 +831,9 @@ export default function DashboardPage() {
           title: "Enable visitor confirmation",
           detail: "Visitors can receive a clear email after submitting a lead.",
           tab: "settings" as TabKey,
+          impact: "Close the loop immediately after a visitor converts.",
+          reward: "+Trust",
+          source: "Automation loop",
         }
       : null,
     conversations.length === 0
@@ -744,6 +843,9 @@ export default function DashboardPage() {
           detail:
             "Open the site widget, ask a real question, and confirm it lands here.",
           tab: "settings" as TabKey,
+          impact: "Prove the end-to-end visitor journey.",
+          reward: "+Launch confidence",
+          source: "Test loop",
         }
       : null,
   ].filter(Boolean) as Array<{
@@ -751,6 +853,9 @@ export default function DashboardPage() {
     title: string;
     detail: string;
     tab: TabKey;
+    impact: string;
+    reward: string;
+    source: string;
   }>;
 
   const setupSteps = [
@@ -813,6 +918,149 @@ export default function DashboardPage() {
     },
   ];
   const completedSteps = setupSteps.filter((step) => step.done).length;
+  const setupCompletion = setupSteps.length
+    ? Math.round((completedSteps / setupSteps.length) * 100)
+    : 0;
+  const channelReadinessScore = channelConnections.length
+    ? Math.round((connectedChannelCount / channelConnections.length) * 100)
+    : connectedChannelCount
+      ? 100
+      : 0;
+  const answerQualityScore = Math.max(
+    0,
+    Math.min(100, Math.round(100 - unansweredRate)),
+  );
+  const leadScoreSignal = Math.max(
+    leadConversionRate,
+    averageLeadScore,
+    leadHandoffs.length ? 35 : 0,
+  );
+  const productScore = Math.round(
+    setupCompletion * 0.34 +
+      answerQualityScore * 0.24 +
+      channelReadinessScore * 0.18 +
+      Math.min(100, leadScoreSignal) * 0.24,
+  );
+  type ProductLevel = { name: string; threshold: number; detail: string };
+  type CommandTone = "urgent" | "warn" | "info";
+  type CommandItem = {
+    tone: CommandTone;
+    title: string;
+    detail: string;
+    tab: TabKey;
+    impact: string;
+    reward: string;
+    source: string;
+  };
+  type ScoreGuide = {
+    label: string;
+    score: number;
+    action: string;
+    tab: TabKey;
+  };
+
+  const productLevels: ProductLevel[] = [
+    {
+      name: "Launch Ready",
+      threshold: 0,
+      detail: "Core setup is moving and the assistant can be tested.",
+    },
+    {
+      name: "Learning",
+      threshold: 35,
+      detail: "Real conversations are improving the answer base.",
+    },
+    {
+      name: "Converting",
+      threshold: 55,
+      detail: "The widget has a visible path from intent to lead.",
+    },
+    {
+      name: "Reliable",
+      threshold: 75,
+      detail: "Channels, handoffs, and answer quality are under control.",
+    },
+    {
+      name: "Scaled",
+      threshold: 90,
+      detail: "The operating loop is ready for more channels and traffic.",
+    },
+  ];
+  const currentProductLevel: ProductLevel =
+    [...productLevels]
+      .reverse()
+      .find((level) => productScore >= level.threshold) ?? productLevels[0]!;
+  const nextProductLevel = productLevels.find(
+    (level) => level.threshold > productScore,
+  );
+  const scoreGuides: ScoreGuide[] = [
+    {
+      label: "Launch readiness",
+      score: setupCompletion,
+      action:
+        setupCompletion >= 100
+          ? "Keep the install test green."
+          : (setupSteps.find((step) => !step.done)?.action ?? "Review setup"),
+      tab: "settings" as TabKey,
+    },
+    {
+      label: "Answer quality",
+      score: answerQualityScore,
+      action:
+        unansweredQuestions.length || missingKnowledgeChecks.length
+          ? "Draft the next approved FAQ."
+          : "Test fresh buyer questions weekly.",
+      tab: "knowledge" as TabKey,
+    },
+    {
+      label: "Lead momentum",
+      score: Math.min(100, Math.round(leadScoreSignal)),
+      action:
+        openLeads.length || staleLeads.length
+          ? "Work the highest-scoring lead."
+          : "Run a conversion test from the widget.",
+      tab: (openLeads.length || staleLeads.length
+        ? "leads"
+        : "settings") as TabKey,
+    },
+    {
+      label: "Channel coverage",
+      score: channelReadinessScore,
+      action:
+        channelReadinessScore >= 100
+          ? "Monitor delivery and handoffs."
+          : "Connect the next customer channel.",
+      tab: "channels" as TabKey,
+    },
+  ];
+  const weakestScoreGuide = [...scoreGuides].sort(
+    (left, right) => left.score - right.score,
+  )[0];
+  const workflowCommandItems: CommandItem[] = (
+    workflowSuggestions?.suggestions ?? []
+  ).map((suggestion) => ({
+    tone:
+      suggestion.priority === "high"
+        ? "urgent"
+        : suggestion.priority === "medium"
+          ? "warn"
+          : ("info" as CommandTone),
+    title: suggestion.title,
+    detail: suggestion.detail,
+    tab:
+      suggestion.category === "whatsapp"
+        ? ("channels" as TabKey)
+        : ("leads" as TabKey),
+    impact: suggestion.actionLabel,
+    reward: "+Automation",
+    source: titleCase(suggestion.category),
+  }));
+  const commandQueue = [...nextActions, ...workflowCommandItems]
+    .map((item) => ({
+      ...item,
+      priority: item.tone === "urgent" ? 0 : item.tone === "warn" ? 1 : 2,
+    }))
+    .sort((left, right) => left.priority - right.priority);
 
   useEffect(() => {
     if (!telephoneConnection) {
@@ -1052,6 +1300,12 @@ export default function DashboardPage() {
       void refreshContacts(selectedTenant.id);
     }
   }, [activeTab, contactSearch, selectedTenant?.id]);
+
+  useEffect(() => {
+    if (selectedTenant?.id && activeTab === "settings") {
+      void refreshTenantUsers(selectedTenant.id);
+    }
+  }, [activeTab, selectedTenant?.id, adminSession?.user.role]);
 
   useEffect(() => {
     if (!deepLink.handoffId || !handoffs.length) {
@@ -1395,21 +1649,44 @@ export default function DashboardPage() {
       setContactsHasMore(bootstrap.contacts.length === listPageSize);
       setHandoffsHasMore(bootstrap.handoffs.length === listPageSize);
       setSelectedConversationId((current) => {
-        if (
-          current &&
-          (bootstrap.unifiedInbox.some(
+        if (!current) {
+          return activeTab === "leads"
+            ? (bootstrap.unifiedInbox[0]?.id ??
+                bootstrap.conversations[0]?.id ??
+                "")
+            : "";
+        }
+        const stillLoaded =
+          bootstrap.unifiedInbox.some(
             (conversation) => conversation.id === current,
           ) ||
-            bootstrap.conversations.some(
-              (conversation) => conversation.id === current,
-            ))
-        ) {
-          return current;
-        }
-        return (
-          bootstrap.unifiedInbox[0]?.id ?? bootstrap.conversations[0]?.id ?? ""
-        );
+          bootstrap.conversations.some(
+            (conversation) => conversation.id === current,
+          );
+        return stillLoaded ? current : "";
       });
+
+      const detailLoads: Promise<unknown>[] = [];
+      if (activeTab === "knowledge") {
+        detailLoads.push(refreshKnowledge(tenantId));
+      }
+
+      if (activeTab === "leads") {
+        detailLoads.push(
+          refreshConversations(tenantId),
+          refreshUnifiedInbox(tenantId),
+        );
+      } else {
+        setUnifiedInbox([]);
+        setInboxHasMore(false);
+        setSelectedConversationId("");
+      }
+
+      if (activeTab === "settings" && canManageUsers(tenantId)) {
+        detailLoads.push(refreshTenantUsers(tenantId));
+      }
+
+      await Promise.allSettled(detailLoads);
     } catch (error) {
       if (workspaceRefreshId.current === refreshId) {
         setStatus(readableError(error));
@@ -2373,6 +2650,7 @@ export default function DashboardPage() {
     setQuestion(item.question);
     setAnswer(suggestFaqAnswerFromUnanswered(item));
     setTagInput(item.suggestedTags.join(", "));
+    setTestMessage(item.question);
     setActiveTab("knowledge");
     setStatus("FAQ draft prepared from unanswered question");
   }
@@ -2779,12 +3057,151 @@ export default function DashboardPage() {
     );
   }
 
+  function renderProgressionPanel() {
+    const unlockProgress = nextProductLevel
+      ? Math.max(
+          0,
+          Math.min(
+            100,
+            Math.round(
+              ((productScore - currentProductLevel.threshold) /
+                Math.max(
+                  1,
+                  nextProductLevel.threshold - currentProductLevel.threshold,
+                )) *
+                100,
+            ),
+          ),
+        )
+      : 100;
+
+    return (
+      <section className="panel progressionPanel">
+        <div className="progressionHero">
+          <div>
+            <span className="eyebrow">Operator level</span>
+            <h2>{currentProductLevel.name}</h2>
+            <p>{currentProductLevel.detail}</p>
+          </div>
+          <div className="levelScore">
+            <span>Score</span>
+            <strong>{productScore}</strong>
+            <small>/100</small>
+          </div>
+        </div>
+        <div className="unlockRow">
+          <div>
+            <span>
+              {nextProductLevel
+                ? `Next: ${nextProductLevel.name}`
+                : "Max level reached"}
+            </span>
+            <strong>
+              {nextProductLevel
+                ? `${Math.max(0, nextProductLevel.threshold - productScore)} points to unlock`
+                : "Keep the loop healthy"}
+            </strong>
+          </div>
+          <div className="progressTrack large">
+            <span style={{ width: `${unlockProgress}%` }} />
+          </div>
+        </div>
+        <div className="levelTrack">
+          {productLevels.map((level) => (
+            <article
+              data-active={
+                level.name === currentProductLevel.name ? "true" : "false"
+              }
+              data-done={productScore >= level.threshold ? "true" : "false"}
+              key={level.name}
+            >
+              <small>{level.threshold}</small>
+              <strong>{level.name}</strong>
+            </article>
+          ))}
+        </div>
+        <div className="scoreGuideGrid">
+          {scoreGuides.map((guide) => (
+            <button
+              className="scoreGuide"
+              key={guide.label}
+              type="button"
+              onClick={() => setActiveTab(guide.tab)}
+            >
+              <span>{guide.label}</span>
+              <strong>{guide.score}%</strong>
+              <small>{guide.action}</small>
+            </button>
+          ))}
+        </div>
+      </section>
+    );
+  }
+
+  function renderCommandQueue() {
+    const primaryCommand = commandQueue[0] ?? null;
+    const secondaryCommands = commandQueue.slice(1, 7);
+
+    return (
+      <section className="panel commandPanel">
+        <div className="panelHeader">
+          <div className="panelTitle">
+            <ClipboardCheck size={18} />
+            <h2>Command queue</h2>
+          </div>
+          <span className="countPill">{commandQueue.length}</span>
+        </div>
+        {primaryCommand ? (
+          <button
+            className="primaryCommand"
+            data-tone={primaryCommand.tone}
+            type="button"
+            onClick={() => setActiveTab(primaryCommand.tab)}
+          >
+            <span>{primaryCommand.source}</span>
+            <strong>{primaryCommand.title}</strong>
+            <small>{primaryCommand.detail}</small>
+            <em>{primaryCommand.reward}</em>
+          </button>
+        ) : (
+          <div className="emptyState compact">
+            No urgent work. Run one fresh website test and keep the loop warm.
+          </div>
+        )}
+        <div className="commandGrid">
+          {secondaryCommands.map((action) => (
+            <button
+              className="actionItem"
+              data-tone={action.tone}
+              key={`${action.source}-${action.title}`}
+              type="button"
+              onClick={() => setActiveTab(action.tab)}
+            >
+              <span>{action.source}</span>
+              <strong>{action.title}</strong>
+              <small>{action.impact}</small>
+              <em>{action.reward}</em>
+            </button>
+          ))}
+        </div>
+        {weakestScoreGuide ? (
+          <button
+            className="weakestGuide"
+            type="button"
+            onClick={() => setActiveTab(weakestScoreGuide.tab)}
+          >
+            <span>Best score lift</span>
+            <strong>{weakestScoreGuide.label}</strong>
+            <small>{weakestScoreGuide.action}</small>
+          </button>
+        ) : null}
+      </section>
+    );
+  }
+
   function renderOperationalHealth() {
     const knowledgeGapCount =
       unansweredTopicGroups.length + missingKnowledgeChecks.length;
-    const channelReadiness = channelConnections.length
-      ? Math.round((connectedChannelCount / channelConnections.length) * 100)
-      : 0;
 
     return (
       <section className="panel operationalPanel">
@@ -2793,7 +3210,7 @@ export default function DashboardPage() {
             <BarChart3 size={18} />
             <h2>Operational health</h2>
           </div>
-          <span className="countPill">{channelReadiness}% channels</span>
+          <span className="countPill">{channelReadinessScore}% channels</span>
         </div>
         <div className="operationalGrid">
           <article data-alert={dueLeads.length ? "true" : "false"}>
@@ -2972,39 +3389,9 @@ export default function DashboardPage() {
       <div className="workspaceStack">
         {renderMetrics()}
         {renderProductionReadiness()}
+        {renderProgressionPanel()}
+        {renderCommandQueue()}
         {renderOperationalHealth()}
-        {renderTodayPanel()}
-        {renderWorkflowSuggestions()}
-        <section className="panel actionPanel">
-          <div className="panelHeader">
-            <div className="panelTitle">
-              <ClipboardCheck size={18} />
-              <h2>Next actions</h2>
-            </div>
-            <span className="countPill">{nextActions.length}</span>
-          </div>
-          <div className="nextActionList">
-            {nextActions.length ? (
-              nextActions.slice(0, 5).map((action) => (
-                <button
-                  className="actionItem"
-                  data-tone={action.tone}
-                  key={action.title}
-                  type="button"
-                  onClick={() => setActiveTab(action.tab)}
-                >
-                  <span>{action.tone}</span>
-                  <strong>{action.title}</strong>
-                  <small>{action.detail}</small>
-                </button>
-              ))
-            ) : (
-              <div className="emptyState compact">
-                No urgent work. Keep testing new website questions weekly.
-              </div>
-            )}
-          </div>
-        </section>
         <div className="overviewGrid">
           {renderSetupChecklist()}
 
@@ -3076,7 +3463,9 @@ export default function DashboardPage() {
                 <MessageSquare size={18} />
                 <h2>Recent conversations</h2>
               </div>
-              <span className="countPill">{conversations.length}</span>
+              <span className="countPill">
+                {analytics?.conversations ?? conversations.length}
+              </span>
             </div>
             <div className="compactList">
               {conversations.length ? (
@@ -3164,10 +3553,114 @@ export default function DashboardPage() {
     );
   }
 
+  function renderKnowledgeLoopPanel(canEditKnowledge: boolean) {
+    const bestGap =
+      unansweredTopicGroups[0]?.items[0] ?? unansweredQuestions[0];
+    const loopSteps = [
+      {
+        label: "Find gap",
+        done: Boolean(bestGap) || unansweredQuestions.length === 0,
+        detail: bestGap
+          ? `${unansweredQuestions.length} unanswered question${unansweredQuestions.length === 1 ? "" : "s"} waiting`
+          : "No active customer gaps",
+      },
+      {
+        label: "Draft answer",
+        done: Boolean(question && answer),
+        detail:
+          question && answer
+            ? "Candidate FAQ ready"
+            : "Use a real customer question",
+      },
+      {
+        label: "Publish FAQ",
+        done: knowledge.some(
+          (item) =>
+            question &&
+            getQuestion(item).trim().toLowerCase() ===
+              question.trim().toLowerCase(),
+        ),
+        detail: "Save it as approved knowledge",
+      },
+      {
+        label: "Retest",
+        done: Boolean(testAnswer),
+        detail: testAnswer
+          ? `${titleCase(testAnswer.status)} at ${Math.round(testAnswer.confidence * 100)}% confidence`
+          : "Run the same question in Test",
+      },
+    ];
+
+    return (
+      <section className="panel knowledgeLoopPanel">
+        <div className="panelHeader">
+          <div className="panelTitle">
+            <Sparkles size={18} />
+            <h2>Knowledge improvement loop</h2>
+          </div>
+          <span className="countPill">{answerQualityScore}% quality</span>
+        </div>
+        <div className="loopStepGrid">
+          {loopSteps.map((step, index) => (
+            <article data-done={step.done ? "true" : "false"} key={step.label}>
+              <small>{index + 1}</small>
+              <strong>{step.label}</strong>
+              <span>{step.detail}</span>
+            </article>
+          ))}
+        </div>
+        <div className="loopFocus">
+          <div>
+            <span>Current gap</span>
+            <strong>
+              {bestGap ? bestGap.question : "No unanswered questions right now"}
+            </strong>
+            <small>
+              {bestGap
+                ? `${titleCase(bestGap.reason)} from ${bestGap.channel}`
+                : "Keep testing new buyer objections weekly."}
+            </small>
+          </div>
+          <div className="rowActions">
+            <button
+              className="secondaryButton"
+              type="button"
+              disabled={!bestGap || !canEditKnowledge}
+              onClick={() => bestGap && draftFaqFromUnanswered(bestGap)}
+            >
+              <Plus size={15} />
+              Draft from gap
+            </button>
+            <button
+              className="primaryButton"
+              type="button"
+              disabled={!testMessage && !bestGap}
+              onClick={() => {
+                if (bestGap && !testMessage) {
+                  setTestMessage(bestGap.question);
+                }
+                setActiveTab("settings");
+                window.setTimeout(() => {
+                  document
+                    .getElementById("test-settings")
+                    ?.scrollIntoView({ behavior: "smooth", block: "start" });
+                }, 0);
+              }}
+            >
+              <MessageCircle size={15} />
+              Open test
+            </button>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
   function renderKnowledge() {
     const canEditKnowledge = canManageKnowledge();
     return (
       <div className="workspaceStack">
+        {renderKnowledgeLoopPanel(canEditKnowledge)}
         <section className="panel">
           <div className="panelHeader">
             <div className="panelTitle">
@@ -3661,6 +4154,15 @@ export default function DashboardPage() {
 
   function renderLeads() {
     const canEditLeads = canManageLeads();
+    const pipelineStageGroups = pipelineStages.map((stage, index) => ({
+      ...stage,
+      index,
+      next: pipelineStages[index + 1],
+      items: leadHandoffs.filter(
+        (handoff) => getPipelineStage(handoff) === stage.key,
+      ),
+    }));
+
     return (
       <div className="workspaceStack">
         <section className="metricsGrid compactMetrics">
@@ -3711,20 +4213,60 @@ export default function DashboardPage() {
           <div className="panelHeader">
             <div className="panelTitle">
               <BarChart3 size={18} />
-              <h2>Pipeline</h2>
+              <h2>Pipeline board</h2>
             </div>
+            <span className="countPill">{wonLeadCount} won</span>
           </div>
-          <div className="pipelineGrid">
-            {pipelineStages.map((stage) => (
-              <article key={stage.key}>
-                <span>{stage.label}</span>
-                <strong>
-                  {
-                    leadHandoffs.filter(
-                      (handoff) => getPipelineStage(handoff) === stage.key,
-                    ).length
-                  }
-                </strong>
+          <div className="pipelineBoard">
+            {pipelineStageGroups.map((stage) => (
+              <article className="pipelineColumn" key={stage.key}>
+                <header>
+                  <span>{stage.label}</span>
+                  <strong>{stage.items.length}</strong>
+                </header>
+                <div className="pipelineColumnList">
+                  {stage.items.length ? (
+                    stage.items.slice(0, 4).map((handoff) => {
+                      const leadScore = getLeadScore(handoff);
+                      return (
+                        <div className="pipelineLeadCard" key={handoff.id}>
+                          <button
+                            type="button"
+                            onClick={() => openLeadDetail(handoff)}
+                          >
+                            <strong>{getLeadDisplayName(handoff)}</strong>
+                            <span>{getLeadNextStep(handoff)}</span>
+                            <small>{formatDate(handoff.createdAt)}</small>
+                          </button>
+                          <div>
+                            <em>{leadScore}/100</em>
+                            {stage.next ? (
+                              <button
+                                className="textToggle"
+                                type="button"
+                                disabled={!canEditLeads}
+                                onClick={() =>
+                                  updateHandoff(
+                                    handoff,
+                                    handoff.status,
+                                    handoff.assignedTo,
+                                    stage.next?.key,
+                                  )
+                                }
+                              >
+                                Move to {stage.next.label}
+                              </button>
+                            ) : null}
+                          </div>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div className="emptyState compact">
+                      No {stage.label.toLowerCase()} leads.
+                    </div>
+                  )}
+                </div>
               </article>
             ))}
           </div>
@@ -4569,6 +5111,40 @@ export default function DashboardPage() {
 
   function renderTestStudio() {
     const canRunTests = canManageLeads();
+    const scenarioGap = unansweredQuestions[0]?.question;
+    const testScenarios = [
+      {
+        label: "Known answer",
+        goal: "Assistant should answer from approved knowledge.",
+        prompt: sampleQuestions[0] ?? "What services do you offer?",
+        target: "answered",
+      },
+      {
+        label: "Lead intent",
+        goal: "Assistant should capture or recommend handoff.",
+        prompt:
+          "I want help automating our customer support process. Can we book a consultation?",
+        target: "handoff",
+      },
+      {
+        label: "Knowledge gap",
+        goal: "Assistant should refuse or hand off if knowledge is missing.",
+        prompt:
+          scenarioGap ??
+          "Do you provide fixed pricing for a full AI transformation program?",
+        target: "refused",
+      },
+    ];
+    const activeScenario = testScenarios.find(
+      (scenario) => scenario.prompt === testMessage,
+    );
+    const scenarioPassed =
+      activeScenario && testAnswer
+        ? activeScenario.target === "handoff"
+          ? testAnswer.handoffRecommended || testAnswer.status === "handoff"
+          : testAnswer.status === activeScenario.target
+        : false;
+
     return (
       <div className="testStudioGrid">
         <section className="panel">
@@ -4577,6 +5153,29 @@ export default function DashboardPage() {
               <Sparkles size={18} />
               <h2>Testing studio</h2>
             </div>
+            <span
+              className="countPill"
+              data-tone={scenarioPassed ? "good" : undefined}
+            >
+              {testAnswer ? (scenarioPassed ? "Passed" : "Review") : "Play"}
+            </span>
+          </div>
+          <div className="playModeGrid">
+            {testScenarios.map((scenario) => (
+              <button
+                data-active={scenario.prompt === testMessage ? "true" : "false"}
+                key={scenario.label}
+                type="button"
+                onClick={() => {
+                  setTestMessage(scenario.prompt);
+                  setTestAnswer(null);
+                }}
+              >
+                <span>{scenario.label}</span>
+                <strong>{scenario.target}</strong>
+                <small>{scenario.goal}</small>
+              </button>
+            ))}
           </div>
           <div className="sampleGrid">
             {sampleQuestions.map((sample) => (
@@ -4584,7 +5183,10 @@ export default function DashboardPage() {
                 className="secondaryButton"
                 key={sample}
                 type="button"
-                onClick={() => setTestMessage(sample)}
+                onClick={() => {
+                  setTestMessage(sample);
+                  setTestAnswer(null);
+                }}
               >
                 {sample}
               </button>
@@ -4606,13 +5208,26 @@ export default function DashboardPage() {
             </button>
           </form>
           {testAnswer ? (
-            <div className="answerBox">
+            <div
+              className="answerBox"
+              data-result={scenarioPassed ? "pass" : "review"}
+            >
               <span>{testAnswer.status}</span>
               <p>{testAnswer.text}</p>
               <small>
                 {testAnswer.intent} · {Math.round(testAnswer.confidence * 100)}%
                 confidence
               </small>
+              {activeScenario ? (
+                <div className="scenarioOutcome">
+                  <strong>
+                    {scenarioPassed
+                      ? "Scenario passed"
+                      : "Scenario needs review"}
+                  </strong>
+                  <span>{activeScenario.goal}</span>
+                </div>
+              ) : null}
               <div className="rowActions">
                 <button
                   className="secondaryButton"

@@ -1468,6 +1468,43 @@ textarea {
   gap: 8px;
 }
 
+.playModeGrid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 10px;
+}
+
+.playModeGrid button {
+  display: grid;
+  gap: 5px;
+  justify-items: start;
+  min-height: 104px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  color: var(--text);
+  padding: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.playModeGrid button[data-active="true"] {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+}
+
+.playModeGrid strong {
+  color: var(--accent);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.playModeGrid small {
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
 .sampleGrid .secondaryButton {
   min-height: 48px;
   justify-content: flex-start;
@@ -1506,6 +1543,11 @@ textarea {
   padding: 12px;
 }
 
+.answerBox[data-result="review"] {
+  border-color: var(--amber-line);
+  background: var(--amber-bg);
+}
+
 .answerBox span {
   color: var(--green);
   font-size: 12px;
@@ -1522,6 +1564,27 @@ textarea {
 .answerBox small {
   color: var(--muted);
   font-weight: 700;
+}
+
+.scenarioOutcome {
+  display: grid;
+  gap: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.72);
+  padding: 9px;
+}
+
+.scenarioOutcome strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.scenarioOutcome span {
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: none;
 }
 
 .platformTabs {
@@ -1917,6 +1980,284 @@ textarea {
   height: 10px;
 }
 
+.progressionPanel,
+.commandPanel,
+.knowledgeLoopPanel {
+  display: grid;
+  gap: 14px;
+}
+
+.progressionHero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.progressionHero h2 {
+  margin: 4px 0 0;
+  font-size: 28px;
+  line-height: 1.12;
+}
+
+.progressionHero p {
+  max-width: 720px;
+  margin: 7px 0 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.levelScore {
+  display: grid;
+  justify-items: center;
+  min-width: 112px;
+  border: 1px solid var(--green-line);
+  border-radius: 8px;
+  background: var(--green-bg);
+  color: var(--green);
+  padding: 12px;
+}
+
+.levelScore span,
+.unlockRow span,
+.scoreGuide span,
+.loopStepGrid span,
+.loopFocus span,
+.primaryCommand span,
+.weakestGuide span,
+.playModeGrid span,
+.pipelineColumn header span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.levelScore strong {
+  color: var(--green);
+  font-size: 34px;
+  line-height: 1;
+}
+
+.levelScore small {
+  color: var(--green);
+  font-weight: 900;
+}
+
+.unlockRow {
+  display: grid;
+  grid-template-columns: minmax(180px, 280px) minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+}
+
+.unlockRow div:first-child {
+  display: grid;
+  gap: 3px;
+}
+
+.unlockRow strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.levelTrack,
+.scoreGuideGrid,
+.loopStepGrid,
+.commandGrid,
+.playModeGrid,
+.pipelineBoard {
+  display: grid;
+  gap: 10px;
+}
+
+.levelTrack {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.levelTrack article {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  padding: 10px;
+}
+
+.levelTrack article[data-done="true"] {
+  border-color: var(--green-line);
+  background: var(--green-bg);
+}
+
+.levelTrack article[data-active="true"] {
+  box-shadow: inset 0 0 0 2px rgba(47, 111, 115, 0.24);
+}
+
+.levelTrack small {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.levelTrack strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.scoreGuideGrid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.scoreGuide,
+.weakestGuide {
+  display: grid;
+  gap: 5px;
+  justify-items: start;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  color: var(--text);
+  padding: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.scoreGuide:hover,
+.weakestGuide:hover,
+.playModeGrid button:hover,
+.pipelineLeadCard button:first-child:hover {
+  border-color: var(--accent);
+}
+
+.scoreGuide strong {
+  font-size: 22px;
+}
+
+.scoreGuide small,
+.weakestGuide small {
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.primaryCommand {
+  display: grid;
+  gap: 7px;
+  justify-items: start;
+  border: 1px solid var(--amber-line);
+  border-radius: 8px;
+  background: var(--amber-bg);
+  color: var(--text);
+  padding: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.primaryCommand[data-tone="urgent"] {
+  border-color: var(--danger-line);
+  background: var(--danger-bg);
+}
+
+.primaryCommand[data-tone="info"] {
+  border-color: var(--slate-line);
+  background: var(--slate-bg);
+}
+
+.primaryCommand strong {
+  font-size: 20px;
+  line-height: 1.2;
+}
+
+.primaryCommand small {
+  color: var(--text-soft);
+  font-weight: 800;
+  line-height: 1.4;
+}
+
+.primaryCommand em,
+.actionItem em {
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--accent);
+  padding: 4px 8px;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.commandGrid {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.weakestGuide {
+  grid-template-columns: minmax(0, 1fr);
+  border-color: rgba(47, 111, 115, 0.18);
+  background: var(--accent-bg);
+}
+
+.loopStepGrid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.loopStepGrid article {
+  display: grid;
+  gap: 5px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  padding: 11px;
+}
+
+.loopStepGrid article[data-done="true"] {
+  border-color: var(--green-line);
+  background: var(--green-bg);
+}
+
+.loopStepGrid small {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--accent);
+  font-weight: 900;
+}
+
+.loopStepGrid strong {
+  font-size: 14px;
+}
+
+.loopFocus {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  padding: 12px;
+}
+
+.loopFocus > div:first-child {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.loopFocus strong {
+  overflow-wrap: anywhere;
+}
+
+.loopFocus small {
+  color: var(--muted);
+  font-weight: 800;
+}
+
 .wizardSteps,
 .quickStartGrid,
 .leadGrid,
@@ -2099,6 +2440,108 @@ textarea {
 
 .pipelineGrid strong {
   font-size: 22px;
+}
+
+.pipelineBoard {
+  grid-template-columns: repeat(6, minmax(180px, 1fr));
+  align-items: stretch;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.pipelineColumn {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  padding: 10px;
+}
+
+.pipelineColumn header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.pipelineColumn header strong {
+  display: inline-flex;
+  min-width: 28px;
+  height: 26px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.pipelineColumnList {
+  display: grid;
+  gap: 8px;
+}
+
+.pipelineLeadCard {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 9px;
+}
+
+.pipelineLeadCard button:first-child {
+  display: grid;
+  gap: 3px;
+  justify-items: start;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pipelineLeadCard button:first-child strong,
+.pipelineLeadCard button:first-child span,
+.pipelineLeadCard button:first-child small {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pipelineLeadCard button:first-child span,
+.pipelineLeadCard button:first-child small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.pipelineLeadCard > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.pipelineLeadCard em {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--accent-bg);
+  color: var(--accent);
+  padding: 3px 7px;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.pipelineLeadCard .textToggle {
+  justify-content: flex-end;
+  text-align: right;
 }
 
 .leadActionGrid {
@@ -4205,7 +4648,10 @@ textarea {
   .inboxGrid,
   .quickStartGrid,
   .operationalGrid,
-  .leadActionGrid {
+  .leadActionGrid,
+  .scoreGuideGrid,
+  .loopStepGrid,
+  .playModeGrid {
     grid-template-columns: 1fr;
   }
 
@@ -4331,6 +4777,13 @@ textarea {
   .funnelGrid,
   .previewFields,
   .pipelineGrid,
+  .pipelineBoard,
+  .levelTrack,
+  .unlockRow,
+  .scoreGuideGrid,
+  .commandGrid,
+  .loopStepGrid,
+  .playModeGrid,
   .leadActionGrid,
   .leadContactStrip,
   .presetRow,
@@ -4367,6 +4820,11 @@ textarea {
 
   .landingCta {
     align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .progressionHero,
+  .loopFocus {
     flex-direction: column;
   }
 
