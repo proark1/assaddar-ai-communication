@@ -3388,12 +3388,14 @@ export default function DashboardPage() {
     return (
       <div className="workspaceStack">
         {renderMetrics()}
+        {renderTodayPanel()}
         {renderProductionReadiness()}
         {renderProgressionPanel()}
         {renderCommandQueue()}
         {renderOperationalHealth()}
         <div className="overviewGrid">
           {renderSetupChecklist()}
+          {renderWorkflowSuggestions()}
 
           <section className="panel">
             <div className="panelHeader">

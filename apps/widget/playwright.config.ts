@@ -12,9 +12,9 @@ export default defineConfig({
     },
   },
   webServer: {
-    command: "./node_modules/.bin/vite --host 127.0.0.1 --port 5174",
+    command: "pnpm exec vite --host 127.0.0.1 --port 5174 --strictPort",
     url: "http://127.0.0.1:5174/example/",
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: false,
     timeout: 30_000,
   },
 });

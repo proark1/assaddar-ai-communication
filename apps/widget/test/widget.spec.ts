@@ -259,7 +259,9 @@ test("widget submits readiness assessments", async ({ page }) => {
   await page.getByRole("button", { name: "Chat" }).click();
   await page.getByRole("button", { name: "Check AI readiness" }).click();
   const readinessForm = page.locator(".readiness-form");
-  await readinessForm.getByPlaceholder("Main AI goal").fill("Reduce support load");
+  await readinessForm
+    .getByPlaceholder("Main AI goal")
+    .fill("Reduce support load");
   await readinessForm
     .getByPlaceholder("Most painful manual process")
     .fill("Routing email requests");
