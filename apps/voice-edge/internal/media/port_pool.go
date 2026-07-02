@@ -6,11 +6,11 @@ import (
 )
 
 type PortPool struct {
-	mu       sync.Mutex
-	min      int
-	max      int
-	next     int
-	leased   map[int]struct{}
+	mu     sync.Mutex
+	min    int
+	max    int
+	next   int
+	leased map[int]struct{}
 }
 
 func NewPortPool(minPort int, maxPort int) (*PortPool, error) {

@@ -8,9 +8,9 @@ import (
 
 type Offer struct {
 	ConnectionIP string
-	MediaPort   int
-	Payloads    []int
-	RTPMap      map[int]string
+	MediaPort    int
+	Payloads     []int
+	RTPMap       map[int]string
 }
 
 type Codec struct {

@@ -18,6 +18,47 @@ type Message struct {
 	Body      string
 }
 
+func (msg Message) IsResponse() bool {
+	return strings.HasPrefix(msg.StartLine, "SIP/2.0 ")
+}
+
+func (msg Message) Method() string {
+	if msg.IsResponse() {
+		return ""
+	}
+	fields := strings.Fields(msg.StartLine)
+	if len(fields) < 1 {
+		return ""
+	}
+	return fields[0]
+}
+
+func (msg Message) RequestURI() string {
+	if msg.IsResponse() {
+		return ""
+	}
+	fields := strings.Fields(msg.StartLine)
+	if len(fields) < 2 {
+		return ""
+	}
+	return fields[1]
+}
+
+func (msg Message) StatusCode() int {
+	if !msg.IsResponse() {
+		return 0
+	}
+	fields := strings.Fields(msg.StartLine)
+	if len(fields) < 2 {
+		return 0
+	}
+	status, err := strconv.Atoi(fields[1])
+	if err != nil {
+		return 0
+	}
+	return status
+}
+
 func ParseMessage(raw string) (Message, error) {
 	normalized := strings.ReplaceAll(raw, "\r\n", "\n")
 	head, body, _ := strings.Cut(normalized, "\n\n")
@@ -95,4 +136,28 @@ func NewRequest(method string, uri string) Message {
 
 func NewResponse(status int, reason string) Message {
 	return Message{StartLine: fmt.Sprintf("SIP/2.0 %d %s", status, reason)}
+}
+
+func ResponseFor(request Message, status int, reason string, toTag string) Message {
+	response := NewResponse(status, reason)
+	copyHeaderIfPresent(&response, request, "Via")
+	copyHeaderIfPresent(&response, request, "From")
+	to := request.Header("To")
+	if toTag != "" && to != "" && !strings.Contains(strings.ToLower(to), ";tag=") {
+		to += ";tag=" + toTag
+	}
+	if to != "" {
+		response.AddHeader("To", to)
+	}
+	copyHeaderIfPresent(&response, request, "Call-ID")
+	copyHeaderIfPresent(&response, request, "CSeq")
+	response.AddHeader("Server", "AssaddarVoiceEdge/0.1")
+	return response
+}
+
+func copyHeaderIfPresent(target *Message, source Message, name string) {
+	value := source.Header(name)
+	if value != "" {
+		target.AddHeader(name, value)
+	}
 }

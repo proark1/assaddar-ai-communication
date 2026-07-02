@@ -20,8 +20,8 @@ type Config struct {
 	Easybell      EasybellConfig
 	VoiceTurnURL  string
 	VoiceSecret   string
-	Gemini         GeminiConfig
-	DefaultLocale  string
+	Gemini        GeminiConfig
+	DefaultLocale string
 }
 
 type EasybellConfig struct {
@@ -100,12 +100,12 @@ func (cfg Config) ReadinessError() error {
 	missing := make([]string, 0)
 	required := map[string]string{
 		"VOICE_EDGE_PUBLIC_IP":   cfg.PublicIP,
-		"EASYBELL_SIP_USERNAME": cfg.Easybell.Username,
-		"EASYBELL_SIP_PASSWORD": cfg.Easybell.Password,
+		"EASYBELL_SIP_USERNAME":  cfg.Easybell.Username,
+		"EASYBELL_SIP_PASSWORD":  cfg.Easybell.Password,
 		"EASYBELL_PUBLIC_NUMBER": cfg.Easybell.PublicNumber,
-		"VOICE_TURN_URL":        cfg.VoiceTurnURL,
-		"VOICE_EDGE_SECRET":     cfg.VoiceSecret,
-		"GEMINI_API_KEY":        cfg.Gemini.APIKey,
+		"VOICE_TURN_URL":         cfg.VoiceTurnURL,
+		"VOICE_EDGE_SECRET":      cfg.VoiceSecret,
+		"GEMINI_API_KEY":         cfg.Gemini.APIKey,
 	}
 	for key, value := range required {
 		if strings.TrimSpace(value) == "" {

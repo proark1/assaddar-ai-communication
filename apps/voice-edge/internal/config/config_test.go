@@ -27,12 +27,12 @@ func TestLoadDefaults(t *testing.T) {
 func TestReadinessErrorPassesWithRequiredConfig(t *testing.T) {
 	env := map[string]string{
 		"VOICE_EDGE_PUBLIC_IP":   "203.0.113.10",
-		"EASYBELL_SIP_USERNAME": "user",
-		"EASYBELL_SIP_PASSWORD": "password",
+		"EASYBELL_SIP_USERNAME":  "user",
+		"EASYBELL_SIP_PASSWORD":  "password",
 		"EASYBELL_PUBLIC_NUMBER": "+49301234567",
-		"VOICE_TURN_URL":        "https://voice.example.com/voice/turn",
-		"VOICE_EDGE_SECRET":     "secret",
-		"GEMINI_API_KEY":        "gemini",
+		"VOICE_TURN_URL":         "https://voice.example.com/voice/turn",
+		"VOICE_EDGE_SECRET":      "secret",
+		"GEMINI_API_KEY":         "gemini",
 	}
 	cfg, err := Load(func(key string) string { return env[key] })
 	if err != nil {

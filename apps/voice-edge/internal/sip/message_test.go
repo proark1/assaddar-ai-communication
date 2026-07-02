@@ -31,3 +31,26 @@ func TestMessageStringAddsContentLength(t *testing.T) {
 		t.Fatalf("serialized message missing content length:\n%s", raw)
 	}
 }
+
+func TestRequestAndResponseHelpers(t *testing.T) {
+	request, err := ParseMessage("INVITE sip:asst_123@voice-edge.assaddar.de SIP/2.0\r\nVia: SIP/2.0/UDP client;branch=z9hG4bK\r\nFrom: <sip:+4917@example.com>;tag=caller\r\nTo: <sip:asst_123@voice-edge.assaddar.de>\r\nCall-ID: call\r\nCSeq: 1 INVITE\r\n\r\n")
+	if err != nil {
+		t.Fatalf("ParseMessage returned error: %v", err)
+	}
+	if request.Method() != "INVITE" {
+		t.Fatalf("Method = %q", request.Method())
+	}
+	if request.RequestURI() != "sip:asst_123@voice-edge.assaddar.de" {
+		t.Fatalf("RequestURI = %q", request.RequestURI())
+	}
+	response := ResponseFor(request, 200, "OK", "edge")
+	if response.StatusCode() != 200 {
+		t.Fatalf("StatusCode = %d", response.StatusCode())
+	}
+	if !strings.Contains(response.Header("To"), ";tag=edge") {
+		t.Fatalf("To header = %q", response.Header("To"))
+	}
+	if response.Header("Call-ID") != "call" {
+		t.Fatalf("Call-ID = %q", response.Header("Call-ID"))
+	}
+}

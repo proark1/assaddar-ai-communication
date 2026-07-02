@@ -24,13 +24,13 @@ type Client struct {
 }
 
 type Request struct {
-	Text      string         `json:"text"`
-	CallID    string         `json:"callId,omitempty"`
-	From      string         `json:"from,omitempty"`
-	To        string         `json:"to,omitempty"`
-	Provider  string         `json:"provider"`
-	Locale    string         `json:"locale,omitempty"`
-	Metadata  map[string]any `json:"metadata,omitempty"`
+	Text     string         `json:"text"`
+	CallID   string         `json:"callId,omitempty"`
+	From     string         `json:"from,omitempty"`
+	To       string         `json:"to,omitempty"`
+	Provider string         `json:"provider"`
+	Locale   string         `json:"locale,omitempty"`
+	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
 type Response struct {
