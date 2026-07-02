@@ -25,6 +25,14 @@ func TestALawFrameRoundTripKeepsShape(t *testing.T) {
 	}
 }
 
+func TestALawEncodeDoesNotSaturateEarly(t *testing.T) {
+	mid := EncodeALaw(5000)
+	loud := EncodeALaw(30000)
+	if mid == loud {
+		t.Fatal("mid and loud samples encoded to the same A-law value")
+	}
+}
+
 func sameSign(a, b int16) bool {
 	return (a >= 0 && b >= 0) || (a < 0 && b < 0)
 }

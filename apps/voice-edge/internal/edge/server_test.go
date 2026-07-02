@@ -5,11 +5,16 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	edgeaudio "github.com/assaddar/ai-communication/apps/voice-edge/internal/audio"
 	"github.com/assaddar/ai-communication/apps/voice-edge/internal/config"
+	"github.com/assaddar/ai-communication/apps/voice-edge/internal/rtp"
+	"github.com/assaddar/ai-communication/apps/voice-edge/internal/sdp"
 	"github.com/assaddar/ai-communication/apps/voice-edge/internal/sip"
+	"github.com/assaddar/ai-communication/apps/voice-edge/internal/speech"
 )
 
 func TestResolveRegistrarAddsDefaultPort(t *testing.T) {
@@ -55,6 +60,46 @@ func TestHandleInviteRejectsUnsupportedCodec(t *testing.T) {
 	}
 }
 
+func TestHandleRTPPacketIgnoresInputWhileProcessing(t *testing.T) {
+	server, err := New(testConfig(), nil)
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	provider := &countingSpeechProvider{}
+	server.speechProvider = provider
+
+	session := &CallSession{
+		CallID: "call",
+		Codec:  sdp.CodecPCMA,
+		VAD:    edgeaudio.NewTelephonyVAD(),
+	}
+	session.processing.Store(true)
+
+	speechPayload, err := edgeaudio.EncodeTelephonyPayload(sdp.CodecPCMA, testSamples(8000, 160))
+	if err != nil {
+		t.Fatalf("EncodeTelephonyPayload returned error: %v", err)
+	}
+	speechPacket := rtp.Packet{PayloadType: uint8(sdp.CodecPCMA.PayloadType), Payload: speechPayload}
+	for i := 0; i < 12; i++ {
+		server.handleRTPPacket(testContext(t), session, speechPacket)
+	}
+
+	session.processing.Store(false)
+	silencePayload, err := edgeaudio.EncodeTelephonyPayload(sdp.CodecPCMA, testSamples(0, 160))
+	if err != nil {
+		t.Fatalf("EncodeTelephonyPayload returned error: %v", err)
+	}
+	silencePacket := rtp.Packet{PayloadType: uint8(sdp.CodecPCMA.PayloadType), Payload: silencePayload}
+	for i := 0; i < 40; i++ {
+		server.handleRTPPacket(testContext(t), session, silencePacket)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	if got := provider.transcribes.Load(); got != 0 {
+		t.Fatalf("transcribes = %d, want 0", got)
+	}
+}
+
 func testConfig() config.Config {
 	return config.Config{
 		PublicIP:      "127.0.0.1",
@@ -79,6 +124,27 @@ func testConfig() config.Config {
 			TTSVoice: "Kore",
 		},
 	}
+}
+
+type countingSpeechProvider struct {
+	transcribes atomic.Int32
+}
+
+func (provider *countingSpeechProvider) Transcribe(context.Context, speech.PCMBuffer) (speech.Transcript, error) {
+	provider.transcribes.Add(1)
+	return speech.Transcript{}, nil
+}
+
+func (provider *countingSpeechProvider) Synthesize(context.Context, string, speech.SynthesisOptions) (speech.PCMBuffer, error) {
+	return speech.PCMBuffer{}, nil
+}
+
+func testSamples(value int16, count int) []int16 {
+	samples := make([]int16, count)
+	for i := range samples {
+		samples[i] = value
+	}
+	return samples
 }
 
 func testContext(t *testing.T) context.Context {

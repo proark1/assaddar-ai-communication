@@ -247,6 +247,9 @@ func (server *Server) handleRTPPacket(ctx context.Context, session *CallSession,
 	if packet.PayloadType != uint8(session.Codec.PayloadType) {
 		return
 	}
+	if session.processing.Load() {
+		return
+	}
 	samples, err := audio.DecodeTelephonyPayload(session.Codec, packet.Payload)
 	if err != nil {
 		server.logger.Warn("failed to decode rtp payload", "callId", session.CallID, "error", err)
@@ -265,7 +268,10 @@ func (server *Server) handleRTPPacket(ctx context.Context, session *CallSession,
 		"durationMs", durationMillis(len(utterance), session.Codec.ClockRate),
 	)
 	go func() {
-		defer session.processing.Store(false)
+		defer func() {
+			session.VAD.Reset()
+			session.processing.Store(false)
+		}()
 		if err := server.processUtterance(ctx, session, utterance); err != nil {
 			server.logger.Warn("failed to process caller utterance", "callId", session.CallID, "error", err)
 		}
@@ -355,10 +361,11 @@ func (server *Server) sendPCM(ctx context.Context, session *CallSession, pcm spe
 	if telephonyRate <= 0 {
 		telephonyRate = 8000
 	}
-	samples := pcm.Samples
-	if pcm.SampleRate != telephonyRate {
-		samples = audio.ResampleLinear(samples, pcm.SampleRate, telephonyRate)
+	sourceRate := pcm.SampleRate
+	if sourceRate <= 0 {
+		sourceRate = telephonyRate
 	}
+	samples := audio.ConditionForTelephony(pcm.Samples, sourceRate, telephonyRate)
 	frameSize := telephonyRate / int(time.Second/rtpFrameDuration)
 	if frameSize <= 0 {
 		frameSize = 160

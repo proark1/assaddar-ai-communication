@@ -9,6 +9,31 @@ func TestResampleLinearChangesLength(t *testing.T) {
 	}
 }
 
+func TestConditionForTelephonyDownsamples(t *testing.T) {
+	input := make([]int16, 240)
+	for i := range input {
+		if i%2 == 0 {
+			input[i] = 30000
+		} else {
+			input[i] = -30000
+		}
+	}
+	out := ConditionForTelephony(input, 24000, 8000)
+	if len(out) != 80 {
+		t.Fatalf("len(out) = %d", len(out))
+	}
+}
+
+func TestConditionForTelephonyBoostsQuietAudio(t *testing.T) {
+	out := ConditionForTelephony(repeatedSample(1000, 80), 8000, 8000)
+	if len(out) != 80 {
+		t.Fatalf("len(out) = %d", len(out))
+	}
+	if out[0] <= 1000 {
+		t.Fatalf("out[0] = %d, want boosted sample", out[0])
+	}
+}
+
 func TestWAVRoundTrip(t *testing.T) {
 	input := []int16{-1000, 0, 1000}
 	wav := EncodeWAVPCM16(input, 16000)
