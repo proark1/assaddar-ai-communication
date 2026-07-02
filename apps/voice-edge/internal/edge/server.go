@@ -259,6 +259,11 @@ func (server *Server) handleRTPPacket(ctx context.Context, session *CallSession,
 	if !session.processing.CompareAndSwap(false, true) {
 		return
 	}
+	server.logger.Info(
+		"caller utterance detected",
+		"callId", session.CallID,
+		"durationMs", durationMillis(len(utterance), session.Codec.ClockRate),
+	)
 	go func() {
 		defer session.processing.Store(false)
 		if err := server.processUtterance(ctx, session, utterance); err != nil {
@@ -278,6 +283,7 @@ func (server *Server) processUtterance(ctx context.Context, session *CallSession
 	if telephonyRate <= 0 {
 		telephonyRate = 8000
 	}
+	startedAt := time.Now()
 	transcript, err := server.speechProvider.Transcribe(ctx, speech.PCMBuffer{
 		SampleRate: telephonyRate,
 		Samples:    utterance,
@@ -289,8 +295,14 @@ func (server *Server) processUtterance(ctx context.Context, session *CallSession
 	if text == "" {
 		return nil
 	}
-	server.logger.Info("caller utterance transcribed", "callId", session.CallID, "assistantId", session.AssistantID)
+	server.logger.Info(
+		"caller utterance transcribed",
+		"callId", session.CallID,
+		"assistantId", session.AssistantID,
+		"durationMs", time.Since(startedAt).Milliseconds(),
+	)
 
+	turnStartedAt := time.Now()
 	response, err := server.turnClient.Send(ctx, session.AssistantID, turn.Request{
 		Text:     text,
 		CallID:   session.CallID,
@@ -307,10 +319,17 @@ func (server *Server) processUtterance(ctx context.Context, session *CallSession
 	if err != nil {
 		return fmt.Errorf("voice turn: %w", err)
 	}
+	server.logger.Info(
+		"voice turn completed",
+		"callId", session.CallID,
+		"status", response.Status,
+		"durationMs", time.Since(turnStartedAt).Milliseconds(),
+	)
 	reply := strings.TrimSpace(response.Reply)
 	if reply == "" {
 		return nil
 	}
+	synthesisStartedAt := time.Now()
 	pcm, err := server.speechProvider.Synthesize(ctx, reply, speech.SynthesisOptions{
 		Locale: server.cfg.DefaultLocale,
 		Voice:  server.cfg.Gemini.TTSVoice,
@@ -318,6 +337,13 @@ func (server *Server) processUtterance(ctx context.Context, session *CallSession
 	if err != nil {
 		return fmt.Errorf("synthesize: %w", err)
 	}
+	server.logger.Info(
+		"assistant speech synthesized",
+		"callId", session.CallID,
+		"durationMs", time.Since(synthesisStartedAt).Milliseconds(),
+		"sampleRate", pcm.SampleRate,
+		"samples", len(pcm.Samples),
+	)
 	return server.sendPCM(ctx, session, pcm)
 }
 
@@ -354,7 +380,20 @@ func (server *Server) sendPCM(ctx context.Context, session *CallSession, pcm spe
 			return err
 		}
 	}
+	server.logger.Info(
+		"assistant speech sent",
+		"callId", session.CallID,
+		"frames", len(frames),
+		"durationMs", durationMillis(len(samples), telephonyRate),
+	)
 	return nil
+}
+
+func durationMillis(samples int, sampleRate int) int {
+	if sampleRate <= 0 {
+		return 0
+	}
+	return samples * 1000 / sampleRate
 }
 
 func (server *Server) registrationLoop(ctx context.Context) {

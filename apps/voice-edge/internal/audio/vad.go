@@ -16,10 +16,10 @@ type VAD struct {
 func NewTelephonyVAD() *VAD {
 	return &VAD{
 		SampleRate:       8000,
-		EnergyThreshold:  500,
+		EnergyThreshold:  700,
 		MinSpeechSamples: 8000 / 5,
-		SilenceSamples:   8000 * 7 / 10,
-		MaxSamples:       8000 * 12,
+		SilenceSamples:   8000 * 4 / 10,
+		MaxSamples:       8000 * 6,
 	}
 }
 
