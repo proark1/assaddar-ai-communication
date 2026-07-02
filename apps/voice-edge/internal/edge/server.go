@@ -8,28 +8,37 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/assaddar/ai-communication/apps/voice-edge/internal/audio"
 	"github.com/assaddar/ai-communication/apps/voice-edge/internal/config"
 	"github.com/assaddar/ai-communication/apps/voice-edge/internal/media"
+	"github.com/assaddar/ai-communication/apps/voice-edge/internal/rtp"
 	"github.com/assaddar/ai-communication/apps/voice-edge/internal/sdp"
 	"github.com/assaddar/ai-communication/apps/voice-edge/internal/sip"
+	"github.com/assaddar/ai-communication/apps/voice-edge/internal/speech"
+	"github.com/assaddar/ai-communication/apps/voice-edge/internal/turn"
 )
 
 const (
 	registerExpiresSeconds = 300
 	registerRefreshEvery   = 4 * time.Minute
 	sipReadTimeout         = 500 * time.Millisecond
+	rtpFrameDuration       = 20 * time.Millisecond
+	voiceTurnProvider      = "easybell_voice_edge"
 )
 
 type Server struct {
 	cfg               config.Config
 	logger            *slog.Logger
 	portPool          *media.PortPool
+	speechProvider    speech.Provider
+	turnClient        turnSender
 	sessionsMu        sync.Mutex
 	sessions          map[string]*CallSession
 	registerResponses chan sip.Message
@@ -46,9 +55,15 @@ type CallSession struct {
 	ToTag       string
 	Codec       sdp.Codec
 	RTP         *media.RTPSession
+	VAD         *audio.VAD
 	Cancel      context.CancelFunc
 	Phase       string
 	StartedAt   time.Time
+	processing  atomic.Bool
+}
+
+type turnSender interface {
+	Send(ctx context.Context, assistantID string, payload turn.Request) (turn.Response, error)
 }
 
 func New(cfg config.Config, logger *slog.Logger) (*Server, error) {
@@ -63,6 +78,8 @@ func New(cfg config.Config, logger *slog.Logger) (*Server, error) {
 		cfg:               cfg,
 		logger:            logger,
 		portPool:          pool,
+		speechProvider:    speech.NewGeminiProvider(cfg.Gemini),
+		turnClient:        turn.Client{BaseURL: cfg.VoiceTurnURL, Secret: cfg.VoiceSecret, HTTPClient: &http.Client{Timeout: 30 * time.Second}},
 		sessions:          map[string]*CallSession{},
 		registerResponses: make(chan sip.Message, 8),
 	}, nil
@@ -191,13 +208,16 @@ func (server *Server) handleInvite(ctx context.Context, request sip.Message, rem
 		ToTag:       toTag,
 		Codec:       codec,
 		RTP:         rtpSession,
+		VAD:         audio.NewTelephonyVAD(),
 		Cancel:      cancel,
 		Phase:       "ringing",
 		StartedAt:   time.Now(),
 	}
 	server.storeSession(session)
 	go func() {
-		err := rtpSession.ReadLoop(callCtx, nil)
+		err := rtpSession.ReadLoop(callCtx, func(packet rtp.Packet, _ *net.UDPAddr) {
+			server.handleRTPPacket(callCtx, session, packet)
+		})
 		if err != nil {
 			server.logger.Warn("rtp read loop ended with error", "callId", callID, "error", err)
 		}
@@ -215,6 +235,123 @@ func (server *Server) handleInvite(ctx context.Context, request sip.Message, rem
 		"codec", codec.Name,
 		"rtpPort", rtpSession.Port,
 	)
+}
+
+func (server *Server) handleRTPPacket(ctx context.Context, session *CallSession, packet rtp.Packet) {
+	if session == nil || session.VAD == nil {
+		return
+	}
+	if packet.PayloadType != uint8(session.Codec.PayloadType) {
+		return
+	}
+	samples, err := audio.DecodeTelephonyPayload(session.Codec, packet.Payload)
+	if err != nil {
+		server.logger.Warn("failed to decode rtp payload", "callId", session.CallID, "error", err)
+		return
+	}
+	utterance, ok := session.VAD.Feed(samples)
+	if !ok {
+		return
+	}
+	if !session.processing.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer session.processing.Store(false)
+		if err := server.processUtterance(ctx, session, utterance); err != nil {
+			server.logger.Warn("failed to process caller utterance", "callId", session.CallID, "error", err)
+		}
+	}()
+}
+
+func (server *Server) processUtterance(ctx context.Context, session *CallSession, utterance []int16) error {
+	if server.speechProvider == nil || server.turnClient == nil {
+		return errors.New("speech pipeline is not configured")
+	}
+	if len(utterance) == 0 {
+		return nil
+	}
+	telephonyRate := session.Codec.ClockRate
+	if telephonyRate <= 0 {
+		telephonyRate = 8000
+	}
+	transcript, err := server.speechProvider.Transcribe(ctx, speech.PCMBuffer{
+		SampleRate: telephonyRate,
+		Samples:    utterance,
+	})
+	if err != nil {
+		return fmt.Errorf("transcribe: %w", err)
+	}
+	text := strings.TrimSpace(transcript.Text)
+	if text == "" {
+		return nil
+	}
+	server.logger.Info("caller utterance transcribed", "callId", session.CallID, "assistantId", session.AssistantID)
+
+	response, err := server.turnClient.Send(ctx, session.AssistantID, turn.Request{
+		Text:     text,
+		CallID:   session.CallID,
+		From:     session.From,
+		To:       server.cfg.Easybell.PublicNumber,
+		Provider: voiceTurnProvider,
+		Locale:   server.cfg.DefaultLocale,
+		Metadata: map[string]any{
+			"codec":                session.Codec.Name,
+			"rtpPacketsReceived":   session.RTP.PacketsReceived.Load(),
+			"transcriptConfidence": transcript.Confidence,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("voice turn: %w", err)
+	}
+	reply := strings.TrimSpace(response.Reply)
+	if reply == "" {
+		return nil
+	}
+	pcm, err := server.speechProvider.Synthesize(ctx, reply, speech.SynthesisOptions{
+		Locale: server.cfg.DefaultLocale,
+		Voice:  server.cfg.Gemini.TTSVoice,
+	})
+	if err != nil {
+		return fmt.Errorf("synthesize: %w", err)
+	}
+	return server.sendPCM(ctx, session, pcm)
+}
+
+func (server *Server) sendPCM(ctx context.Context, session *CallSession, pcm speech.PCMBuffer) error {
+	if len(pcm.Samples) == 0 {
+		return nil
+	}
+	telephonyRate := session.Codec.ClockRate
+	if telephonyRate <= 0 {
+		telephonyRate = 8000
+	}
+	samples := pcm.Samples
+	if pcm.SampleRate != telephonyRate {
+		samples = audio.ResampleLinear(samples, pcm.SampleRate, telephonyRate)
+	}
+	frameSize := telephonyRate / int(time.Second/rtpFrameDuration)
+	if frameSize <= 0 {
+		frameSize = 160
+	}
+	frames := audio.FramePCM(samples, frameSize)
+	for index, frame := range frames {
+		if index > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(rtpFrameDuration):
+			}
+		}
+		payload, err := audio.EncodeTelephonyPayload(session.Codec, frame)
+		if err != nil {
+			return err
+		}
+		if err := session.RTP.SendPayload(payload); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (server *Server) registrationLoop(ctx context.Context) {

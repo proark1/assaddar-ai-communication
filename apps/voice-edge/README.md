@@ -19,11 +19,18 @@ runs the service tests from this directory.
 ```text
 easybell SIP/RTP
   -> voice-edge
-  -> Gemini speech
+  -> Gemini speech-to-text
   -> apps/voice /voice/turn
   -> Gemini TTS
   -> RTP response audio
 ```
+
+The current runtime uses a turn-based speech loop: inbound G.711 RTP is decoded
+to PCM, voice activity detection emits caller utterances, Gemini transcribes the
+utterance via the Interactions API, `/voice/turn` returns the assistant text, and
+Gemini TTS returns PCM that is encoded back to PCMA/PCMU RTP. Gemini Live can
+replace the speech provider later for lower latency without changing the SIP
+edge contract.
 
 ## Required Environment
 
@@ -44,7 +51,7 @@ VOICE_TURN_URL=https://your-voice-domain/voice/turn
 VOICE_EDGE_SECRET=...
 
 GEMINI_API_KEY=...
-GEMINI_STT_MODEL=gemini-3.1-flash-live-preview
+GEMINI_STT_MODEL=gemini-3.5-flash
 GEMINI_TTS_MODEL=gemini-3.1-flash-tts-preview
 GEMINI_TTS_VOICE=Kore
 VOICE_LOCALE=de-DE

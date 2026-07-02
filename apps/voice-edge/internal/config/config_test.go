@@ -16,7 +16,7 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Easybell.Registrar != "voip.easybell.de" {
 		t.Fatalf("registrar = %q", cfg.Easybell.Registrar)
 	}
-	if cfg.Gemini.STTModel != "gemini-3.1-flash-live-preview" {
+	if cfg.Gemini.STTModel != "gemini-3.5-flash" {
 		t.Fatalf("STTModel = %q", cfg.Gemini.STTModel)
 	}
 	if cfg.ReadinessError() == nil {

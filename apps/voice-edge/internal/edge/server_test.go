@@ -73,7 +73,7 @@ func testConfig() config.Config {
 		},
 		Gemini: config.GeminiConfig{
 			APIKey:   "gemini",
-			STTModel: "gemini-3.1-flash-live-preview",
+			STTModel: "gemini-3.5-flash",
 			TTSModel: "gemini-3.1-flash-tts-preview",
 			TTSVoice: "Kore",
 		},

@@ -62,7 +62,7 @@ func Load(getenv func(string) string) (Config, error) {
 		},
 		Gemini: GeminiConfig{
 			APIKey:   strings.TrimSpace(getenv("GEMINI_API_KEY")),
-			STTModel: envDefault(getenv, "GEMINI_STT_MODEL", "gemini-3.1-flash-live-preview"),
+			STTModel: envDefault(getenv, "GEMINI_STT_MODEL", "gemini-3.5-flash"),
 			TTSModel: envDefault(getenv, "GEMINI_TTS_MODEL", "gemini-3.1-flash-tts-preview"),
 			TTSVoice: envDefault(getenv, "GEMINI_TTS_VOICE", "Kore"),
 		},
