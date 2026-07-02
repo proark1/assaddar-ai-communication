@@ -33,6 +33,11 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.22.x"
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -47,6 +52,10 @@ jobs:
 
       - name: Test
         run: pnpm test
+
+      - name: Test voice edge
+        working-directory: apps/voice-edge
+        run: go test ./...
 
       - name: Typecheck
         run: pnpm typecheck
