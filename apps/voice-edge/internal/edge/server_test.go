@@ -63,6 +63,7 @@ func testConfig() config.Config {
 		RTPPortMax:    32010,
 		VoiceTurnURL:  "https://voice.example.com/voice/turn",
 		VoiceSecret:   "secret",
+		AssistantID:   "asst_5965790b88cc480b836f5eca",
 		DefaultLocale: "de-DE",
 		Easybell: config.EasybellConfig{
 			Registrar:    "voip.easybell.de",

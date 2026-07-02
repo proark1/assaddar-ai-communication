@@ -177,6 +177,9 @@ func (server *Server) handleInvite(ctx context.Context, request sip.Message, rem
 		server.sendResponse(request, remote, 404, "Not Found", "")
 		return
 	}
+	if server.cfg.AssistantID != "" {
+		assistantID = server.cfg.AssistantID
+	}
 	offer, err := sdp.ParseOffer(request.Body)
 	if err != nil {
 		server.logger.Warn("invite has invalid sdp", "callId", callID, "error", err)

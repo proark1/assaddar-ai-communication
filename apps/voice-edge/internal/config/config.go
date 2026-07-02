@@ -20,6 +20,7 @@ type Config struct {
 	Easybell      EasybellConfig
 	VoiceTurnURL  string
 	VoiceSecret   string
+	AssistantID   string
 	Gemini        GeminiConfig
 	DefaultLocale string
 }
@@ -53,6 +54,7 @@ func Load(getenv func(string) string) (Config, error) {
 		RTPPortMax:   envIntDefault(getenv, "VOICE_EDGE_RTP_PORT_MAX", 30100),
 		VoiceTurnURL: strings.TrimSpace(getenv("VOICE_TURN_URL")),
 		VoiceSecret:  strings.TrimSpace(getenv("VOICE_EDGE_SECRET")),
+		AssistantID:  strings.TrimSpace(getenv("VOICE_EDGE_ASSISTANT_ID")),
 		Easybell: EasybellConfig{
 			Registrar:    envDefault(getenv, "EASYBELL_SIP_REGISTRAR", "voip.easybell.de"),
 			Username:     strings.TrimSpace(getenv("EASYBELL_SIP_USERNAME")),
@@ -99,13 +101,14 @@ func (cfg Config) Validate() error {
 func (cfg Config) ReadinessError() error {
 	missing := make([]string, 0)
 	required := map[string]string{
-		"VOICE_EDGE_PUBLIC_IP":   cfg.PublicIP,
-		"EASYBELL_SIP_USERNAME":  cfg.Easybell.Username,
-		"EASYBELL_SIP_PASSWORD":  cfg.Easybell.Password,
-		"EASYBELL_PUBLIC_NUMBER": cfg.Easybell.PublicNumber,
-		"VOICE_TURN_URL":         cfg.VoiceTurnURL,
-		"VOICE_EDGE_SECRET":      cfg.VoiceSecret,
-		"GEMINI_API_KEY":         cfg.Gemini.APIKey,
+		"VOICE_EDGE_PUBLIC_IP":    cfg.PublicIP,
+		"EASYBELL_SIP_USERNAME":   cfg.Easybell.Username,
+		"EASYBELL_SIP_PASSWORD":   cfg.Easybell.Password,
+		"EASYBELL_PUBLIC_NUMBER":  cfg.Easybell.PublicNumber,
+		"VOICE_TURN_URL":          cfg.VoiceTurnURL,
+		"VOICE_EDGE_SECRET":       cfg.VoiceSecret,
+		"VOICE_EDGE_ASSISTANT_ID": cfg.AssistantID,
+		"GEMINI_API_KEY":          cfg.Gemini.APIKey,
 	}
 	for key, value := range required {
 		if strings.TrimSpace(value) == "" {
