@@ -7,6 +7,8 @@ export const ChannelSchema = z.enum([
   "messenger",
   "tiktok",
   "telephone",
+  "telegram",
+  "email",
   "admin_test",
 ]);
 

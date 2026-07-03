@@ -3737,6 +3737,15 @@ function buildChannelConnectionDashboard(input: {
         ? `${apiBase}/webhooks/meta/instagram?assistantId=${assistantId}`
         : undefined,
     }),
+    item("telegram", "telegram-bot-api", "Telegram", {
+      credentialConfigured: false,
+      assistantWebhookUrl: assistantId
+        ? `${apiBase}/webhooks/telegram?assistantId=${assistantId}`
+        : undefined,
+    }),
+    item("email", "assaddar-email-forwarding", "Email support inbox", {
+      credentialConfigured: false,
+    }),
   ];
 }
 

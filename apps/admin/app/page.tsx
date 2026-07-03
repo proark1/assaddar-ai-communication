@@ -166,6 +166,103 @@ const channelImplementationGuides: Partial<
     label: "Instagram webhooks",
     url: "https://developers.facebook.com/docs/instagram-platform/webhooks/",
   },
+  telegram: {
+    label: "Telegram Bot API",
+    url: "https://core.telegram.org/bots/api",
+  },
+  email: {
+    label: "Inbound email setup",
+    url: "https://docs.aws.amazon.com/ses/latest/dg/receiving-email.html",
+  },
+};
+
+const channelExperienceDetails: Record<
+  ChannelConnection["channel"],
+  {
+    group: "Owned channel" | "Messaging app";
+    purpose: string;
+    nextAction: string;
+    tutorial: string[];
+  }
+> = {
+  website: {
+    group: "Owned channel",
+    purpose: "Put the assistant on the website and capture visitor questions.",
+    nextAction: "Open widget setup and verify the install.",
+    tutorial: [
+      "Copy the website snippet.",
+      "Paste it into the website footer.",
+      "Run the install check.",
+      "Send a test website message.",
+    ],
+  },
+  telephone: {
+    group: "Owned channel",
+    purpose: "Answer calls with the same knowledge, inbox, and handoff rules.",
+    nextAction: "Choose a phone setup path and run a test call.",
+    tutorial: [
+      "Choose new number, forwarding, or SIP/PBX.",
+      "Add the provider details.",
+      "Confirm the call notice and handoff rules.",
+      "Run a test call.",
+    ],
+  },
+  whatsapp: {
+    group: "Messaging app",
+    purpose: "Connect WhatsApp Business messages to the shared support inbox.",
+    nextAction: "Connect the phone number ID and verify the Meta callback.",
+    tutorial: [
+      "Prepare Meta Business and WhatsApp Business.",
+      "Paste the WhatsApp phone number ID.",
+      "Copy the callback URL into Meta.",
+      "Send a test WhatsApp message.",
+    ],
+  },
+  messenger: {
+    group: "Messaging app",
+    purpose: "Answer Facebook Page messages from the same assistant.",
+    nextAction: "Map the Facebook Page and subscribe message events.",
+    tutorial: [
+      "Choose the Facebook Page.",
+      "Paste the Page ID.",
+      "Subscribe the app to messages.",
+      "Send a test Page message.",
+    ],
+  },
+  instagram: {
+    group: "Messaging app",
+    purpose: "Bring Instagram Professional account DMs into the inbox.",
+    nextAction: "Map the Instagram account and verify messaging webhooks.",
+    tutorial: [
+      "Use an Instagram Professional account.",
+      "Confirm it is connected to a Facebook Page.",
+      "Paste the Instagram account ID.",
+      "Send a test DM.",
+    ],
+  },
+  telegram: {
+    group: "Messaging app",
+    purpose:
+      "Use a Telegram bot for private chats and controlled group replies.",
+    nextAction: "Create a bot in BotFather, then paste the bot token.",
+    tutorial: [
+      "Create a bot with BotFather.",
+      "Paste the bot token here.",
+      "Check the webhook.",
+      "Test a private chat and a group mention.",
+    ],
+  },
+  email: {
+    group: "Owned channel",
+    purpose: "Turn a support mailbox into tenant-scoped email conversations.",
+    nextAction: "Forward a support mailbox to the generated platform address.",
+    tutorial: [
+      "Choose the support mailbox.",
+      "Copy the forwarding address.",
+      "Forward incoming support mail.",
+      "Send a test email.",
+    ],
+  },
 };
 
 const sampleQuestions = APP_CONFIG.sampleQuestions;
@@ -607,11 +704,13 @@ export default function DashboardPage() {
   const telephoneConnection = channelConnections.find(
     (connection) => connection.channel === "telephone",
   );
-  const metaChannelsReady = channelConnections.filter(
+  const messagingChannelsReady = channelConnections.filter(
     (connection) =>
-      ["whatsapp", "messenger", "instagram"].includes(connection.channel) &&
+      ["whatsapp", "messenger", "instagram", "telegram", "email"].includes(
+        connection.channel,
+      ) &&
       connection.status === "connected" &&
-      connection.credentialConfigured,
+      (connection.credentialConfigured || connection.channel === "email"),
   ).length;
   const unansweredCount = getUsageTotal(analytics, ["handoff", "refused"]);
   const answeredCount = getUsageTotal(analytics, ["answered"]);
@@ -5767,8 +5866,8 @@ export default function DashboardPage() {
           </article>
           <article className="metricCard">
             <MessageCircle size={18} />
-            <span>Meta ready</span>
-            <strong>{metaChannelsReady}</strong>
+            <span>Messaging ready</span>
+            <strong>{messagingChannelsReady}</strong>
           </article>
           <article
             className="metricCard"
@@ -5804,9 +5903,9 @@ export default function DashboardPage() {
               </span>
             </article>
             <article data-step="3">
-              <strong>Social inbox</strong>
+              <strong>Messaging and email</strong>
               <span>
-                Add WhatsApp, Messenger, and Instagram once workflows are clear.
+                Add WhatsApp, Messenger, Instagram, Telegram, and Email.
               </span>
             </article>
           </div>
@@ -5824,8 +5923,11 @@ export default function DashboardPage() {
           <div className="panelHeader">
             <div className="panelTitle">
               <Globe2 size={18} />
-              <h2>Other channel setup</h2>
+              <h2>Connect channels</h2>
             </div>
+            <span className="countPill">
+              {channelConnections.length} available
+            </span>
             <button
               className="secondaryButton"
               type="button"
@@ -5849,6 +5951,7 @@ export default function DashboardPage() {
                 const isWebsite = connection.channel === "website";
                 const implementationGuide =
                   channelImplementationGuides[connection.channel];
+                const details = channelExperienceDetails[connection.channel];
                 return (
                   <article className="channelCard" key={connection.channel}>
                     <div className="channelCardHeader">
@@ -5860,6 +5963,18 @@ export default function DashboardPage() {
                         {connection.status}
                       </small>
                     </div>
+
+                    <div className="channelIntro">
+                      <small>{details.group}</small>
+                      <p>{details.purpose}</p>
+                      <strong>{channelNextAction(connection)}</strong>
+                    </div>
+
+                    <ol className="channelTutorial">
+                      {details.tutorial.map((step) => (
+                        <li key={step}>{step}</li>
+                      ))}
+                    </ol>
 
                     <div className="channelStepList">
                       {getChannelSetupSteps(connection, webhook).map((step) => (
@@ -5883,15 +5998,11 @@ export default function DashboardPage() {
                     <div className="channelStatusRows">
                       <article
                         data-ready={
-                          connection.credentialConfigured ? "true" : "false"
+                          channelCredentialReady(connection) ? "true" : "false"
                         }
                       >
-                        <span>Credential</span>
-                        <strong>
-                          {connection.credentialConfigured
-                            ? "Ready"
-                            : "Missing"}
-                        </strong>
+                        <span>{channelCredentialLabel(connection)}</span>
+                        <strong>{channelCredentialStatus(connection)}</strong>
                       </article>
                       <article
                         data-ready={
@@ -5900,7 +6011,7 @@ export default function DashboardPage() {
                             : "false"
                         }
                       >
-                        <span>Account ID</span>
+                        <span>{channelAccountLabel(connection.channel)}</span>
                         <strong>
                           {connection.externalAccountId || isWebsite
                             ? "Set"
@@ -5923,6 +6034,9 @@ export default function DashboardPage() {
                         <span>{channelAccountLabel(connection.channel)}</span>
                         <input
                           value={draftValue}
+                          placeholder={channelAccountPlaceholder(
+                            connection.channel,
+                          )}
                           disabled={!canEditChannels}
                           onChange={(event) =>
                             setChannelAccountDrafts((current) => ({
@@ -7464,7 +7578,75 @@ export default function DashboardPage() {
     if (channel === "instagram") {
       return "Instagram account ID";
     }
+    if (channel === "telegram") {
+      return "Bot username or bot ID";
+    }
+    if (channel === "email") {
+      return "Support mailbox";
+    }
     return "Account ID";
+  }
+
+  function channelAccountPlaceholder(channel: ChannelConnection["channel"]) {
+    if (channel === "whatsapp") {
+      return "WhatsApp phone number ID";
+    }
+    if (channel === "messenger") {
+      return "Facebook Page ID";
+    }
+    if (channel === "instagram") {
+      return "Instagram account ID";
+    }
+    if (channel === "telegram") {
+      return "@your_bot or bot ID";
+    }
+    if (channel === "email") {
+      return "support@example.com";
+    }
+    return "Account ID";
+  }
+
+  function channelCredentialLabel(connection: ChannelConnection) {
+    if (connection.channel === "website") {
+      return "Install";
+    }
+    if (connection.channel === "email") {
+      return "Forwarding";
+    }
+    if (connection.channel === "telegram") {
+      return "Bot token";
+    }
+    return "Credential";
+  }
+
+  function channelCredentialStatus(connection: ChannelConnection) {
+    if (connection.channel === "website") {
+      return "Ready";
+    }
+    if (connection.channel === "email") {
+      return connection.externalAccountId ? "Ready" : "Setup";
+    }
+    return connection.credentialConfigured ? "Ready" : "Missing";
+  }
+
+  function channelCredentialReady(connection: ChannelConnection) {
+    if (connection.channel === "website") {
+      return true;
+    }
+    if (connection.channel === "email") {
+      return Boolean(connection.externalAccountId);
+    }
+    return Boolean(connection.credentialConfigured);
+  }
+
+  function channelNextAction(connection: ChannelConnection) {
+    if (connection.status === "disabled") {
+      return "Enable the channel when you are ready to use it.";
+    }
+    if (connection.status === "connected") {
+      return "Send a test message and watch the inbox.";
+    }
+    return channelExperienceDetails[connection.channel].nextAction;
   }
 
   function channelSetupHint(connection: ChannelConnection) {
@@ -7479,6 +7661,12 @@ export default function DashboardPage() {
     }
     if (connection.channel === "instagram") {
       return "Use the Instagram Professional account ID and subscribe the app to messaging webhooks.";
+    }
+    if (connection.channel === "telegram") {
+      return "Create a bot in BotFather, paste the bot token during setup, then test private chat and controlled group replies.";
+    }
+    if (connection.channel === "email") {
+      return "Forward a support mailbox to the platform address so customer emails become conversations in the same inbox.";
     }
     return "Website traffic is handled by the installed widget snippet.";
   }
@@ -7510,6 +7698,64 @@ export default function DashboardPage() {
           label: "Verify",
           detail: "Use the install checker in Settings > Widget",
           done: Boolean(installCheck?.installed),
+        },
+      ];
+    }
+
+    if (connection.channel === "telegram") {
+      return [
+        {
+          label: "Bot token",
+          detail: connection.credentialConfigured
+            ? "Bot token is stored securely"
+            : "Paste the BotFather token in the Telegram setup flow",
+          done: Boolean(connection.credentialConfigured),
+        },
+        {
+          label: "Bot identity",
+          detail: connection.externalAccountId
+            ? "Bot mapped to this assistant"
+            : "Save the bot username or ID",
+          done: Boolean(connection.externalAccountId),
+        },
+        {
+          label: "Webhook",
+          detail: webhook
+            ? "Use the assistant-specific callback"
+            : "Callback URL is not available",
+          done: Boolean(webhook),
+        },
+        {
+          label: "Group mode",
+          detail: "Answer mentions, /ask commands, and replies",
+          done: true,
+        },
+      ];
+    }
+
+    if (connection.channel === "email") {
+      return [
+        {
+          label: "Forwarding address",
+          detail: "Platform inbound address will receive support mail",
+          done: true,
+        },
+        {
+          label: "Support mailbox",
+          detail: connection.externalAccountId
+            ? "Mailbox noted for this assistant"
+            : "Add the mailbox customers already use",
+          done: Boolean(connection.externalAccountId),
+        },
+        {
+          label: "Forward mail",
+          detail: "Forward the mailbox to the platform address",
+          done: connection.status === "connected",
+        },
+        {
+          label: "Test",
+          detail: "Send a test email and confirm it appears in the inbox",
+          done: connection.status === "connected",
         },
       ];
     }

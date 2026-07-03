@@ -2225,6 +2225,8 @@ describe("API", () => {
       expect.arrayContaining([
         expect.objectContaining({ channel: "telephone" }),
         expect.objectContaining({ channel: "whatsapp" }),
+        expect.objectContaining({ channel: "telegram" }),
+        expect.objectContaining({ channel: "email" }),
       ]),
     );
 
