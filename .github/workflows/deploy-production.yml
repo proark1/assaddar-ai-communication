@@ -117,7 +117,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          read -r -a services <<< "$RAILWAY_SERVICES"
+          read -r -a configured_services <<< "$RAILWAY_SERVICES"
+          services=()
+          for service in "${configured_services[@]}" assaddar-api assaddar-voice; do
+            if [[ " ${services[*]} " != *" $service "* ]]; then
+              services+=("$service")
+            fi
+          done
           for service in "${services[@]}"; do
             echo "Deploying Railway service: $service"
             "$HOME/.railway/bin/railway" up \
