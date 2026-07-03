@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestLoadDefaults(t *testing.T) {
 	cfg, err := Load(func(string) string { return "" })
@@ -15,6 +18,12 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.Easybell.Registrar != "voip.easybell.de" {
 		t.Fatalf("registrar = %q", cfg.Easybell.Registrar)
+	}
+	if cfg.AnswerDelay != 5*time.Second {
+		t.Fatalf("AnswerDelay = %s", cfg.AnswerDelay)
+	}
+	if cfg.GreetingText == "" {
+		t.Fatal("GreetingText should have a default")
 	}
 	if cfg.Gemini.STTModel != "gemini-3.5-flash" {
 		t.Fatalf("STTModel = %q", cfg.Gemini.STTModel)
@@ -41,5 +50,22 @@ func TestReadinessErrorPassesWithRequiredConfig(t *testing.T) {
 	}
 	if err := cfg.ReadinessError(); err != nil {
 		t.Fatalf("ReadinessError returned %v", err)
+	}
+}
+
+func TestLoadGreetingConfig(t *testing.T) {
+	env := map[string]string{
+		"VOICE_EDGE_ANSWER_DELAY_MS": "1250",
+		"VOICE_EDGE_GREETING_TEXT":   "Guten Tag.",
+	}
+	cfg, err := Load(func(key string) string { return env[key] })
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cfg.AnswerDelay != 1250*time.Millisecond {
+		t.Fatalf("AnswerDelay = %s", cfg.AnswerDelay)
+	}
+	if cfg.GreetingText != "Guten Tag." {
+		t.Fatalf("GreetingText = %q", cfg.GreetingText)
 	}
 }

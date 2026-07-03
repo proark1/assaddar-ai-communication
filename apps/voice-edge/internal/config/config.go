@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Config struct {
@@ -17,6 +18,8 @@ type Config struct {
 	SIPBind       string
 	RTPPortMin    int
 	RTPPortMax    int
+	AnswerDelay   time.Duration
+	GreetingText  string
 	Easybell      EasybellConfig
 	VoiceTurnURL  string
 	VoiceSecret   string
@@ -52,6 +55,8 @@ func Load(getenv func(string) string) (Config, error) {
 		SIPBind:      envDefault(getenv, "VOICE_EDGE_SIP_BIND", "0.0.0.0:5060"),
 		RTPPortMin:   envIntDefault(getenv, "VOICE_EDGE_RTP_PORT_MIN", 30000),
 		RTPPortMax:   envIntDefault(getenv, "VOICE_EDGE_RTP_PORT_MAX", 30100),
+		AnswerDelay:  time.Duration(envIntDefault(getenv, "VOICE_EDGE_ANSWER_DELAY_MS", 5000)) * time.Millisecond,
+		GreetingText: envDefault(getenv, "VOICE_EDGE_GREETING_TEXT", "Hallo, hier ist der KI-Assistent von Assad Dar. Wie kann ich Ihnen helfen?"),
 		VoiceTurnURL: strings.TrimSpace(getenv("VOICE_TURN_URL")),
 		VoiceSecret:  strings.TrimSpace(getenv("VOICE_EDGE_SECRET")),
 		AssistantID:  strings.TrimSpace(getenv("VOICE_EDGE_ASSISTANT_ID")),
@@ -88,6 +93,9 @@ func (cfg Config) Validate() error {
 	}
 	if cfg.RTPPortMax-cfg.RTPPortMin < 1 {
 		return errors.New("RTP port range must include at least two ports")
+	}
+	if cfg.AnswerDelay < 0 {
+		return errors.New("VOICE_EDGE_ANSWER_DELAY_MS must be zero or positive")
 	}
 	if cfg.VoiceTurnURL != "" {
 		parsed, err := url.Parse(cfg.VoiceTurnURL)

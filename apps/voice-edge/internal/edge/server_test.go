@@ -60,6 +60,108 @@ func TestHandleInviteRejectsUnsupportedCodec(t *testing.T) {
 	}
 }
 
+func TestHandleInviteAnswersAfterDelay(t *testing.T) {
+	cfg := testConfig()
+	cfg.AnswerDelay = 200 * time.Millisecond
+	server, err := New(cfg, nil)
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatalf("ListenUDP returned error: %v", err)
+	}
+	defer conn.Close()
+	server.conn = conn
+
+	client, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatalf("client ListenUDP returned error: %v", err)
+	}
+	defer client.Close()
+
+	request := mustParseSIP(t, inviteRaw("call-delay", 40000, "8 PCMA/8000"))
+	server.handleInvite(testContext(t), request, client.LocalAddr().(*net.UDPAddr))
+	t.Cleanup(func() { server.endSession("call-delay") })
+
+	immediate := strings.Join(readSIPResponses(t, client, 2), "\n")
+	if !strings.Contains(immediate, "SIP/2.0 100 Trying") || !strings.Contains(immediate, "SIP/2.0 180 Ringing") {
+		t.Fatalf("expected Trying and Ringing before delayed answer, got:\n%s", immediate)
+	}
+	if response, ok := readOptionalSIPResponse(t, client, 50*time.Millisecond); ok {
+		t.Fatalf("received answer before delay elapsed:\n%s", response)
+	}
+	delayed := strings.Join(readSIPResponses(t, client, 1), "\n")
+	if !strings.Contains(delayed, "SIP/2.0 200 OK") {
+		t.Fatalf("expected delayed 200 OK, got:\n%s", delayed)
+	}
+}
+
+func TestGreetingIsSentAfterACKWithoutInboundRTP(t *testing.T) {
+	cfg := testConfig()
+	cfg.AnswerDelay = 0
+	cfg.GreetingText = "Hallo."
+	server, err := New(cfg, nil)
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	provider := &countingSpeechProvider{
+		synthesis: speech.PCMBuffer{SampleRate: 8000, Samples: testSamples(4000, 320)},
+	}
+	server.speechProvider = provider
+
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatalf("ListenUDP returned error: %v", err)
+	}
+	defer conn.Close()
+	server.conn = conn
+
+	client, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatalf("client ListenUDP returned error: %v", err)
+	}
+	defer client.Close()
+
+	rtpReceiver, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatalf("rtp ListenUDP returned error: %v", err)
+	}
+	defer rtpReceiver.Close()
+	rtpPort := rtpReceiver.LocalAddr().(*net.UDPAddr).Port
+
+	request := mustParseSIP(t, inviteRaw("call-greeting", rtpPort, "8 PCMA/8000"))
+	server.handleInvite(testContext(t), request, client.LocalAddr().(*net.UDPAddr))
+	t.Cleanup(func() { server.endSession("call-greeting") })
+
+	responses := strings.Join(readSIPResponses(t, client, 3), "\n")
+	if !strings.Contains(responses, "SIP/2.0 200 OK") {
+		t.Fatalf("expected 200 OK answer, got:\n%s", responses)
+	}
+
+	ack := mustParseSIP(t, "ACK sip:asst_123@voice-edge.assaddar.de SIP/2.0\r\nVia: SIP/2.0/UDP client;branch=z9hG4bK-ack\r\nFrom: <sip:+491701234567@example.com>;tag=caller\r\nTo: <sip:asst_123@voice-edge.assaddar.de>;tag=edge\r\nCall-ID: call-greeting\r\nCSeq: 1 ACK\r\nContent-Length: 0\r\n\r\n")
+	server.handleMessage(testContext(t), ack, client.LocalAddr().(*net.UDPAddr))
+
+	buffer := make([]byte, 1500)
+	if err := rtpReceiver.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("SetReadDeadline returned error: %v", err)
+	}
+	n, _, err := rtpReceiver.ReadFromUDP(buffer)
+	if err != nil {
+		t.Fatalf("expected greeting RTP after ACK: %v", err)
+	}
+	packet, err := rtp.ParsePacket(buffer[:n])
+	if err != nil {
+		t.Fatalf("ParsePacket returned error: %v", err)
+	}
+	if packet.PayloadType != uint8(sdp.CodecPCMA.PayloadType) {
+		t.Fatalf("payload type = %d", packet.PayloadType)
+	}
+	if got := provider.synthesizes.Load(); got == 0 {
+		t.Fatal("Synthesize was not called for greeting")
+	}
+}
+
 func TestHandleRTPPacketIgnoresInputWhileProcessing(t *testing.T) {
 	server, err := New(testConfig(), nil)
 	if err != nil {
@@ -128,6 +230,8 @@ func testConfig() config.Config {
 
 type countingSpeechProvider struct {
 	transcribes atomic.Int32
+	synthesizes atomic.Int32
+	synthesis   speech.PCMBuffer
 }
 
 func (provider *countingSpeechProvider) Transcribe(context.Context, speech.PCMBuffer) (speech.Transcript, error) {
@@ -136,7 +240,8 @@ func (provider *countingSpeechProvider) Transcribe(context.Context, speech.PCMBu
 }
 
 func (provider *countingSpeechProvider) Synthesize(context.Context, string, speech.SynthesisOptions) (speech.PCMBuffer, error) {
-	return speech.PCMBuffer{}, nil
+	provider.synthesizes.Add(1)
+	return clonePCM(provider.synthesis), nil
 }
 
 func testSamples(value int16, count int) []int16 {
@@ -169,4 +274,34 @@ func readSIPResponses(t *testing.T, conn *net.UDPConn, count int) []string {
 		responses = append(responses, string(buffer[:n]))
 	}
 	return responses
+}
+
+func readOptionalSIPResponse(t *testing.T, conn *net.UDPConn, timeout time.Duration) (string, bool) {
+	t.Helper()
+	buffer := make([]byte, 4096)
+	if err := conn.SetReadDeadline(time.Now().Add(timeout)); err != nil {
+		t.Fatalf("SetReadDeadline returned error: %v", err)
+	}
+	n, _, err := conn.ReadFromUDP(buffer)
+	if err != nil {
+		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			return "", false
+		}
+		t.Fatalf("ReadFromUDP returned error: %v", err)
+	}
+	return string(buffer[:n]), true
+}
+
+func mustParseSIP(t *testing.T, raw string) sip.Message {
+	t.Helper()
+	message, err := sip.ParseMessage(raw)
+	if err != nil {
+		t.Fatalf("ParseMessage returned error: %v", err)
+	}
+	return message
+}
+
+func inviteRaw(callID string, mediaPort int, rtpmap string) string {
+	body := fmt.Sprintf("v=0\r\nc=IN IP4 127.0.0.1\r\nm=audio %d RTP/AVP %s\r\na=rtpmap:%s\r\n", mediaPort, strings.Fields(rtpmap)[0], rtpmap)
+	return fmt.Sprintf("INVITE sip:asst_123@voice-edge.assaddar.de SIP/2.0\r\nVia: SIP/2.0/UDP client;branch=z9hG4bK\r\nFrom: <sip:+491701234567@example.com>;tag=caller\r\nTo: <sip:asst_123@voice-edge.assaddar.de>\r\nCall-ID: %s\r\nCSeq: 1 INVITE\r\nContent-Length: %d\r\n\r\n%s", callID, len(body), body)
 }

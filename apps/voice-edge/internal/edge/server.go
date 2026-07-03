@@ -39,6 +39,10 @@ type Server struct {
 	portPool          *media.PortPool
 	speechProvider    speech.Provider
 	turnClient        turnSender
+	greetingMu        sync.Mutex
+	greetingPCM       speech.PCMBuffer
+	greetingReady     bool
+	greetingDone      chan struct{}
 	sessionsMu        sync.Mutex
 	sessions          map[string]*CallSession
 	registerResponses chan sip.Message
@@ -56,10 +60,12 @@ type CallSession struct {
 	Codec       sdp.Codec
 	RTP         *media.RTPSession
 	VAD         *audio.VAD
+	Context     context.Context
 	Cancel      context.CancelFunc
 	Phase       string
 	StartedAt   time.Time
 	processing  atomic.Bool
+	greeting    atomic.Bool
 }
 
 type turnSender interface {
@@ -153,7 +159,7 @@ func (server *Server) handleMessage(ctx context.Context, message sip.Message, re
 	case "INVITE":
 		server.handleInvite(ctx, message, remote)
 	case "ACK":
-		server.markSessionPhase(message.Header("Call-ID"), "active")
+		server.handleACK(message.Header("Call-ID"))
 	case "BYE", "CANCEL":
 		server.endSession(message.Header("Call-ID"))
 		server.sendResponse(message, remote, 200, "OK", "")
@@ -166,6 +172,15 @@ func (server *Server) handleInvite(ctx context.Context, request sip.Message, rem
 	callID := request.Header("Call-ID")
 	if callID == "" {
 		server.sendResponse(request, remote, 400, "Bad Request", "")
+		return
+	}
+	if existing := server.getSession(callID); existing != nil {
+		switch existing.Phase {
+		case "ringing":
+			server.sendMessage(sip.ResponseFor(request, 180, "Ringing", ""), remote)
+		case "answered", "active", "greeting":
+			server.sendAnswer(request, remote, existing)
+		}
 		return
 	}
 
@@ -201,6 +216,9 @@ func (server *Server) handleInvite(ctx context.Context, request sip.Message, rem
 		server.sendResponse(request, remote, 503, "Service Unavailable", "")
 		return
 	}
+	if remoteRTP, err := net.ResolveUDPAddr("udp", net.JoinHostPort(offer.ConnectionIP, strconv.Itoa(offer.MediaPort))); err == nil {
+		rtpSession.SetRemote(remoteRTP)
+	}
 	callCtx, cancel := context.WithCancel(ctx)
 	toTag := "edge-" + randomHex(6)
 	session := &CallSession{
@@ -212,6 +230,7 @@ func (server *Server) handleInvite(ctx context.Context, request sip.Message, rem
 		Codec:       codec,
 		RTP:         rtpSession,
 		VAD:         audio.NewTelephonyVAD(),
+		Context:     callCtx,
 		Cancel:      cancel,
 		Phase:       "ringing",
 		StartedAt:   time.Now(),
@@ -225,19 +244,60 @@ func (server *Server) handleInvite(ctx context.Context, request sip.Message, rem
 			server.logger.Warn("rtp read loop ended with error", "callId", callID, "error", err)
 		}
 	}()
+	go server.warmGreeting(callCtx)
+	go server.answerAfterDelay(callCtx, session, request, remote)
 
-	answer := sip.ResponseFor(request, 200, "OK", toTag)
-	answer.SetHeader("Contact", server.contactHeader(assistantID))
-	answer.SetHeader("Content-Type", "application/sdp")
-	answer.Body = sdp.Answer(server.cfg.PublicIP, rtpSession.Port, codec)
-	server.sendMessage(answer, remote)
 	server.logger.Info(
 		"accepted inbound invite",
 		"callId", callID,
 		"assistantId", assistantID,
 		"codec", codec.Name,
 		"rtpPort", rtpSession.Port,
+		"answerDelayMs", server.cfg.AnswerDelay.Milliseconds(),
 	)
+}
+
+func (server *Server) answerAfterDelay(ctx context.Context, session *CallSession, request sip.Message, remote *net.UDPAddr) {
+	if session == nil {
+		return
+	}
+	if server.cfg.AnswerDelay > 0 {
+		timer := time.NewTimer(server.cfg.AnswerDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+	}
+	select {
+	case <-ctx.Done():
+		return
+	default:
+	}
+	server.markSessionPhase(session.CallID, "answered")
+	server.sendAnswer(request, remote, session)
+	server.logger.Info("answered inbound invite", "callId", session.CallID)
+}
+
+func (server *Server) sendAnswer(request sip.Message, remote *net.UDPAddr, session *CallSession) {
+	if session == nil {
+		return
+	}
+	answer := sip.ResponseFor(request, 200, "OK", session.ToTag)
+	answer.SetHeader("Contact", server.contactHeader(session.AssistantID))
+	answer.SetHeader("Content-Type", "application/sdp")
+	answer.Body = sdp.Answer(server.cfg.PublicIP, session.RTP.Port, session.Codec)
+	server.sendMessage(answer, remote)
+}
+
+func (server *Server) handleACK(callID string) {
+	session := server.getSession(callID)
+	if session == nil {
+		return
+	}
+	server.markSessionPhase(callID, "active")
+	go server.playGreeting(session.Context, session)
 }
 
 func (server *Server) handleRTPPacket(ctx context.Context, session *CallSession, packet rtp.Packet) {
@@ -276,6 +336,96 @@ func (server *Server) handleRTPPacket(ctx context.Context, session *CallSession,
 			server.logger.Warn("failed to process caller utterance", "callId", session.CallID, "error", err)
 		}
 	}()
+}
+
+func (server *Server) warmGreeting(ctx context.Context) {
+	if strings.TrimSpace(server.cfg.GreetingText) == "" {
+		return
+	}
+	if _, err := server.greetingPCMFor(ctx); err != nil {
+		server.logger.Warn("failed to warm greeting", "error", err)
+	}
+}
+
+func (server *Server) playGreeting(ctx context.Context, session *CallSession) {
+	if session == nil || !session.greeting.CompareAndSwap(false, true) {
+		return
+	}
+	text := strings.TrimSpace(server.cfg.GreetingText)
+	if text == "" {
+		return
+	}
+	if !session.processing.CompareAndSwap(false, true) {
+		return
+	}
+	server.markSessionPhase(session.CallID, "greeting")
+	defer func() {
+		if session.VAD != nil {
+			session.VAD.Reset()
+		}
+		session.processing.Store(false)
+		server.markSessionPhase(session.CallID, "active")
+	}()
+	pcm, err := server.greetingPCMFor(ctx)
+	if err != nil {
+		server.logger.Warn("failed to synthesize greeting", "callId", session.CallID, "error", err)
+		return
+	}
+	if len(pcm.Samples) == 0 {
+		return
+	}
+	if err := server.sendPCM(ctx, session, pcm); err != nil {
+		server.logger.Warn("failed to send greeting", "callId", session.CallID, "error", err)
+		return
+	}
+	server.logger.Info("assistant greeting sent", "callId", session.CallID)
+}
+
+func (server *Server) greetingPCMFor(ctx context.Context) (speech.PCMBuffer, error) {
+	for {
+		server.greetingMu.Lock()
+		if server.greetingReady {
+			pcm := clonePCM(server.greetingPCM)
+			server.greetingMu.Unlock()
+			return pcm, nil
+		}
+		if done := server.greetingDone; done != nil {
+			server.greetingMu.Unlock()
+			select {
+			case <-ctx.Done():
+				return speech.PCMBuffer{}, ctx.Err()
+			case <-done:
+				continue
+			}
+		}
+		done := make(chan struct{})
+		server.greetingDone = done
+		server.greetingMu.Unlock()
+
+		pcm, err := server.speechProvider.Synthesize(ctx, strings.TrimSpace(server.cfg.GreetingText), speech.SynthesisOptions{
+			Locale: server.cfg.DefaultLocale,
+			Voice:  server.cfg.Gemini.TTSVoice,
+		})
+
+		server.greetingMu.Lock()
+		if err == nil && len(pcm.Samples) > 0 {
+			server.greetingPCM = clonePCM(pcm)
+			server.greetingReady = true
+		}
+		server.greetingDone = nil
+		close(done)
+		server.greetingMu.Unlock()
+
+		return pcm, err
+	}
+}
+
+func clonePCM(pcm speech.PCMBuffer) speech.PCMBuffer {
+	out := speech.PCMBuffer{SampleRate: pcm.SampleRate}
+	if len(pcm.Samples) > 0 {
+		out.Samples = append([]int16(nil), pcm.Samples...)
+	}
+	return out
 }
 
 func (server *Server) processUtterance(ctx context.Context, session *CallSession, utterance []int16) error {
@@ -513,6 +663,12 @@ func (server *Server) storeSession(session *CallSession) {
 	server.sessionsMu.Lock()
 	defer server.sessionsMu.Unlock()
 	server.sessions[session.CallID] = session
+}
+
+func (server *Server) getSession(callID string) *CallSession {
+	server.sessionsMu.Lock()
+	defer server.sessionsMu.Unlock()
+	return server.sessions[callID]
 }
 
 func (server *Server) markSessionPhase(callID string, phase string) {

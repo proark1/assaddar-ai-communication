@@ -112,6 +112,16 @@ func (session *RTPSession) SendPayload(payload []byte) error {
 	return nil
 }
 
+func (session *RTPSession) SetRemote(remote *net.UDPAddr) {
+	if remote == nil {
+		return
+	}
+	remoteCopy := *remote
+	session.remoteMu.Lock()
+	session.remote = &remoteCopy
+	session.remoteMu.Unlock()
+}
+
 func (session *RTPSession) Close() error {
 	if session.closed.Swap(true) {
 		return nil
