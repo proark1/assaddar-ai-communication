@@ -259,8 +259,10 @@ const worker = new Worker(
         const tenants = await repository.listTenants();
         // (a) Prune globally-expired user sessions.
         const removedSessions = await repository.deleteExpiredSessions(now);
-        // (b) Per-tenant: delete conversation history older than retention_days.
+        // (b) Per-tenant: delete conversation + call history older than
+        // retention_days (calls carry voice transcripts / personal data).
         let deletedConversations = 0;
+        let deletedCalls = 0;
         for (const tenant of tenants) {
           try {
             const result = await repository.deleteTenantDataOlderThanRetention(
@@ -268,10 +270,12 @@ const worker = new Worker(
               { now },
             );
             deletedConversations += result.deletedConversations;
-            if (result.deletedConversations > 0) {
+            deletedCalls += result.deletedCalls;
+            if (result.deletedConversations > 0 || result.deletedCalls > 0) {
               console.log(
                 `[retention.cleanup] tenant ${tenant.id}: pruned ` +
-                  `${result.deletedConversations} conversation(s) older than ` +
+                  `${result.deletedConversations} conversation(s) and ` +
+                  `${result.deletedCalls} call(s) older than ` +
                   `${tenant.retentionDays} day(s)`,
               );
             }
@@ -287,6 +291,7 @@ const worker = new Worker(
           status: "ok",
           removedSessions,
           deletedConversations,
+          deletedCalls,
           tenants: tenants.length,
         };
       }

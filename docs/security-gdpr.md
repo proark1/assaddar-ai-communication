@@ -72,9 +72,11 @@ The admin **privacy boundary** is enforced at the API layer independently of RLS
 ## Retention And Subject Rights
 
 - Tenants have `retention_days`.
-- `exportTenantData` supports data export foundations.
-- `deleteTenantData` deletes tenant-owned data through cascading foreign keys.
-- Production should add scheduled retention cleanup, legal hold handling, and verified requester workflows.
+- Scheduled retention cleanup runs in the workers service (`retention.cleanup`, gated behind `RETENTION_CLEANUP_ENABLED`). It prunes conversation history **and calls/voice transcripts** older than the tenant's window — calls are pruned independently by their own start time because they only `SET NULL` their conversation reference, and their transcripts cascade.
+- **Right to erasure (Art. 17)** for a single data subject: `DELETE /admin/tenants/:tenantId/contacts/:contactId` (repository `deleteContact`) removes the contact and, by default, the conversations they took part in — including messages, feedback, and any linked calls/transcripts — in one transaction. It requires a real `tenant_admin`+ membership (the platform admin token cannot erase a tenant's data) and writes a `contact.erased` audit entry.
+- `exportTenantData` provides the Art. 15/20 data export (all tenant-scoped records including messages, deliveries, contacts, and templates).
+- `deleteTenantData` deletes all tenant-owned data through cascading foreign keys (account closure).
+- Production should still add legal-hold handling and a verified data-subject requester workflow (identity confirmation) in front of the erasure endpoint.
 
 ## Audit
 

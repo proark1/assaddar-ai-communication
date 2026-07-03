@@ -860,6 +860,41 @@ class MemoryPlatformStore
     return this.contacts.filter((contact) => contact.tenantId === tenantId);
   }
 
+  async deleteContact(
+    tenantId: string,
+    contactId: string,
+    options: { deleteConversations?: boolean } = {},
+  ) {
+    const index = this.contacts.findIndex(
+      (contact) => contact.tenantId === tenantId && contact.id === contactId,
+    );
+    if (index === -1) {
+      return {
+        deletedContact: false,
+        deletedConversations: 0,
+        deletedCalls: 0,
+      };
+    }
+    this.contacts.splice(index, 1);
+    let deletedConversations = 0;
+    if (options.deleteConversations ?? true) {
+      const linked = this.conversations.filter(
+        (conversation) =>
+          conversation.tenantId === tenantId &&
+          conversation.contactId === contactId,
+      );
+      deletedConversations = linked.length;
+      const linkedIds = new Set(linked.map((conversation) => conversation.id));
+      this.conversations = this.conversations.filter(
+        (conversation) => !linkedIds.has(conversation.id),
+      );
+      this.messages = this.messages.filter(
+        (message) => !linkedIds.has(message.conversationId as string),
+      );
+    }
+    return { deletedContact: true, deletedConversations, deletedCalls: 0 };
+  }
+
   async listConversationMessages(tenantId: string, conversationId: string) {
     return this.messages.filter(
       (message) =>
@@ -3580,6 +3615,80 @@ describe("API", () => {
       headers: adminHeaders,
     });
     expect(analytics.statusCode).toBe(200);
+
+    await app.close();
+  });
+
+  it("erases a single contact for a member but denies the admin token", async () => {
+    const store = new MemoryPlatformStore();
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+    const { app, memberHeaders } = await buildServerWithMember(
+      store,
+      tenant.id,
+    );
+
+    const conversation = await store.findOrCreateConversation({
+      tenantId: tenant.id,
+      channel: "website",
+    });
+    const contact = {
+      id: "c0000000-0000-4000-8000-000000000abc",
+      tenantId: tenant.id,
+      displayName: "Erase Me",
+      email: "erase@example.com",
+      identifiers: {},
+      metadata: {},
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    store.contacts.push(contact);
+    conversation.contactId = contact.id;
+    await store.addMessage({
+      tenantId: tenant.id,
+      conversationId: conversation.id,
+      channel: "website",
+      direction: "inbound",
+      role: "user",
+      content: "personal note",
+    });
+
+    const url = `/admin/tenants/${tenant.id}/contacts/${contact.id}`;
+
+    // The platform admin token has no membership: erasure of personal data is
+    // denied (R4 boundary).
+    const denied = await app.inject({
+      method: "DELETE",
+      url,
+      headers: { "x-admin-token": "test-token" },
+    });
+    expect(denied.statusCode).toBe(403);
+    expect(store.contacts).toHaveLength(1);
+
+    // A genuine member erases the contact and its conversation history.
+    const erased = await app.inject({
+      method: "DELETE",
+      url,
+      headers: memberHeaders,
+    });
+    expect(erased.statusCode).toBe(200);
+    expect(
+      erased.json<{ erased: boolean; deletedConversations: number }>(),
+    ).toMatchObject({ erased: true, deletedConversations: 1 });
+    expect(store.contacts).toHaveLength(0);
+    expect(
+      store.auditEvents.some((event) => event.action === "contact.erased"),
+    ).toBe(true);
+
+    // Erasing an unknown contact is a 404.
+    const missing = await app.inject({
+      method: "DELETE",
+      url,
+      headers: memberHeaders,
+    });
+    expect(missing.statusCode).toBe(404);
 
     await app.close();
   });

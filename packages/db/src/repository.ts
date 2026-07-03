@@ -3537,6 +3537,89 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
   }
 
   /**
+   * GDPR Art. 17 erasure of a single data subject (contact). Deletes the contact
+   * row (its conversation links cascade away) and, unless
+   * `deleteConversations` is false, the conversations that contact took part in
+   * — including their messages/feedback (ON DELETE CASCADE) and any linked calls
+   * and transcripts (calls only SET NULL their conversation ref, so they are
+   * deleted explicitly). Tenant-scoped and transactional so a partial erasure
+   * rolls back. Returns what was removed and writes an audit entry.
+   */
+  async deleteContact(
+    tenantId: string,
+    contactId: string,
+    options: { deleteConversations?: boolean } = {},
+  ): Promise<{
+    deletedContact: boolean;
+    deletedConversations: number;
+    deletedCalls: number;
+  }> {
+    assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope(tenantId, (repo) =>
+        repo.deleteContact(tenantId, contactId, options),
+      );
+    }
+    return this.withTransaction(async (repo) => {
+      // Capture linked conversations BEFORE deleting the contact — the link
+      // rows cascade away together with the contact.
+      const links = await repo.db
+        .select({ conversationId: conversationContacts.conversationId })
+        .from(conversationContacts)
+        .where(
+          and(
+            eq(conversationContacts.tenantId, tenantId),
+            eq(conversationContacts.contactId, contactId),
+          ),
+        );
+      const conversationIds = Array.from(
+        new Set(links.map((link) => link.conversationId)),
+      );
+
+      const deletedContactRows = await repo.db
+        .delete(contacts)
+        .where(and(eq(contacts.tenantId, tenantId), eq(contacts.id, contactId)))
+        .returning({ id: contacts.id });
+      const deletedContact = deletedContactRows.length > 0;
+
+      let deletedConversations = 0;
+      let deletedCalls = 0;
+      const eraseConversations = options.deleteConversations ?? true;
+      if (deletedContact && eraseConversations && conversationIds.length > 0) {
+        const removedCalls = await repo.db
+          .delete(calls)
+          .where(
+            and(
+              eq(calls.tenantId, tenantId),
+              inArray(calls.conversationId, conversationIds),
+            ),
+          )
+          .returning({ id: calls.id });
+        deletedCalls = removedCalls.length;
+        const removedConversations = await repo.db
+          .delete(conversations)
+          .where(
+            and(
+              eq(conversations.tenantId, tenantId),
+              inArray(conversations.id, conversationIds),
+            ),
+          )
+          .returning({ id: conversations.id });
+        deletedConversations = removedConversations.length;
+      }
+
+      if (deletedContact) {
+        await repo.audit(tenantId, "contact.erased", "contact", contactId, {
+          deletedConversations,
+          deletedCalls,
+          erasedConversations: eraseConversations,
+        });
+      }
+      return { deletedContact, deletedConversations, deletedCalls };
+    });
+  }
+
+  /**
    * Retention enforcement: delete conversation history for a single tenant that
    * is older than the tenant's retention window. DESTRUCTIVE — handled with
    * deliberate caution:
@@ -3562,7 +3645,11 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
   async deleteTenantDataOlderThanRetention(
     tenantId: string,
     options: { now?: Date; retentionDays?: number } = {},
-  ): Promise<{ cutoff: Date | null; deletedConversations: number }> {
+  ): Promise<{
+    cutoff: Date | null;
+    deletedConversations: number;
+    deletedCalls: number;
+  }> {
     assertTenantId(tenantId);
     if (this.needsTenantScope(tenantId)) {
       return this.withTenantScope(tenantId, (repo) =>
@@ -3578,7 +3665,7 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     const cutoff = retentionCutoff(retentionDays, options.now ?? new Date());
     // No valid retention window configured: do not delete anything.
     if (!cutoff) {
-      return { cutoff: null, deletedConversations: 0 };
+      return { cutoff: null, deletedConversations: 0, deletedCalls: 0 };
     }
 
     const removed = await this.db
@@ -3591,7 +3678,16 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       )
       .returning({ id: conversations.id });
 
-    if (removed.length > 0) {
+    // Calls only SET NULL their conversation reference, so they (and their
+    // transcripts, via ON DELETE CASCADE) survive conversation pruning. Prune
+    // them independently by their own start time so voice recordings/transcripts
+    // — which contain personal data — are also subject to retention.
+    const removedCalls = await this.db
+      .delete(calls)
+      .where(and(eq(calls.tenantId, tenantId), lt(calls.startedAt, cutoff)))
+      .returning({ id: calls.id });
+
+    if (removed.length > 0 || removedCalls.length > 0) {
       await this.audit(
         tenantId,
         "retention.conversations.pruned",
@@ -3601,11 +3697,16 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
           retentionDays,
           cutoff: cutoff.toISOString(),
           deletedConversations: removed.length,
+          deletedCalls: removedCalls.length,
         },
       );
     }
 
-    return { cutoff, deletedConversations: removed.length };
+    return {
+      cutoff,
+      deletedConversations: removed.length,
+      deletedCalls: removedCalls.length,
+    };
   }
 
   private async resolveContactForConversation(input: {

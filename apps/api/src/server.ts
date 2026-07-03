@@ -37,6 +37,7 @@ import type { SupabaseAuthProvider } from "./supabase-auth";
 import {
   ParamsTenantSchema,
   ParamsKnowledgeSchema,
+  ParamsContactSchema,
   ParamsConversationSchema,
   ParamsHandoffSchema,
   ParamsAssistantSchema,
@@ -235,6 +236,15 @@ export type PlatformStore = AnswerDataStore &
       tenantId: string,
       options?: PaginationOptions,
     ): Promise<unknown[]>;
+    deleteContact(
+      tenantId: string,
+      contactId: string,
+      options?: { deleteConversations?: boolean },
+    ): Promise<{
+      deletedContact: boolean;
+      deletedConversations: number;
+      deletedCalls: number;
+    }>;
     listChannelConnections(tenantId: string): Promise<unknown[]>;
     upsertChannelConnection(
       tenantId: string,
@@ -1557,6 +1567,39 @@ export async function buildServer(
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const pagination = PaginationQuerySchema.parse(request.query);
       return options.store.listContacts(tenantId, pagination);
+    },
+  );
+
+  // GDPR Art. 17 erasure of a single data subject. Destructive and
+  // personal-data scoped: requires a real tenant_admin membership (no platform
+  // bypass — the admin token cannot erase a tenant's contact), and the erasure
+  // is written to the audit log with the acting principal.
+  app.delete(
+    "/admin/tenants/:tenantId/contacts/:contactId",
+    {
+      preHandler: requireTenantAccess(options, "tenant_admin", {
+        allowPlatformBypass: false,
+      }),
+    },
+    async (request, reply) => {
+      const { tenantId, contactId } = ParamsContactSchema.parse(request.params);
+      const result = await options.store.deleteContact(tenantId, contactId);
+      if (!result.deletedContact) {
+        return reply.code(404).send({ error: "Contact not found." });
+      }
+      await recordPiiAccess(
+        options,
+        request,
+        tenantId,
+        "contact.erased",
+        "contact",
+        contactId,
+        {
+          deletedConversations: result.deletedConversations,
+          deletedCalls: result.deletedCalls,
+        },
+      );
+      return reply.code(200).send({ erased: true, ...result });
     },
   );
 
