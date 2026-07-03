@@ -25,6 +25,10 @@ jobs:
       RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
       RAILWAY_SERVICES: ${{ vars.RAILWAY_SERVICES || 'assaddar-api assaddar-voice' }}
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      HETZNER_HOST: ${{ secrets.HETZNER_HOST }}
+      HETZNER_SSH_KEY: ${{ secrets.HETZNER_SSH_KEY }}
+      HETZNER_SSH_PORT: ${{ secrets.HETZNER_SSH_PORT || '22' }}
+      HETZNER_USER: ${{ secrets.HETZNER_USER }}
 
     steps:
       - name: Checkout
@@ -53,6 +57,61 @@ jobs:
           set -euo pipefail
           bash <(curl -fsSL https://railway.com/install.sh) -y
           "$HOME/.railway/bin/railway" --version
+
+      - name: Sync Gemini variables to Railway
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in HETZNER_HOST HETZNER_USER HETZNER_SSH_KEY HETZNER_SSH_PORT; do
+            if [ -z "${!name:-}" ]; then
+              missing+=("$name")
+            fi
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            printf 'Missing Hetzner configuration for Gemini sync: %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$HETZNER_SSH_KEY" > "$HOME/.ssh/hetzner_deploy_key"
+          chmod 600 "$HOME/.ssh/hetzner_deploy_key"
+          ssh-keyscan -p "$HETZNER_SSH_PORT" -H "$HETZNER_HOST" >> "$HOME/.ssh/known_hosts"
+
+          gemini_api_key="$(ssh -i "$HOME/.ssh/hetzner_deploy_key" \
+            -p "$HETZNER_SSH_PORT" \
+            "$HETZNER_USER@$HETZNER_HOST" \
+            "bash -s" <<'REMOTE'
+          set -euo pipefail
+          set -a
+          . /etc/assaddar/voice-edge.env
+          set +a
+          printf '%s' "${GEMINI_API_KEY:-}"
+          REMOTE
+          )"
+          if [ -z "$gemini_api_key" ]; then
+            echo "GEMINI_API_KEY is missing on the Hetzner voice edge." >&2
+            exit 1
+          fi
+
+          for service in assaddar-api assaddar-voice; do
+            printf '%s' "$gemini_api_key" | "$HOME/.railway/bin/railway" variable set GEMINI_API_KEY \
+              --stdin \
+              --project "$RAILWAY_PROJECT_ID" \
+              --environment "$RAILWAY_ENVIRONMENT" \
+              --service "$service" \
+              --skip-deploys >/dev/null
+            "$HOME/.railway/bin/railway" variable set GEMINI_TEXT_MODEL=gemini-2.0-flash \
+              --project "$RAILWAY_PROJECT_ID" \
+              --environment "$RAILWAY_ENVIRONMENT" \
+              --service "$service" \
+              --skip-deploys >/dev/null
+            "$HOME/.railway/bin/railway" variable set GEMINI_ANSWER_TIMEOUT_MS=12000 \
+              --project "$RAILWAY_PROJECT_ID" \
+              --environment "$RAILWAY_ENVIRONMENT" \
+              --service "$service" \
+              --skip-deploys >/dev/null
+          done
 
       - name: Deploy services
         shell: bash

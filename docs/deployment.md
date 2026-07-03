@@ -94,9 +94,14 @@ TWILIO_FROM_NUMBER=<legacy outbound calling only>
 TWILIO_TRANSFER_PHONE_NUMBER=<legacy press-0 transfer only>
 TWILIO_VOICE_LANGUAGE=de-DE
 TWILIO_VOICE_NAME=alice
+GEMINI_API_KEY=<Gemini key for grounded telephone answers>
+GEMINI_TEXT_MODEL=gemini-2.0-flash
+GEMINI_ANSWER_TIMEOUT_MS=12000
 ```
 
-OpenAI is optional for the current deterministic MVP:
+Gemini is used only after approved knowledge has matched, so unsupported
+questions still route to handoff instead of freeform answers. OpenAI is optional
+for embeddings and legacy provider-backed paths:
 
 ```text
 OPENAI_API_KEY=<only when provider-backed generation is enabled>
