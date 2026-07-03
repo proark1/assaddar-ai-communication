@@ -137,6 +137,34 @@ describe("AnswerEngine", () => {
     expect(generated).toBe(false);
   });
 
+  it("uses a German default handoff response for German callers", async () => {
+    const engine = createAnswerEngine({
+      dataStore: new MemoryAnswerStore(
+        {
+          [tenantA]: createDefaultTenantPolicy(tenantA),
+        },
+        [
+          faqChunk(
+            tenantA,
+            "Was ist die ASDAR Method?",
+            "Die ASDAR Method strukturiert KI-Vorhaben.",
+          ),
+        ],
+      ),
+    });
+
+    const result = await engine.answer({
+      tenantId: tenantA,
+      channel: "telephone",
+      text: "Was kostet das?",
+      locale: "de-DE",
+      metadata: {},
+    });
+
+    expect(result.status).toBe("handoff");
+    expect(result.text).toContain("keine freigegebene Information");
+  });
+
   it("blocks general random questions before retrieval", async () => {
     const engine = createAnswerEngine({
       dataStore: new MemoryAnswerStore(

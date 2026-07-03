@@ -24,6 +24,8 @@ import type {
 
 const DEFAULT_REFUSAL =
   "I don't have that information in the approved business knowledge. I can take a message or connect you with the team.";
+const DEFAULT_REFUSAL_DE =
+  "Dazu habe ich keine freigegebene Information. Ich kann Ihre Nachricht aufnehmen oder das an das Team weitergeben.";
 const MAX_GENERATED_ANSWER_LENGTH = 900;
 const NO_GROUNDED_ANSWER = "__NO_GROUNDED_ANSWER__";
 
@@ -143,7 +145,7 @@ export class AnswerEngine {
         policy,
         trace,
         "intent_not_allowed",
-        DEFAULT_REFUSAL,
+        defaultRefusal(input.locale),
       );
     }
     trace.push({
@@ -182,7 +184,7 @@ export class AnswerEngine {
         policy,
         trace,
         "knowledge_not_found",
-        DEFAULT_REFUSAL,
+        defaultRefusal(input.locale),
       );
     }
     trace.push({
@@ -203,7 +205,7 @@ export class AnswerEngine {
         policy,
         trace,
         "answer_validation_failed",
-        DEFAULT_REFUSAL,
+        defaultRefusal(input.locale),
       );
     }
 
@@ -403,6 +405,12 @@ export class AnswerEngine {
 
 export function createAnswerEngine(options: AnswerEngineOptions): AnswerEngine {
   return new AnswerEngine(options);
+}
+
+function defaultRefusal(locale: string | undefined) {
+  return locale?.toLowerCase().startsWith("de")
+    ? DEFAULT_REFUSAL_DE
+    : DEFAULT_REFUSAL;
 }
 
 export function classifyIntent(
