@@ -1,6 +1,7 @@
 import { config } from "dotenv";
 import * as Sentry from "@sentry/node";
 import { Queue, Worker, type JobsOptions } from "bullmq";
+import { createChannelAdapterRegistry } from "@assaddar/channels";
 import { createEmbeddingProvider } from "@assaddar/core";
 import {
   createDbClient,
@@ -8,6 +9,7 @@ import {
   TenantRepository,
 } from "@assaddar/db";
 import { backfillMissingEmbeddings } from "./backfill-embeddings";
+import { retryFailedDeliveries } from "./retry-deliveries";
 import { jobSchemas, type WorkerJobName } from "./jobs";
 
 config({ path: new URL("../../../.env", import.meta.url) });
@@ -41,6 +43,7 @@ const repository = new TenantRepository(
   createEnvChannelCredentialCipher(process.env),
 );
 const embeddingProvider = createEmbeddingProvider(process.env);
+const channelAdapters = createChannelAdapterRegistry(process.env);
 
 const redisUrl = process.env.REDIS_URL ?? "redis://localhost:6379";
 const parsedRedisUrl = new URL(redisUrl);
@@ -115,6 +118,12 @@ const EMBEDDING_BACKFILL_INTERVAL_MS = parsePositiveIntEnv(
 const RETENTION_CLEANUP_INTERVAL_MS = parsePositiveIntEnv(
   process.env.RETENTION_CLEANUP_INTERVAL_MS,
   60 * 60 * 1000,
+);
+
+// Default: re-attempt transiently-failed outbound deliveries every minute.
+const DELIVERY_RETRY_INTERVAL_MS = parsePositiveIntEnv(
+  process.env.DELIVERY_RETRY_INTERVAL_MS,
+  60 * 1000,
 );
 
 // Retention deletion is DESTRUCTIVE, so it is gated behind an explicit flag and
@@ -274,6 +283,22 @@ const worker = new Worker(
           tenants: tenants.length,
         };
       }
+      case "deliveries.retry": {
+        try {
+          const result = await retryFailedDeliveries(
+            repository,
+            channelAdapters,
+            {
+              now: new Date(),
+              log: (message) => console.log(`[deliveries.retry] ${message}`),
+            },
+          );
+          return { status: "ok", ...result };
+        } catch (error) {
+          console.error(`[deliveries.retry] run failed (job ${job.id})`, error);
+          throw error;
+        }
+      }
     }
   },
   {
@@ -315,6 +340,15 @@ async function scheduleMaintenanceJobs() {
   );
   console.log(
     `Scheduled embeddings.backfill every ${EMBEDDING_BACKFILL_INTERVAL_MS}ms`,
+  );
+
+  await queue.upsertJobScheduler(
+    "deliveries-retry",
+    { every: DELIVERY_RETRY_INTERVAL_MS },
+    { name: "deliveries.retry", data: {} },
+  );
+  console.log(
+    `Scheduled deliveries.retry every ${DELIVERY_RETRY_INTERVAL_MS}ms`,
   );
 
   if (RETENTION_CLEANUP_ENABLED) {

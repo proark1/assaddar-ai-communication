@@ -206,6 +206,21 @@ function resolvePagination(options?: PaginationOptions): {
   return { limit, offset };
 }
 
+function readStringOrNull(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function readAttempts(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.max(0, Math.trunc(value));
+  }
+  if (typeof value === "string") {
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+  }
+  return 0;
+}
+
 function normalizeFullTextQuery(
   options?: PaginationOptions,
 ): string | undefined {
@@ -238,6 +253,24 @@ export type KnowledgeDocumentRecord = typeof knowledgeDocuments.$inferSelect;
 export type KnowledgeChunkRecord = typeof knowledgeChunks.$inferSelect;
 
 export type MessageDeliveryRecord = typeof messageDeliveries.$inferSelect;
+
+/**
+ * A failed outbound delivery that is eligible for an automatic re-send, joined
+ * with the reply text and recipient routing needed to reconstruct the outbound
+ * message. Produced by {@link TenantRepository.listRetryableDeliveries} for the
+ * delivery-retry worker.
+ */
+export type RetryableDelivery = {
+  id: string;
+  tenantId: string;
+  channel: Channel;
+  provider: string;
+  text: string;
+  providerAccountId: string | null;
+  externalConversationId: string | null;
+  externalUserId: string | null;
+  attempts: number;
+};
 
 export type RecordChannelWebhookEventResult = {
   event: ChannelWebhookEventRecord;
@@ -2283,6 +2316,121 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       .returning();
 
     return delivery;
+  }
+
+  /**
+   * System-wide (cross-tenant) sweep used by the delivery-retry worker: find
+   * failed, retry-eligible outbound deliveries whose last attempt is older than
+   * `before` and that have not yet exhausted `maxAttempts`. Not tenant-scoped
+   * because the worker runs as a trusted maintenance job across all tenants
+   * (like retention cleanup); the re-send is still routed per-tenant.
+   */
+  async listRetryableDeliveries(options: {
+    before: Date;
+    maxAttempts: number;
+    limit: number;
+  }): Promise<RetryableDelivery[]> {
+    const rows = await this.db
+      .select({
+        id: messageDeliveries.id,
+        tenantId: messageDeliveries.tenantId,
+        channel: messageDeliveries.channel,
+        provider: messageDeliveries.provider,
+        text: messages.content,
+        metadata: messageDeliveries.metadata,
+      })
+      .from(messageDeliveries)
+      .innerJoin(messages, eq(messageDeliveries.messageId, messages.id))
+      .where(
+        and(
+          eq(messageDeliveries.status, "failed"),
+          sql`(${messageDeliveries.metadata} ->> 'retryable') = 'true'`,
+          sql`coalesce((${messageDeliveries.metadata} ->> 'attempts')::int, 0) < ${options.maxAttempts}`,
+          lt(messageDeliveries.updatedAt, options.before),
+        ),
+      )
+      .orderBy(messageDeliveries.updatedAt)
+      .limit(options.limit);
+
+    return rows.map((row) => {
+      const metadata = (row.metadata ?? {}) as Record<string, unknown>;
+      return {
+        id: row.id,
+        tenantId: row.tenantId,
+        channel: row.channel as Channel,
+        provider: row.provider,
+        text: row.text ?? "",
+        providerAccountId: readStringOrNull(metadata.providerAccountId),
+        externalConversationId: readStringOrNull(
+          metadata.externalConversationId,
+        ),
+        externalUserId: readStringOrNull(metadata.externalUserId),
+        attempts: readAttempts(metadata.attempts),
+      };
+    });
+  }
+
+  /**
+   * Record the outcome of a delivery-retry attempt. On success the delivery is
+   * marked sent with the new provider message id; on failure the attempt
+   * counter is incremented (and `retryable` cleared once exhausted, so the row
+   * is not swept again). Always bumps `updatedAt` so the backoff window advances.
+   */
+  async applyDeliveryRetryOutcome(
+    tenantId: string,
+    deliveryId: string,
+    outcome: {
+      succeeded: boolean;
+      attempts: number;
+      exhausted?: boolean;
+      providerMessageId?: string | null;
+      detail?: string | null;
+    },
+  ): Promise<void> {
+    assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<void>(tenantId, (repo) =>
+        repo.applyDeliveryRetryOutcome(tenantId, deliveryId, outcome),
+      );
+    }
+    const [existing] = await this.db
+      .select({ metadata: messageDeliveries.metadata })
+      .from(messageDeliveries)
+      .where(
+        and(
+          eq(messageDeliveries.tenantId, tenantId),
+          eq(messageDeliveries.id, deliveryId),
+        ),
+      )
+      .limit(1);
+    const metadata = {
+      ...((existing?.metadata ?? {}) as Record<string, unknown>),
+    };
+    metadata.attempts = outcome.attempts;
+    if (outcome.succeeded) {
+      metadata.retryable = false;
+    } else if (outcome.exhausted) {
+      // Stop sweeping a permanently-failed delivery, but keep it "failed" so it
+      // still counts against the failure rate in analytics.
+      metadata.retryable = false;
+    }
+    await this.db
+      .update(messageDeliveries)
+      .set({
+        status: outcome.succeeded ? "sent" : "failed",
+        providerMessageId: outcome.succeeded
+          ? (outcome.providerMessageId ?? null)
+          : undefined,
+        detail: outcome.detail ?? null,
+        metadata,
+        updatedAt: sql`now()`,
+      })
+      .where(
+        and(
+          eq(messageDeliveries.tenantId, tenantId),
+          eq(messageDeliveries.id, deliveryId),
+        ),
+      );
   }
 
   async listConversationMessages(

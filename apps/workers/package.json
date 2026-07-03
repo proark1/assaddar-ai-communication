@@ -12,6 +12,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@assaddar/channels": "workspace:*",
     "@assaddar/core": "workspace:*",
     "@assaddar/db": "workspace:*",
     "@sentry/node": "^10.62.0",
