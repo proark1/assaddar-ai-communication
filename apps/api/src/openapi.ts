@@ -4,7 +4,7 @@ export const openApiDocument = {
     title: "Assaddar AI Communication Platform API",
     version: "0.1.0",
     description:
-      "Admin routes accept either an HttpOnly project-user session cookie or the bootstrap admin token. Tenant role requirements are documented with x-minimum-role.",
+      "Admin routes accept a Supabase Auth bearer token, a legacy HttpOnly project-user session cookie, or the bootstrap admin token. Tenant role requirements are documented with x-minimum-role.",
   },
   components: {
     securitySchemes: {
@@ -12,6 +12,11 @@ export const openApiDocument = {
         type: "apiKey",
         in: "cookie",
         name: "assaddar_session",
+      },
+      supabaseBearer: {
+        type: "http",
+        scheme: "bearer",
+        bearerFormat: "Supabase access token",
       },
       bootstrapAdminToken: {
         type: "apiKey",
@@ -28,7 +33,7 @@ export const openApiDocument = {
     },
     "/auth/login": {
       post: {
-        summary: "Create a Railway Postgres-backed user session",
+        summary: "Create a legacy project-user session",
       },
     },
     "/auth/logout": {

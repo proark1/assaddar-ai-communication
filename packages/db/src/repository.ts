@@ -62,6 +62,7 @@ import {
   mergeIdentifierValues,
   normalizeContactInput,
   normalizeEmail,
+  normalizeOptionalText,
   normalizePhone,
   normalizeRoleName,
   normalizeTemplateName,
@@ -90,7 +91,7 @@ export type RoleName =
 
 export type AuthUserRecord = Pick<
   typeof users.$inferSelect,
-  "id" | "email" | "name" | "status" | "passwordHash"
+  "id" | "authUserId" | "email" | "name" | "status" | "passwordHash"
 >;
 
 export type TenantMembershipSummary = {
@@ -117,7 +118,15 @@ export type UpsertTenantUserInput = {
   email: string;
   name: string;
   role: RoleName;
+  authUserId?: string | null | undefined;
   passwordHash?: string | null | undefined;
+};
+
+export type SupabaseAuthUserInput = {
+  authUserId: string;
+  email: string;
+  name?: string | null | undefined;
+  expiresAt: Date;
 };
 
 export type CreateTenantInviteInput = {
@@ -958,6 +967,7 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     const [user] = await this.db
       .select({
         id: users.id,
+        authUserId: users.authUserId,
         email: users.email,
         name: users.name,
         status: users.status,
@@ -965,6 +975,24 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       })
       .from(users)
       .where(eq(users.email, normalizedEmail))
+      .limit(1);
+    return user ?? null;
+  }
+
+  async findUserByAuthUserIdForAuth(
+    authUserId: string,
+  ): Promise<AuthUserRecord | null> {
+    const [user] = await this.db
+      .select({
+        id: users.id,
+        authUserId: users.authUserId,
+        email: users.email,
+        name: users.name,
+        status: users.status,
+        passwordHash: users.passwordHash,
+      })
+      .from(users)
+      .where(eq(users.authUserId, authUserId))
       .limit(1);
     return user ?? null;
   }
@@ -1033,6 +1061,83 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
         status: row.status,
       },
       memberships: await this.listUserMemberships(row.userId),
+    };
+  }
+
+  async getAuthSessionBySupabaseUser(
+    input: SupabaseAuthUserInput,
+  ): Promise<AuthSessionRecord | null> {
+    const email = normalizeEmail(input.email);
+    if (!email) {
+      return null;
+    }
+
+    const existingByAuth = await this.findUserByAuthUserIdForAuth(
+      input.authUserId,
+    );
+    const existingByEmail = existingByAuth
+      ? null
+      : await this.findUserByEmailForAuth(email);
+
+    if (
+      existingByEmail?.authUserId &&
+      existingByEmail.authUserId !== input.authUserId
+    ) {
+      return null;
+    }
+
+    const displayName =
+      normalizeOptionalText(input.name) ??
+      existingByAuth?.name ??
+      existingByEmail?.name ??
+      email;
+
+    const [user] = existingByAuth
+      ? await this.db
+          .update(users)
+          .set({
+            email,
+            name: displayName,
+            emailVerifiedAt: sql`coalesce(${users.emailVerifiedAt}, now())`,
+            updatedAt: sql`now()`,
+          })
+          .where(eq(users.id, existingByAuth.id))
+          .returning()
+      : existingByEmail
+        ? await this.db
+            .update(users)
+            .set({
+              authUserId: input.authUserId,
+              name: displayName,
+              emailVerifiedAt: sql`coalesce(${users.emailVerifiedAt}, now())`,
+              updatedAt: sql`now()`,
+            })
+            .where(eq(users.id, existingByEmail.id))
+            .returning()
+        : await this.db
+            .insert(users)
+            .values({
+              authUserId: input.authUserId,
+              email,
+              name: displayName,
+              emailVerifiedAt: sql`now()`,
+            })
+            .returning();
+
+    if (!user || user.status !== "active") {
+      return null;
+    }
+
+    return {
+      sessionId: `supabase:${input.authUserId}`,
+      expiresAt: input.expiresAt,
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        status: user.status,
+      },
+      memberships: await this.listUserMemberships(user.id),
     };
   }
 
@@ -1198,13 +1303,32 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       throw new Error("Valid email is required.");
     }
     const roleId = await this.getOrCreateRole(input.role);
-    const existing = await this.findUserByEmailForAuth(email);
+    const existingByEmail = await this.findUserByEmailForAuth(email);
+    const existingByAuth = input.authUserId
+      ? await this.findUserByAuthUserIdForAuth(input.authUserId)
+      : null;
+    if (
+      existingByEmail &&
+      existingByAuth &&
+      existingByEmail.id !== existingByAuth.id
+    ) {
+      throw new Error("Supabase auth user is already linked to another user.");
+    }
+    if (
+      existingByEmail?.authUserId &&
+      input.authUserId &&
+      existingByEmail.authUserId !== input.authUserId
+    ) {
+      throw new Error("User email is already linked to another auth user.");
+    }
+    const existing = existingByEmail ?? existingByAuth;
 
     const [user] = existing
       ? await this.db
           .update(users)
           .set({
             name: input.name.trim() || existing.name,
+            ...(input.authUserId ? { authUserId: input.authUserId } : {}),
             ...(input.passwordHash
               ? {
                   passwordHash: input.passwordHash,
@@ -1218,10 +1342,12 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       : await this.db
           .insert(users)
           .values({
+            authUserId: input.authUserId ?? null,
             email,
             name: input.name.trim() || email,
             passwordHash: input.passwordHash ?? null,
-            emailVerifiedAt: input.passwordHash ? sql`now()` : null,
+            emailVerifiedAt:
+              input.passwordHash || input.authUserId ? sql`now()` : null,
           })
           .returning();
 

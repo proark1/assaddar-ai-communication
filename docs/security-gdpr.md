@@ -7,20 +7,21 @@
 - Public assistant IDs do not expose internal tenant UUIDs.
 - Migration SQL enables row-level security on tenant-scoped tables.
 - The tenant-scoped RLS list includes memberships, tenant invites, subscriptions, API keys, channel connections, webhook events, audit logs, knowledge, conversations, messages, calls, handoffs, deliveries, and WhatsApp templates.
-- Production deployments should use a non-owner Railway Postgres application role and set `app.current_tenant_id` per request/transaction when RLS is enabled. Database RLS is defense in depth; the API must still enforce tenant scope before querying.
+- Production deployments should use a non-owner Postgres application role and set `app.current_tenant_id` per request/transaction when RLS is enabled. Database RLS is defense in depth; the API must still enforce tenant scope before querying.
 
 ## Secrets
 
 - Real secrets belong in a secret manager, not `.env` files committed to Git.
-- Railway/Postgres `DATABASE_URL` must stay server-side only.
+- Supabase/Postgres `DATABASE_URL` must stay server-side only.
 - Channel access tokens are stored through an AES-256-GCM credential cipher when
   `CHANNEL_CREDENTIAL_MASTER_KEY` is configured. Ciphertexts are bound to the
   tenant, channel, provider, and credential type so copied ciphertext cannot be
   decrypted in a different context. A future KMS/envelope-encryption provider
   can replace the env-key implementation behind the same interface.
 - API keys should be stored as hashes, not plaintext.
-- `ADMIN_API_TOKEN` is retained as an internal/root fallback. Normal project access uses Railway Postgres-backed users, memberships, and HttpOnly session cookies.
-- User passwords are stored as salted `scrypt` hashes. Session and invite tokens are stored only as SHA-256 hashes.
+- `ADMIN_API_TOKEN` is retained as an internal/root fallback. Normal project access uses Supabase Auth bearer tokens plus app-owned `users`, `roles`, and `memberships` for tenant authorization.
+- Legacy password hashes and session tokens may remain during rollout; new project logins should use Supabase Auth instead of app-stored passwords.
+- `SUPABASE_SERVICE_ROLE_KEY` must stay server-side and must never be exposed through browser-visible `NEXT_PUBLIC_*` variables.
 - `META_APP_SECRET` is required in production so Meta webhook POST requests are verified with `X-Hub-Signature-256`.
 
 ## Roles

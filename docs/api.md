@@ -2,7 +2,13 @@
 
 Base URL in local development: `http://localhost:4000`
 
-Admin endpoints use project user sessions by default:
+Admin endpoints use Supabase Auth bearer tokens by default:
+
+```http
+Authorization: Bearer <supabase_access_token>
+```
+
+During rollout, legacy project user sessions can still be accepted:
 
 ```http
 cookie: assaddar_session=...

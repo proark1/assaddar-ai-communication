@@ -34,6 +34,9 @@ ADMIN_API_TOKEN=<random 32+ byte token>
 WIDGET_ALLOWED_ORIGINS=https://your-admin-domain,https://your-widget-domain,https://customer-site.example
 API_PUBLIC_URL=https://your-api-domain
 ADMIN_PUBLIC_URL=https://your-admin-domain
+SUPABASE_URL=https://<project-ref>.supabase.co
+SUPABASE_PUBLISHABLE_KEY=<publishable-or-legacy-anon-key>
+SUPABASE_SERVICE_ROLE_KEY=<server-only-service-role-or-secret-key>
 META_VERIFY_TOKEN=<random verify token>
 META_GRAPH_API_VERSION=v25.0
 CHANNEL_CREDENTIAL_MASTER_KEY=base64:<32-byte-base64-key>
@@ -41,7 +44,7 @@ WHATSAPP_ACCESS_TOKEN=<only when WhatsApp sending is enabled>
 MESSENGER_PAGE_ACCESS_TOKEN=<only when Messenger/Instagram sending is enabled>
 ```
 
-`ADMIN_API_TOKEN` remains the root/bootstrap fallback. Normal project users log in through `/auth/login`; sessions are stored in Railway Postgres and sent as HttpOnly cookies by the API. Keep the admin domain in `WIDGET_ALLOWED_ORIGINS` because the API enables credentialed CORS for the admin app.
+`ADMIN_API_TOKEN` remains the root/bootstrap fallback. Normal project users log in through Supabase Auth; the Admin dashboard sends Supabase access tokens to the API as `Authorization: Bearer <token>`. The API still owns tenant authorization through `users`, `roles`, and `memberships`.
 
 `CHANNEL_CREDENTIAL_MASTER_KEY` enables app-managed encryption for channel
 tokens saved in Postgres. Generate a 32-byte key, store it only in the platform
@@ -73,6 +76,8 @@ Admin:
 
 ```text
 NEXT_PUBLIC_API_BASE_URL=https://your-api-domain
+NEXT_PUBLIC_SUPABASE_URL=https://<project-ref>.supabase.co
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<publishable-or-legacy-anon-key>
 ```
 
 Voice:

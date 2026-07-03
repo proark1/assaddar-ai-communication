@@ -1,50 +1,89 @@
-# PostgreSQL Database Setup
+# Supabase Setup
 
-This project uses Railway Postgres in production through `DATABASE_URL`. The app talks to PostgreSQL directly through Drizzle and the `postgres` driver; it does not rely on hosted Supabase Auth or Supabase client SDKs.
+This project uses Supabase for two backend responsibilities:
 
-The filename is kept for backwards-compatible documentation links, but the current production target is Railway Postgres.
+- Supabase Postgres is the production database behind `DATABASE_URL`.
+- Supabase Auth is the identity provider for Admin dashboard users.
 
-## Railway Setup
+Railway still hosts the runtime services: API, Admin dashboard, Widget, Voice,
+Workers, and Redis. Redis is used for worker queues and does not replace
+Postgres.
 
-1. Add a Railway Postgres service to the project.
-2. Copy the service `DATABASE_URL`.
-3. Set the same `DATABASE_URL` on `assaddar-api`, `assaddar-workers`, and `assaddar-voice`.
-4. Run migrations from the repo or Railway shell:
+## Database Setup
+
+Copy the Supabase Postgres connection string and set it as `DATABASE_URL` on the
+API, workers, voice service, and migration jobs.
+
+Example:
+
+```bash
+DATABASE_URL='postgresql://USER:PASSWORD@HOST:PORT/postgres?sslmode=require'
+```
+
+Run migrations against the Supabase database:
 
 ```bash
 pnpm db:migrate
 ```
 
-Example:
-
-```bash
-DATABASE_URL='postgresql://USER:PASSWORD@HOST:PORT/railway?sslmode=require'
-```
-
-## Required Extensions
-
-The initial migration enables:
+Required extensions:
 
 - `pgcrypto`
 - `vector` in the `extensions` schema
 
-If the Railway Postgres image does not have `pgvector` available, either install/use a Postgres service with `pgvector` support or adapt the vector-backed knowledge table before production semantic search.
+## Auth Model
 
-## Auth Tables
+Supabase Auth owns login identity in `auth.users`.
 
-Project login is first-party and stored in Railway Postgres:
+The application still owns tenant authorization in public tables:
 
 - `users`
 - `roles`
 - `memberships`
-- `user_sessions`
+- `tenants`
 - `tenant_invites`
 
-Passwords are salted `scrypt` hashes. Session and invite tokens are stored only as SHA-256 hashes.
+`users.auth_user_id` links an app profile to `auth.users.id`. `users.id` remains
+the internal application user ID so existing memberships keep working.
+
+Admin API requests use:
+
+```http
+Authorization: Bearer <supabase_access_token>
+```
+
+The API verifies the Supabase token, resolves `auth.users.id` to
+`users.auth_user_id`, loads memberships, and applies the existing role checks.
+
+The bootstrap `ADMIN_API_TOKEN` remains available for emergency/platform setup.
+
+## Required Railway Variables
+
+API:
+
+```text
+SUPABASE_URL=https://<project-ref>.supabase.co
+SUPABASE_PUBLISHABLE_KEY=<publishable-or-legacy-anon-key>
+SUPABASE_SERVICE_ROLE_KEY=<server-only-service-role-or-secret-key>
+SUPABASE_JWT_AUDIENCE=authenticated
+DATABASE_URL=postgresql://...
+```
+
+Admin dashboard:
+
+```text
+NEXT_PUBLIC_SUPABASE_URL=https://<project-ref>.supabase.co
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<publishable-or-legacy-anon-key>
+NEXT_PUBLIC_API_BASE_URL=https://your-api-domain
+```
+
+Never expose `SUPABASE_SERVICE_ROLE_KEY` to browser runtimes, the widget, or
+`NEXT_PUBLIC_*` variables.
 
 ## Local Docker Fallback
 
-For local development you can still use the bundled Docker Postgres service:
+For local development without Supabase, the bundled Docker Postgres service can
+still be used:
 
 ```bash
 docker compose up -d
@@ -52,9 +91,14 @@ DATABASE_URL=postgres://assaddar:assaddar@localhost:5432/assaddar_ai_communicati
 pnpm db:migrate
 ```
 
+When Supabase Auth variables are not configured, the API keeps the legacy
+password/session auth path available for development.
+
 ## Operational Notes
 
 - Keep `DATABASE_URL` server-side only.
-- Use a non-owner application database role in production when possible.
 - Keep backups enabled before storing customer data.
-- Tenant isolation is enforced in the API and should be reinforced with RLS where possible.
+- Disable public signup in Supabase unless self-service signup is explicitly
+  desired.
+- Configure Supabase Auth redirect URLs for the Admin dashboard domain.
+- Tenant isolation is enforced in the API and reinforced by RLS where possible.

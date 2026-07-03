@@ -33,6 +33,7 @@ import { openApiDocument } from "./openapi";
 import { AppError } from "./errors";
 import { MetricsRegistry, METRICS_CONTENT_TYPE } from "./metrics";
 import { captureException } from "./observability";
+import type { SupabaseAuthProvider } from "./supabase-auth";
 import {
   ParamsTenantSchema,
   ParamsKnowledgeSchema,
@@ -168,6 +169,12 @@ export type PlatformStore = AnswerDataStore &
       ipAddress?: string | null;
     }): Promise<unknown>;
     getAuthSession(tokenHash: string): Promise<StoreAuthSession | null>;
+    getAuthSessionBySupabaseUser(input: {
+      authUserId: string;
+      email: string;
+      name?: string | null;
+      expiresAt: Date;
+    }): Promise<StoreAuthSession | null>;
     deleteUserSession(tokenHash: string): Promise<void>;
     deleteExpiredSessions(now?: Date): Promise<number>;
     ping(): Promise<boolean>;
@@ -185,6 +192,7 @@ export type PlatformStore = AnswerDataStore &
         email: string;
         name: string;
         role: RoleName;
+        authUserId?: string | null;
         passwordHash?: string | null;
       },
     ): Promise<unknown>;
@@ -378,6 +386,7 @@ export type BuildServerOptions = {
    * keyword + semantic retrieval. Omitted in keyword-only mode.
    */
   embedder?: (text: string) => Promise<number[] | null>;
+  supabaseAuth?: SupabaseAuthProvider;
 };
 
 type LeadNotificationPayload = {
@@ -773,11 +782,22 @@ export async function buildServer(
           error: "Cannot grant a role above your current tenant role.",
         });
       }
+      const provisionedUser =
+        options.supabaseAuth && body.password
+          ? await options.supabaseAuth.createUser({
+              email: body.email,
+              name: body.name,
+              password: body.password,
+            })
+          : null;
       const user = await options.store.upsertTenantUser(tenantId, {
         email: body.email,
         name: body.name,
         role: body.role,
-        ...(body.password
+        ...(provisionedUser?.authUserId
+          ? { authUserId: provisionedUser.authUserId }
+          : {}),
+        ...(!options.supabaseAuth && body.password
           ? { passwordHash: await hashPassword(body.password) }
           : {}),
       });
@@ -803,6 +823,33 @@ export async function buildServer(
       if (!canGrantTenantRole(getRequestAuth(request), tenantId, body.role)) {
         return reply.code(403).send({
           error: "Cannot invite a role above your current tenant role.",
+        });
+      }
+      if (options.supabaseAuth) {
+        const inviteLink = await options.supabaseAuth.createInviteLink({
+          email: body.email,
+          name: body.email,
+          redirectTo: options.adminPublicUrl ?? defaultAdminPublicUrl,
+        });
+        const invite = await options.store.createTenantInvite(tenantId, {
+          email: body.email,
+          role: body.role,
+          tokenHash: hashSecret(createSessionToken()),
+          expiresAt: new Date(Date.now() + inviteDurationMs()),
+          invitedByUserId:
+            getRequestAuth(request).kind === "user"
+              ? getRequestAuth(request).user.id
+              : null,
+        });
+        await options.store.upsertTenantUser(tenantId, {
+          email: inviteLink.email,
+          name: inviteLink.name ?? inviteLink.email,
+          role: body.role,
+          authUserId: inviteLink.authUserId,
+        });
+        return reply.code(201).send({
+          invite,
+          acceptUrl: inviteLink.acceptUrl,
         });
       }
       const token = createSessionToken();
@@ -2383,6 +2430,31 @@ async function authenticateRequest(
     };
   }
 
+  const bearerToken = getBearerToken(request);
+  if (bearerToken && options.supabaseAuth) {
+    const supabaseUser =
+      await options.supabaseAuth.verifyAccessToken(bearerToken);
+    if (!supabaseUser) {
+      return null;
+    }
+    const session = await options.store.getAuthSessionBySupabaseUser({
+      authUserId: supabaseUser.authUserId,
+      email: supabaseUser.email,
+      expiresAt: supabaseUser.expiresAt,
+      ...(supabaseUser.name !== undefined ? { name: supabaseUser.name } : {}),
+    });
+    if (!session) {
+      return null;
+    }
+    return {
+      kind: "user",
+      sessionId: session.sessionId,
+      expiresAt: session.expiresAt,
+      user: session.user,
+      memberships: session.memberships,
+    };
+  }
+
   const sessionToken = getSessionToken(request);
   if (!sessionToken) {
     return null;
@@ -2548,6 +2620,12 @@ function inviteDurationMs() {
 function getSessionToken(request: FastifyRequest) {
   const cookies = parseCookieHeader(request.headers.cookie);
   return cookies[sessionCookieName];
+}
+
+function getBearerToken(request: FastifyRequest) {
+  const authorization = firstHeader(request.headers.authorization);
+  const match = authorization?.match(/^Bearer\s+(.+)$/i);
+  return match?.[1]?.trim() || null;
 }
 
 function parseCookieHeader(header: string | undefined) {

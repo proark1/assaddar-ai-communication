@@ -92,6 +92,7 @@ class MemoryPlatformStore
   }> = [];
   users: Array<{
     id: string;
+    authUserId?: string | null;
     email: string;
     name: string;
     status: string;
@@ -298,6 +299,61 @@ class MemoryPlatformStore
     };
   }
 
+  async getAuthSessionBySupabaseUser(input: {
+    authUserId: string;
+    email: string;
+    name?: string | null;
+    expiresAt: Date;
+  }) {
+    const email = input.email.toLowerCase();
+    let user =
+      this.users.find((item) => item.authUserId === input.authUserId) ??
+      this.users.find((item) => item.email === email);
+    if (!user) {
+      user = {
+        id: crypto.randomUUID(),
+        authUserId: input.authUserId,
+        email,
+        name: input.name ?? email,
+        status: "active",
+        passwordHash: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      this.users.push(user);
+    } else if (!user.authUserId) {
+      user.authUserId = input.authUserId;
+      user.updatedAt = new Date();
+    }
+    if (user.status !== "active") {
+      return null;
+    }
+    return {
+      sessionId: `supabase:${input.authUserId}`,
+      expiresAt: input.expiresAt,
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        status: user.status,
+      },
+      memberships: this.memberships
+        .filter((item) => item.userId === user.id && item.status === "active")
+        .map((item) => {
+          const tenant = this.tenants.find(
+            (candidate) => candidate.id === item.tenantId,
+          );
+          return {
+            tenantId: item.tenantId,
+            tenantName: tenant?.name ?? "Tenant",
+            tenantSlug: tenant?.slug ?? "tenant",
+            role: item.role,
+            status: item.status,
+          };
+        }),
+    };
+  }
+
   async deleteUserSession(tokenHash: string) {
     this.sessions = this.sessions.filter(
       (session) => session.tokenHash !== tokenHash,
@@ -363,6 +419,7 @@ class MemoryPlatformStore
         | "tenant_admin"
         | "operator"
         | "viewer";
+      authUserId?: string | null;
       passwordHash?: string | null;
     },
   ) {
@@ -371,6 +428,7 @@ class MemoryPlatformStore
     if (!user) {
       user = {
         id: crypto.randomUUID(),
+        authUserId: input.authUserId ?? null,
         email,
         name: input.name,
         status: "active",
@@ -381,6 +439,9 @@ class MemoryPlatformStore
       this.users.push(user);
     } else {
       user.name = input.name || user.name;
+      if (input.authUserId) {
+        user.authUserId = input.authUserId;
+      }
       if (input.passwordHash) {
         user.passwordHash = input.passwordHash;
       }
@@ -1264,6 +1325,73 @@ describe("API", () => {
       headers: { cookie: String(cookie) },
     });
     expect(blockedResponse.statusCode).toBe(403);
+    await app.close();
+  });
+
+  it("accepts Supabase bearer tokens and reuses tenant memberships", async () => {
+    const store = new MemoryPlatformStore();
+    const authUserId = crypto.randomUUID();
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+      supabaseAuth: {
+        async verifyAccessToken(token) {
+          return token === "valid-supabase-token"
+            ? {
+                authUserId,
+                email: "owner@example.com",
+                name: "Project Owner",
+                expiresAt: new Date(Date.now() + 60_000),
+              }
+            : null;
+        },
+        async createUser() {
+          throw new Error("not used");
+        },
+        async createInviteLink() {
+          throw new Error("not used");
+        },
+      },
+    });
+    const tenant = await store.createTenant({
+      name: "Assigned",
+      slug: "assigned",
+    });
+    await store.upsertTenantUser(tenant.id, {
+      email: "owner@example.com",
+      name: "Project Owner",
+      role: "tenant_owner",
+      authUserId,
+    });
+
+    const sessionResponse = await app.inject({
+      method: "GET",
+      url: "/admin/session",
+      headers: { authorization: "Bearer valid-supabase-token" },
+    });
+    expect(sessionResponse.statusCode).toBe(200);
+    expect(sessionResponse.json()).toMatchObject({
+      authType: "user_session",
+      user: {
+        email: "owner@example.com",
+        role: "tenant_owner",
+      },
+    });
+
+    const tenantResponse = await app.inject({
+      method: "GET",
+      url: `/admin/tenants/${tenant.id}/knowledge`,
+      headers: { authorization: "Bearer valid-supabase-token" },
+    });
+    expect(tenantResponse.statusCode).toBe(200);
+
+    const rejectedResponse = await app.inject({
+      method: "GET",
+      url: "/admin/session",
+      headers: { authorization: "Bearer invalid-supabase-token" },
+    });
+    expect(rejectedResponse.statusCode).toBe(401);
     await app.close();
   });
 

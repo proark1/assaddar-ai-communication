@@ -101,6 +101,7 @@ export const users = pgTable(
   "users",
   {
     id: uuid("id").defaultRandom().primaryKey(),
+    authUserId: uuid("auth_user_id"),
     email: text("email").notNull(),
     name: text("name").notNull(),
     status: text("status").notNull().default("active"),
@@ -108,7 +109,12 @@ export const users = pgTable(
     emailVerifiedAt: timestamp("email_verified_at", { withTimezone: true }),
     ...timestamps,
   },
-  (table) => [uniqueIndex("users_email_idx").on(table.email)],
+  (table) => [
+    uniqueIndex("users_email_idx").on(table.email),
+    uniqueIndex("users_auth_user_id_idx")
+      .on(table.authUserId)
+      .where(sql`${table.authUserId} is not null`),
+  ],
 );
 
 export const roles = pgTable("roles", {

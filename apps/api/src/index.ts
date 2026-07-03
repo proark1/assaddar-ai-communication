@@ -8,6 +8,7 @@ import {
 } from "@assaddar/db";
 import { loadEnv } from "./env";
 import { buildServer, type BuildServerOptions } from "./server";
+import { createSupabaseAuthProvider } from "./supabase-auth";
 
 config({ path: new URL("../../../.env", import.meta.url) });
 
@@ -55,6 +56,17 @@ async function main() {
   };
   if (env.ADMIN_PUBLIC_URL) {
     serverOptions.adminPublicUrl = env.ADMIN_PUBLIC_URL;
+  }
+  const supabasePublishableKey =
+    env.SUPABASE_PUBLISHABLE_KEY ?? env.SUPABASE_ANON_KEY;
+  const supabaseServiceRoleKey =
+    env.SUPABASE_SECRET_KEY ?? env.SUPABASE_SERVICE_ROLE_KEY;
+  if (env.SUPABASE_URL && supabasePublishableKey) {
+    serverOptions.supabaseAuth = createSupabaseAuthProvider({
+      url: env.SUPABASE_URL,
+      publishableKey: supabasePublishableKey,
+      serviceRoleKey: supabaseServiceRoleKey,
+    });
   }
   if (env.LEAD_NOTIFICATION_WEBHOOK_URL) {
     serverOptions.leadNotificationWebhookUrl =
