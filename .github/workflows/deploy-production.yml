@@ -134,15 +134,17 @@ jobs:
           go test ./...
           go build -o /tmp/assaddar-voice-edge-new ./cmd/voice-edge
           install -m 0755 /tmp/assaddar-voice-edge-new /usr/local/bin/assaddar-voice-edge
+          restart_since="$(date --iso-8601=seconds)"
           systemctl restart assaddar-voice-edge
           systemctl is-active --quiet assaddar-voice-edge
           for attempt in $(seq 1 10); do
-            if journalctl -u assaddar-voice-edge --since "2 minutes ago" --no-pager | grep -q "sip registration succeeded"; then
+            recent_logs="$(journalctl -u assaddar-voice-edge --since "$restart_since" --no-pager)"
+            if grep -Fq "sip registration succeeded" <<<"$recent_logs"; then
               exit 0
             fi
             sleep 2
           done
-          journalctl -u assaddar-voice-edge -n 80 --no-pager
+          journalctl -u assaddar-voice-edge --since "$restart_since" -n 80 --no-pager
           echo "SIP registration was not observed after restart" >&2
           exit 1
           REMOTE
