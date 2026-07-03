@@ -305,6 +305,19 @@ func TestTurnReplyTextLocalizesHandoff(t *testing.T) {
 	}
 }
 
+func TestExpireUnackedSessionClosesAnsweredCall(t *testing.T) {
+	cfg := testConfig()
+	cfg.AnswerDelay = 0
+	cfg.GreetingText = ""
+	server, session, _ := setupProcessSession(t, cfg, "call-no-ack")
+
+	server.expireUnackedSession(session.Context, session.CallID, 10*time.Millisecond)
+
+	if got := server.getSession(session.CallID); got != nil {
+		t.Fatal("expected unanswered call session to be closed")
+	}
+}
+
 func TestHandleRTPPacketIgnoresInputWhileProcessing(t *testing.T) {
 	server, err := New(testConfig(), nil)
 	if err != nil {

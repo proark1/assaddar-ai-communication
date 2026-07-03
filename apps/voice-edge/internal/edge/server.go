@@ -31,6 +31,7 @@ const (
 	registerRefreshEvery   = 4 * time.Minute
 	sipReadTimeout         = 500 * time.Millisecond
 	rtpFrameDuration       = 20 * time.Millisecond
+	ackTimeout             = 45 * time.Second
 	voiceTurnProvider      = "easybell_voice_edge"
 	ringbackFrequencyHz    = 425.0
 	ringbackAmplitude      = 9000.0
@@ -297,6 +298,7 @@ func (server *Server) answerAfterDelay(ctx context.Context, session *CallSession
 	server.markSessionPhase(session.CallID, "answered")
 	server.sendAnswer(request, remote, session)
 	server.logger.Info("answered inbound invite", "callId", session.CallID)
+	go server.expireUnackedSession(ctx, session.CallID, ackTimeout)
 }
 
 func (server *Server) sendProgress(request sip.Message, remote *net.UDPAddr, session *CallSession) {
@@ -328,6 +330,28 @@ func (server *Server) handleACK(callID string) {
 	}
 	server.markSessionPhase(callID, "active")
 	go server.playGreeting(session.Context, session)
+}
+
+func (server *Server) expireUnackedSession(ctx context.Context, callID string, timeout time.Duration) {
+	if timeout <= 0 {
+		return
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return
+	case <-timer.C:
+	}
+	session := server.getSession(callID)
+	if session == nil {
+		return
+	}
+	switch session.Phase {
+	case "ringing", "early-media", "answered":
+		server.logger.Warn("ending call session without ack", "callId", callID, "phase", session.Phase, "timeoutMs", timeout.Milliseconds())
+		server.endSession(callID)
+	}
 }
 
 func (server *Server) playRingbackUntilReady(ctx context.Context, session *CallSession, minDuration time.Duration, ready <-chan error) error {
