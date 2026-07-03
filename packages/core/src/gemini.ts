@@ -1,7 +1,7 @@
 import type { GroundedAnswerGenerator, GroundedAnswerInput } from "./types";
 
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com";
-const DEFAULT_GEMINI_TEXT_MODEL = "gemini-2.0-flash";
+const DEFAULT_GEMINI_TEXT_MODEL = "gemini-3.5-flash";
 const NO_GROUNDED_ANSWER = "__NO_GROUNDED_ANSWER__";
 
 export type GeminiGroundedAnswerEnv = {
@@ -65,6 +65,9 @@ export function createGeminiGroundedAnswerGenerator(
           temperature: 0.1,
           topP: 0.8,
           maxOutputTokens: 180,
+          thinkingConfig: {
+            thinkingBudget: 0,
+          },
         },
       }),
       signal: AbortSignal.timeout(timeoutMs),

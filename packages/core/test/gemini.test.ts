@@ -60,6 +60,13 @@ describe("createGeminiGroundedAnswerGenerator", () => {
     expect(requestedUrl).toBe(
       "https://gemini.example.test/v1beta/models/gemini-test:generateContent",
     );
+    expect(requestBody).toMatchObject({
+      generationConfig: {
+        thinkingConfig: {
+          thinkingBudget: 0,
+        },
+      },
+    });
     expect(JSON.stringify(requestBody)).toContain("Es startet bei 100 EUR");
     expect(JSON.stringify(requestBody)).toContain("__NO_GROUNDED_ANSWER__");
     expect(answer).toBe("Telefonisch gesagt: Es startet bei 100 EUR.");

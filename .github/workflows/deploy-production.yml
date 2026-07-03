@@ -101,7 +101,7 @@ jobs:
               --environment "$RAILWAY_ENVIRONMENT" \
               --service "$service" \
               --skip-deploys >/dev/null
-            "$HOME/.railway/bin/railway" variable set GEMINI_TEXT_MODEL=gemini-2.0-flash \
+            "$HOME/.railway/bin/railway" variable set GEMINI_TEXT_MODEL=gemini-3.5-flash \
               --project "$RAILWAY_PROJECT_ID" \
               --environment "$RAILWAY_ENVIRONMENT" \
               --service "$service" \

@@ -95,7 +95,7 @@ TWILIO_TRANSFER_PHONE_NUMBER=<legacy press-0 transfer only>
 TWILIO_VOICE_LANGUAGE=de-DE
 TWILIO_VOICE_NAME=alice
 GEMINI_API_KEY=<Gemini key for grounded telephone answers>
-GEMINI_TEXT_MODEL=gemini-2.0-flash
+GEMINI_TEXT_MODEL=gemini-3.5-flash
 GEMINI_ANSWER_TIMEOUT_MS=12000
 ```
 
