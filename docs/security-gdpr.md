@@ -19,6 +19,8 @@ Postgres exempts a table's **owner** from its own RLS policies unless `FORCE ROW
 
 The admin **privacy boundary** is enforced at the API layer independently of RLS: the platform admin token and any `platform_owner` without a real tenant membership are denied (`403`) on all end-user personal-data routes (messages, transcripts, inbox, contacts, per-tenant export). They may only reach aggregate/health/analytics routes. Genuine member access to content is written to the audit log.
 
+For platform operations, `GET /admin/platform/overview` (platform-owner only) returns **cross-tenant aggregate counts and delivery/handoff health with no personal data** — tenant/conversation/message/contact/call counts and the platform delivery-failure rate — so the operator can watch load and spot faults without reading any tenant's content.
+
 ## Secrets
 
 - Real secrets belong in a secret manager, not `.env` files committed to Git.

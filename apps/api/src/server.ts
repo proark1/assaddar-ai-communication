@@ -158,6 +158,7 @@ export type PlatformStore = AnswerDataStore &
     updateTenant(tenantId: string, input: UpdateTenantInput): Promise<unknown>;
     listTenants(): Promise<unknown[]>;
     listTenantsForUser(userId: string): Promise<unknown[]>;
+    getPlatformOverview(): Promise<unknown>;
     getTenant(tenantId: string): Promise<StoreTenant | null>;
     getTenantByPublicId(publicId: string): Promise<StoreTenant | null>;
     getWidgetConfig(publicId: string): Promise<unknown | null>;
@@ -802,6 +803,15 @@ export async function buildServer(
       const tenant = await options.store.createTenant(body);
       return reply.code(201).send(tenant);
     },
+  );
+
+  // Platform-operator console: cross-tenant aggregate counts and delivery
+  // health only — NO personal data — so the platform admin can watch load and
+  // faults without seeing any tenant's messages or contacts (R4 boundary).
+  app.get(
+    "/admin/platform/overview",
+    { preHandler: requirePlatformOwner(options) },
+    async () => options.store.getPlatformOverview(),
   );
 
   app.patch(

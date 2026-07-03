@@ -410,6 +410,24 @@ export type TenantAnalyticsResult = {
   };
 };
 
+/**
+ * Cross-tenant, NON-PERSONAL aggregate for the platform operator console. Counts
+ * and health signals only — never message content or contact identities — so
+ * the platform admin can spot faults and load without seeing tenant PII (the R4
+ * privacy boundary).
+ */
+export type PlatformOverviewResult = {
+  tenants: { total: number; active: number };
+  totals: {
+    conversations: number;
+    messages: number;
+    contacts: number;
+    calls: number;
+  };
+  deliveries: { total: number; failed: number; failureRate: number };
+  openHandoffs: number;
+};
+
 export type WhatsappComplianceResult = {
   lastInboundAt: Date | null;
   windowClosesAt: Date | null;
@@ -3314,6 +3332,85 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
         messages: windowMessageStats?.total ?? 0,
         handoffs: windowHandoffStats?.total ?? 0,
       },
+    };
+  }
+
+  /**
+   * Platform-operator overview: cross-tenant aggregate counts and delivery
+   * health with NO personal data. Intended for the platform admin console so an
+   * operator can watch load and failures across all tenants without being able
+   * to read any tenant's messages or contacts (the R4 boundary). Not
+   * tenant-scoped — it is a system-level aggregate like {@link listTenants}.
+   */
+  async getPlatformOverview(): Promise<PlatformOverviewResult> {
+    const [
+      [tenantStats],
+      [conversationStats],
+      [messageStats],
+      [contactStats],
+      [callStats],
+      [openHandoffStats],
+      deliveryStatusRows,
+    ] = await Promise.all([
+      this.db
+        .select({
+          total: sql<number>`count(*)::int`,
+          active: sql<number>`count(*) filter (where ${tenants.status} = 'active')::int`,
+        })
+        .from(tenants),
+      this.db.select({ total: sql<number>`count(*)::int` }).from(conversations),
+      this.db.select({ total: sql<number>`count(*)::int` }).from(messages),
+      this.db.select({ total: sql<number>`count(*)::int` }).from(contacts),
+      this.db.select({ total: sql<number>`count(*)::int` }).from(calls),
+      this.db
+        .select({ total: sql<number>`count(*)::int` })
+        .from(handoffRequests)
+        .where(eq(handoffRequests.status, "open")),
+      this.db
+        .select({
+          status: messageDeliveries.status,
+          total: sql<number>`count(*)::int`,
+        })
+        .from(messageDeliveries)
+        .groupBy(messageDeliveries.status),
+    ]);
+
+    const deliveryByStatus = deliveryStatusRows.reduce(
+      (acc, row) => {
+        acc[row.status] = (acc[row.status] ?? 0) + row.total;
+        return acc;
+      },
+      {} as Record<string, number>,
+    );
+    const deliveriesTotal = Object.values(deliveryByStatus).reduce(
+      (sum, value) => sum + value,
+      0,
+    );
+    const deliveriesFailed = deliveryByStatus.failed ?? 0;
+    const deliveriesSent =
+      (deliveryByStatus.sent ?? 0) + (deliveryByStatus.queued ?? 0);
+    const attempted = deliveriesSent + deliveriesFailed;
+
+    return {
+      tenants: {
+        total: tenantStats?.total ?? 0,
+        active: tenantStats?.active ?? 0,
+      },
+      totals: {
+        conversations: conversationStats?.total ?? 0,
+        messages: messageStats?.total ?? 0,
+        contacts: contactStats?.total ?? 0,
+        calls: callStats?.total ?? 0,
+      },
+      deliveries: {
+        total: deliveriesTotal,
+        failed: deliveriesFailed,
+        failureRate:
+          attempted === 0
+            ? 0
+            : Math.round((deliveriesFailed / attempted) * 1000) / 1000,
+      },
+      openHandoffs: openHandoffStats?.total ?? 0,
     };
   }
 

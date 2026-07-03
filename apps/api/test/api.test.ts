@@ -209,6 +209,41 @@ class MemoryPlatformStore
     return this.tenants;
   }
 
+  async getPlatformOverview() {
+    const deliveriesFailed = this.deliveries.filter(
+      (delivery) => delivery.status === "failed",
+    ).length;
+    const deliveriesSent = this.deliveries.filter(
+      (delivery) => delivery.status === "sent" || delivery.status === "queued",
+    ).length;
+    const attempted = deliveriesFailed + deliveriesSent;
+    return {
+      tenants: {
+        total: this.tenants.length,
+        active: this.tenants.filter(
+          (tenant) =>
+            ((tenant as { status?: string }).status ?? "active") === "active",
+        ).length,
+      },
+      totals: {
+        conversations: this.conversations.length,
+        messages: this.messages.length,
+        contacts: this.contacts.length,
+        calls: 0,
+      },
+      deliveries: {
+        total: this.deliveries.length,
+        failed: deliveriesFailed,
+        failureRate:
+          attempted === 0
+            ? 0
+            : Math.round((deliveriesFailed / attempted) * 1000) / 1000,
+      },
+      openHandoffs: this.handoffs.filter((handoff) => handoff.status === "open")
+        .length,
+    };
+  }
+
   async getTenant(tenantId: string) {
     return this.tenants.find((tenant) => tenant.id === tenantId) ?? null;
   }
@@ -3615,6 +3650,59 @@ describe("API", () => {
       headers: adminHeaders,
     });
     expect(analytics.statusCode).toBe(200);
+
+    await app.close();
+  });
+
+  it("exposes a non-personal platform overview to the admin but not plain members", async () => {
+    const store = new MemoryPlatformStore();
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+    const { app, memberHeaders } = await buildServerWithMember(
+      store,
+      tenant.id,
+    );
+
+    const conversation = await store.findOrCreateConversation({
+      tenantId: tenant.id,
+      channel: "website",
+    });
+    await store.addMessage({
+      tenantId: tenant.id,
+      conversationId: conversation.id,
+      channel: "website",
+      direction: "inbound",
+      role: "user",
+      content: "super secret personal content",
+    });
+
+    const overview = await app.inject({
+      method: "GET",
+      url: "/admin/platform/overview",
+      headers: { "x-admin-token": "test-token" },
+    });
+    expect(overview.statusCode).toBe(200);
+    const body = overview.json<{
+      tenants: { total: number; active: number };
+      totals: { messages: number };
+      deliveries: { failureRate: number };
+      openHandoffs: number;
+    }>();
+    expect(body.tenants.total).toBeGreaterThanOrEqual(1);
+    expect(body.totals.messages).toBeGreaterThanOrEqual(1);
+    expect(body).toHaveProperty("deliveries.failureRate");
+    // The aggregate must never carry end-user message content.
+    expect(overview.body).not.toContain("super secret personal content");
+
+    // A tenant member who is not a platform_owner cannot reach the console.
+    const denied = await app.inject({
+      method: "GET",
+      url: "/admin/platform/overview",
+      headers: memberHeaders,
+    });
+    expect(denied.statusCode).toBe(403);
 
     await app.close();
   });
