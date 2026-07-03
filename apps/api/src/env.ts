@@ -25,6 +25,13 @@ export const EnvSchema = z.object({
   VOICE_PUBLIC_URL: z.string().url().optional(),
   TWILIO_ACCOUNT_SID: z.string().optional(),
   TWILIO_AUTH_TOKEN: z.string().optional(),
+  SELF_SERVICE_ONBOARDING_ENABLED: z.coerce.boolean().default(true),
+  STRIPE_SECRET_KEY: z.string().optional(),
+  STRIPE_WEBHOOK_SECRET: z.string().optional(),
+  STRIPE_NUMBER_PRICE_ID: z.string().optional(),
+  STRIPE_ACCEPTED_CALL_PRICE_ID: z.string().optional(),
+  STRIPE_ACCEPTED_CALL_METER_EVENT_NAME: z.string().optional(),
+  STRIPE_CUSTOMER_PORTAL_RETURN_URL: z.string().url().optional(),
   ADMIN_USER_EMAIL: z.string().email().default("owner@assad-dar.de"),
   ADMIN_USER_NAME: z.string().default("Assad Dar"),
   ADMIN_USER_ROLE: z

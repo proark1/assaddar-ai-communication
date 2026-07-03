@@ -60,6 +60,69 @@ export const openApiDocument = {
         "x-minimum-role": "platform_owner",
       },
     },
+    "/onboarding/projects": {
+      post: {
+        summary: "Create a setup-pending self-service tenant project",
+      },
+    },
+    "/onboarding/tenants/{tenantId}/phone-numbers": {
+      get: {
+        summary: "List available self-service phone numbers",
+        "x-minimum-role": "tenant_admin",
+      },
+    },
+    "/onboarding/tenants/{tenantId}/phone-number-reservations": {
+      post: {
+        summary: "Reserve a self-service phone number for checkout",
+        "x-minimum-role": "tenant_admin",
+      },
+    },
+    "/onboarding/tenants/{tenantId}/state": {
+      get: {
+        summary: "Fetch self-service onboarding state",
+        "x-minimum-role": "viewer",
+      },
+    },
+    "/billing/tenants/{tenantId}/checkout-sessions": {
+      post: {
+        summary: "Create a Stripe Checkout session for a reserved number",
+        "x-minimum-role": "tenant_owner",
+      },
+    },
+    "/billing/tenants/{tenantId}/customer-portal": {
+      post: {
+        summary: "Create a Stripe customer portal session",
+        "x-minimum-role": "tenant_owner",
+      },
+    },
+    "/admin/billing/overview": {
+      get: {
+        summary: "Fetch platform billing and billable usage overview",
+        "x-minimum-role": "platform_owner",
+      },
+    },
+    "/admin/telephone/numbers": {
+      get: {
+        summary: "List platform telephone number inventory",
+        "x-minimum-role": "platform_owner",
+      },
+      post: {
+        summary: "Add a platform telephone number to inventory",
+        "x-minimum-role": "platform_owner",
+      },
+    },
+    "/admin/telephone/numbers/{numberId}": {
+      patch: {
+        summary: "Update a platform telephone number inventory item",
+        "x-minimum-role": "platform_owner",
+      },
+    },
+    "/admin/tenants/{tenantId}/billing/accepted-calls": {
+      post: {
+        summary: "Record and optionally report an accepted call usage event",
+        "x-minimum-role": "tenant_admin",
+      },
+    },
     "/admin/tenants/{tenantId}/knowledge/faqs": {
       post: {
         summary: "Add an approved FAQ knowledge entry",
@@ -70,6 +133,68 @@ export const openApiDocument = {
       get: {
         summary: "List approved tenant knowledge",
         "x-minimum-role": "viewer",
+      },
+    },
+    "/admin/tenants/{tenantId}/brain": {
+      get: {
+        summary:
+          "Fetch project brain coverage, onboarding, ingestion, and learning queue summary",
+        "x-minimum-role": "viewer",
+      },
+    },
+    "/admin/tenants/{tenantId}/brain/onboarding": {
+      get: {
+        summary: "List project brain onboarding answers",
+        "x-minimum-role": "viewer",
+      },
+      put: {
+        summary:
+          "Save project brain onboarding answers and publish approved answers as knowledge",
+        "x-minimum-role": "tenant_admin",
+      },
+    },
+    "/admin/tenants/{tenantId}/knowledge/suggestions": {
+      get: {
+        summary: "List pending or reviewed project brain learning suggestions",
+        "x-minimum-role": "viewer",
+      },
+      post: {
+        summary:
+          "Create a learning suggestion from a conversation, document, or manual signal",
+        "x-minimum-role": "tenant_admin",
+      },
+    },
+    "/admin/tenants/{tenantId}/knowledge/uploads": {
+      post: {
+        summary:
+          "Upload a text document or text-based PDF and queue extracted brain suggestions",
+        "x-minimum-role": "tenant_admin",
+      },
+    },
+    "/admin/tenants/{tenantId}/knowledge/ingestion-jobs": {
+      get: {
+        summary: "List recent project brain document ingestion jobs",
+        "x-minimum-role": "viewer",
+      },
+    },
+    "/admin/tenants/{tenantId}/knowledge/suggestions/scan": {
+      post: {
+        summary:
+          "Scan recent handoff gaps and create pending learning suggestions",
+        "x-minimum-role": "tenant_admin",
+      },
+    },
+    "/admin/tenants/{tenantId}/knowledge/suggestions/{suggestionId}/approve": {
+      post: {
+        summary:
+          "Approve a learning suggestion and publish it as tenant knowledge",
+        "x-minimum-role": "tenant_admin",
+      },
+    },
+    "/admin/tenants/{tenantId}/knowledge/suggestions/{suggestionId}/reject": {
+      post: {
+        summary: "Reject a pending learning suggestion",
+        "x-minimum-role": "tenant_admin",
       },
     },
     "/admin/tenants/{tenantId}/knowledge/{knowledgeId}": {
@@ -247,6 +372,12 @@ export const openApiDocument = {
       },
       post: {
         summary: "Credential-gated Meta webhook ingest placeholder",
+      },
+    },
+    "/webhooks/stripe": {
+      post: {
+        summary:
+          "Stripe webhook for checkout, subscription, and billing activation events",
       },
     },
   },

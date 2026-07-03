@@ -8,6 +8,7 @@ import {
 } from "@assaddar/db";
 import { loadEnv } from "./env";
 import { buildServer, type BuildServerOptions } from "./server";
+import { createStripeBillingProvider } from "./billing";
 import { createSupabaseAuthProvider } from "./supabase-auth";
 
 config({ path: new URL("../../../.env", import.meta.url) });
@@ -106,6 +107,29 @@ async function main() {
     serverOptions.twilioAccountSid = env.TWILIO_ACCOUNT_SID;
     serverOptions.twilioAuthToken = env.TWILIO_AUTH_TOKEN;
   }
+  if (env.STRIPE_SECRET_KEY && env.STRIPE_WEBHOOK_SECRET) {
+    serverOptions.billingProvider = createStripeBillingProvider({
+      secretKey: env.STRIPE_SECRET_KEY,
+      webhookSecret: env.STRIPE_WEBHOOK_SECRET,
+    });
+  }
+  serverOptions.billing = {
+    selfServiceEnabled: env.SELF_SERVICE_ONBOARDING_ENABLED,
+    ...(env.STRIPE_NUMBER_PRICE_ID
+      ? { numberPriceId: env.STRIPE_NUMBER_PRICE_ID }
+      : {}),
+    ...(env.STRIPE_ACCEPTED_CALL_PRICE_ID
+      ? { acceptedCallPriceId: env.STRIPE_ACCEPTED_CALL_PRICE_ID }
+      : {}),
+    ...(env.STRIPE_ACCEPTED_CALL_METER_EVENT_NAME
+      ? {
+          acceptedCallMeterEventName: env.STRIPE_ACCEPTED_CALL_METER_EVENT_NAME,
+        }
+      : {}),
+    ...(env.STRIPE_CUSTOMER_PORTAL_RETURN_URL
+      ? { customerPortalReturnUrl: env.STRIPE_CUSTOMER_PORTAL_RETURN_URL }
+      : {}),
+  };
   if (embeddingProvider) {
     serverOptions.embedder = async (text) => {
       const [vector] = await embeddingProvider.embed([text]);

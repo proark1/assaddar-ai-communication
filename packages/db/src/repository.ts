@@ -27,24 +27,33 @@ import type { Database, DbExecutor, Transaction } from "./client";
 import {
   allowedIntents,
   auditLogs,
+  billableUsageEvents,
+  billingAccounts,
+  billingSubscriptions,
   blockedTopics,
+  brainOnboardingAnswers,
   calls,
   channelConnections,
   channelWebhookEvents,
   conversationContacts,
   contacts,
   conversations,
+  documentIngestionJobs,
   escalationRules,
   handoffRequests,
   knowledgeChunks,
   knowledgeDocuments,
+  knowledgeSuggestions,
   knowledgeSources,
   messageDeliveries,
   messages,
   memberships,
   roles,
+  stripeWebhookEvents,
   tenantInvites,
   tenants,
+  telephoneNumberInventory,
+  telephoneNumberReservations,
   usageEvents,
   users,
   userSessions,
@@ -152,6 +161,7 @@ export type CreateTenantInput = {
   slug: string;
   defaultLocale?: string;
   theme?: WidgetTheme;
+  status?: string;
 };
 
 export type UpdateTenantInput = {
@@ -172,6 +182,83 @@ export type AddFaqInput = {
 };
 
 export type UpdateFaqInput = AddFaqInput;
+
+export type BrainOnboardingAnswerInput = {
+  questionKey: string;
+  question: string;
+  answer: string;
+  category?: string | undefined;
+  status?: "draft" | "approved" | "archived" | undefined;
+  metadata?: Record<string, unknown> | undefined;
+};
+
+export type UpsertBrainOnboardingInput = {
+  answers: BrainOnboardingAnswerInput[];
+  publishApproved?: boolean | undefined;
+};
+
+export type CreateKnowledgeSuggestionInput = {
+  sourceType:
+    | "unanswered_question"
+    | "human_reply"
+    | "document_extraction"
+    | "feedback"
+    | "manual"
+    | "conflict_detection";
+  sourceConversationId?: string | null | undefined;
+  sourceMessageId?: string | null | undefined;
+  sourceDocumentId?: string | null | undefined;
+  suggestedQuestion?: string | null | undefined;
+  suggestedAnswer?: string | null | undefined;
+  suggestedTitle?: string | null | undefined;
+  suggestedTags?: string[] | undefined;
+  suggestedMetadata?: Record<string, unknown> | undefined;
+  confidence?: number | undefined;
+};
+
+export type ReviewKnowledgeSuggestionInput = {
+  question?: string | undefined;
+  answer?: string | undefined;
+  title?: string | undefined;
+  tags?: string[] | undefined;
+  reviewNote?: string | undefined;
+  reviewedByUserId?: string | null | undefined;
+};
+
+export type IngestKnowledgeDocumentInput = {
+  fileName: string;
+  contentType: string;
+  extractedText: string;
+  checksum?: string | null | undefined;
+  objectKey?: string | null | undefined;
+  sourceName?: string | undefined;
+  suggestedTags?: string[] | undefined;
+  metadata?: Record<string, unknown> | undefined;
+  maxSuggestions?: number | undefined;
+};
+
+export type RecordDocumentIngestionFailureInput = {
+  fileName: string;
+  contentType: string;
+  checksum?: string | null | undefined;
+  objectKey?: string | null | undefined;
+  error: string;
+  metadata?: Record<string, unknown> | undefined;
+};
+
+export type IngestKnowledgeDocumentResult = {
+  source: KnowledgeSourceRecord;
+  document: KnowledgeDocumentRecord;
+  job: DocumentIngestionJobRecord;
+  suggestions: KnowledgeSuggestionRecord[];
+  duplicate: boolean;
+};
+
+export type ScanKnowledgeSuggestionsResult = {
+  created: KnowledgeSuggestionRecord[];
+  skipped: number;
+  scanned: number;
+};
 
 /**
  * Optional pagination for list endpoints. Defaults preserve the previous
@@ -237,6 +324,105 @@ function normalizeListStatus(options?: PaginationOptions): string | undefined {
   return value && value !== "all" ? value : undefined;
 }
 
+function clampConfidence(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(1, value));
+}
+
+function normalizeKnowledgeText(value: string): string {
+  return value
+    .replace(/\r\n/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
+function isMeaningfulQuestion(value: string): boolean {
+  const normalized = normalizeKnowledgeText(value);
+  if (normalized.length < 12 || normalized.length > 500) {
+    return false;
+  }
+  const words = normalized.split(/\s+/).filter(Boolean);
+  return words.length >= 3;
+}
+
+function buildDocumentSuggestionSections(
+  text: string,
+  fileName: string,
+  maxSuggestions = 8,
+): Array<{ title: string; content: string; sectionIndex: number }> {
+  const normalized = normalizeKnowledgeText(text);
+  if (!normalized) {
+    return [];
+  }
+  const requested = Math.min(Math.max(Math.trunc(maxSuggestions), 1), 20);
+  const paragraphs = normalized
+    .split(/\n\s*\n/g)
+    .map((paragraph) => normalizeKnowledgeText(paragraph))
+    .filter((paragraph) => paragraph.length >= 60);
+
+  const sections: Array<{
+    title: string;
+    content: string;
+    sectionIndex: number;
+  }> = [];
+  let buffer: string[] = [];
+  let sectionIndex = 1;
+  const flush = () => {
+    const content = normalizeKnowledgeText(buffer.join("\n\n"));
+    buffer = [];
+    if (!content || content.length < 80) {
+      return;
+    }
+    sections.push({
+      title: buildDocumentSectionTitle(content, fileName, sectionIndex),
+      content: content.slice(0, 4000),
+      sectionIndex,
+    });
+    sectionIndex += 1;
+  };
+
+  for (const paragraph of paragraphs.length ? paragraphs : [normalized]) {
+    const currentLength = buffer.join("\n\n").length;
+    if (currentLength > 0 && currentLength + paragraph.length > 1800) {
+      flush();
+    }
+    buffer.push(paragraph);
+    if (sections.length >= requested) {
+      break;
+    }
+  }
+  if (sections.length < requested) {
+    flush();
+  }
+  return sections.slice(0, requested);
+}
+
+function buildDocumentSectionTitle(
+  content: string,
+  fileName: string,
+  sectionIndex: number,
+): string {
+  const firstLine =
+    content
+      .split("\n")
+      .map((line) => line.trim())
+      .find((line) => line.length >= 8 && line.length <= 120) ??
+    `${fileName} section ${sectionIndex}`;
+  return firstLine.replace(/[:.;,\s]+$/g, "").slice(0, 160);
+}
+
+function isLearningHandoffReason(reason: string): boolean {
+  return !new Set([
+    "lead_capture",
+    "readiness_assessment",
+    "contact_request",
+  ]).has(reason);
+}
+
 export type ConversationRecord = typeof conversations.$inferSelect;
 
 export type MessageRecord = typeof messages.$inferSelect;
@@ -255,6 +441,15 @@ export type KnowledgeSourceRecord = typeof knowledgeSources.$inferSelect;
 export type KnowledgeDocumentRecord = typeof knowledgeDocuments.$inferSelect;
 
 export type KnowledgeChunkRecord = typeof knowledgeChunks.$inferSelect;
+
+export type BrainOnboardingAnswerRecord =
+  typeof brainOnboardingAnswers.$inferSelect;
+
+export type KnowledgeSuggestionRecord =
+  typeof knowledgeSuggestions.$inferSelect;
+
+export type DocumentIngestionJobRecord =
+  typeof documentIngestionJobs.$inferSelect;
 
 export type MessageDeliveryRecord = typeof messageDeliveries.$inferSelect;
 
@@ -455,6 +650,18 @@ export type TenantExportData = {
   contacts: ContactRecord[];
   messageDeliveries: MessageDeliveryRecord[];
   whatsappTemplates: WhatsappTemplateRecord[];
+  brainOnboardingAnswers: BrainOnboardingAnswerRecord[];
+  knowledgeSuggestions: KnowledgeSuggestionRecord[];
+  documentIngestionJobs: DocumentIngestionJobRecord[];
+};
+
+export type TenantBrainSummary = {
+  approvedKnowledge: number;
+  pendingSuggestions: number;
+  onboardingAnswers: number;
+  approvedOnboardingAnswers: number;
+  ingestionJobs: number;
+  failedIngestionJobs: number;
 };
 
 export type ChannelConnectionInput = {
@@ -475,6 +682,56 @@ export type ChannelConnectionCredentialInput = {
 export type ChannelConnectionCredentials = {
   accessToken: string | null;
   refreshToken: string | null;
+};
+
+export type TelephoneNumberInventoryInput = {
+  provider?:
+    | "easybell"
+    | "sipgate"
+    | "peoplefone"
+    | "custom_sip"
+    | "twilio"
+    | undefined;
+  phoneNumber?: string | undefined;
+  country?: string | undefined;
+  locality?: string | null | undefined;
+  numberType?: "local" | "mobile" | "toll-free" | undefined;
+  sipTarget?: string | null | undefined;
+  assistantId?: string | null | undefined;
+  status?:
+    | "available"
+    | "reserved"
+    | "assigned"
+    | "suspended"
+    | "retired"
+    | undefined;
+  assignedTenantId?: string | null | undefined;
+  metadata?: Record<string, unknown> | undefined;
+};
+
+export type TelephoneNumberInventoryRecord =
+  typeof telephoneNumberInventory.$inferSelect;
+
+export type TelephoneNumberReservationRecord =
+  typeof telephoneNumberReservations.$inferSelect;
+
+export type BillingAccountRecord = typeof billingAccounts.$inferSelect;
+
+export type BillingSubscriptionRecord =
+  typeof billingSubscriptions.$inferSelect;
+
+export type BillableUsageEventRecord = typeof billableUsageEvents.$inferSelect;
+
+export type OnboardingState = {
+  tenant: TenantSummary | null;
+  billingAccount: BillingAccountRecord | null;
+  billingSubscription: BillingSubscriptionRecord | null;
+  activeReservation:
+    | (TelephoneNumberReservationRecord & {
+        number: TelephoneNumberInventoryRecord | null;
+      })
+    | null;
+  assignedNumber: TelephoneNumberInventoryRecord | null;
 };
 
 const secretLikeSettingsKeyPattern =
@@ -508,6 +765,42 @@ function assertNoSecretSettings(value: unknown, path: string[] = []) {
     }
     assertNoSecretSettings(entry, [...path, key]);
   }
+}
+
+function telephoneNumberValues(input: Partial<TelephoneNumberInventoryInput>) {
+  return {
+    ...(input.provider ? { provider: input.provider } : {}),
+    ...(input.phoneNumber ? { phoneNumber: input.phoneNumber.trim() } : {}),
+    ...(input.country ? { country: input.country.trim().toUpperCase() } : {}),
+    ...(input.locality !== undefined
+      ? { locality: input.locality?.trim() || null }
+      : {}),
+    ...(input.numberType ? { numberType: input.numberType } : {}),
+    ...(input.sipTarget !== undefined
+      ? { sipTarget: input.sipTarget?.trim() || null }
+      : {}),
+    ...(input.assistantId !== undefined
+      ? { assistantId: input.assistantId?.trim() || null }
+      : {}),
+    ...(input.status ? { status: input.status } : {}),
+    ...(input.assignedTenantId !== undefined
+      ? { assignedTenantId: input.assignedTenantId ?? null }
+      : {}),
+    ...(input.metadata ? { metadata: input.metadata } : {}),
+  } satisfies Partial<typeof telephoneNumberInventory.$inferInsert>;
+}
+
+function billingStatusFromStripe(status: string) {
+  if (status === "active" || status === "trialing") {
+    return "active";
+  }
+  if (status === "past_due" || status === "unpaid" || status === "incomplete") {
+    return "past_due";
+  }
+  if (status === "canceled" || status === "incomplete_expired") {
+    return "canceled";
+  }
+  return "incomplete";
 }
 
 export type ContactProfileInput = {
@@ -625,6 +918,7 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
           name: input.name,
           slug: input.slug,
           publicId: createPublicAssistantId(),
+          status: input.status ?? "active",
           defaultLocale: input.defaultLocale ?? "en",
           theme: input.theme ?? {
             primaryColor: "#155eef",
@@ -751,6 +1045,680 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     });
 
     return tenant;
+  }
+
+  async createSelfServiceTenant(input: {
+    name: string;
+    slug: string;
+    owner: {
+      email: string;
+      name: string;
+      authUserId?: string | null | undefined;
+    };
+    defaultLocale?: string | undefined;
+    theme?: WidgetTheme | undefined;
+  }) {
+    return this.withTransaction(async (repo) => {
+      const tenant = await repo.createTenant({
+        name: input.name,
+        slug: input.slug,
+        status: "setup_pending",
+        ...(input.defaultLocale ? { defaultLocale: input.defaultLocale } : {}),
+        ...(input.theme ? { theme: input.theme } : {}),
+      });
+      await repo.upsertTenantUser(tenant.id, {
+        email: input.owner.email,
+        name: input.owner.name,
+        role: "tenant_owner",
+        authUserId: input.owner.authUserId ?? null,
+      });
+      await repo.audit(
+        tenant.id,
+        "self_service_project.created",
+        "tenant",
+        tenant.id,
+        { ownerEmail: input.owner.email },
+      );
+      return tenant;
+    });
+  }
+
+  async expireTelephoneNumberReservations(now = new Date()): Promise<number> {
+    const expired = await this.db
+      .update(telephoneNumberReservations)
+      .set({
+        status: "expired",
+        updatedAt: sql`now()`,
+      })
+      .where(
+        and(
+          eq(telephoneNumberReservations.status, "active"),
+          lt(telephoneNumberReservations.expiresAt, now),
+        ),
+      )
+      .returning({ numberId: telephoneNumberReservations.numberId });
+
+    if (expired.length > 0) {
+      await this.db
+        .update(telephoneNumberInventory)
+        .set({
+          status: "available",
+          assignedTenantId: null,
+          updatedAt: sql`now()`,
+        })
+        .where(
+          and(
+            inArray(
+              telephoneNumberInventory.id,
+              expired.map((item) => item.numberId),
+            ),
+            eq(telephoneNumberInventory.status, "reserved"),
+          ),
+        );
+    }
+
+    return expired.length;
+  }
+
+  async listAvailableTelephoneNumbers(
+    options: {
+      country?: string | undefined;
+      locality?: string | undefined;
+      numberType?: string | undefined;
+      limit?: number | undefined;
+    } = {},
+  ): Promise<TelephoneNumberInventoryRecord[]> {
+    await this.expireTelephoneNumberReservations();
+    const filters: SQL[] = [eq(telephoneNumberInventory.status, "available")];
+    if (options.country) {
+      filters.push(eq(telephoneNumberInventory.country, options.country));
+    }
+    if (options.locality) {
+      filters.push(eq(telephoneNumberInventory.locality, options.locality));
+    }
+    if (options.numberType) {
+      filters.push(eq(telephoneNumberInventory.numberType, options.numberType));
+    }
+
+    return this.db
+      .select()
+      .from(telephoneNumberInventory)
+      .where(and(...filters))
+      .orderBy(telephoneNumberInventory.phoneNumber)
+      .limit(Math.min(Math.max(options.limit ?? 25, 1), 100));
+  }
+
+  async listTelephoneNumberInventory(): Promise<
+    TelephoneNumberInventoryRecord[]
+  > {
+    await this.expireTelephoneNumberReservations();
+    return this.db
+      .select()
+      .from(telephoneNumberInventory)
+      .orderBy(telephoneNumberInventory.phoneNumber);
+  }
+
+  async createTelephoneNumberInventory(
+    input: TelephoneNumberInventoryInput,
+  ): Promise<TelephoneNumberInventoryRecord> {
+    const values = telephoneNumberValues(input);
+    if (!values.phoneNumber) {
+      throw new Error("phoneNumber is required.");
+    }
+    const [number] = await this.db
+      .insert(telephoneNumberInventory)
+      .values({
+        phoneNumber: values.phoneNumber,
+        provider: values.provider ?? "easybell",
+        country: values.country ?? "DE",
+        locality: values.locality ?? null,
+        numberType: values.numberType ?? "local",
+        sipTarget: values.sipTarget ?? null,
+        assistantId: values.assistantId ?? null,
+        status: values.status ?? "available",
+        assignedTenantId: values.assignedTenantId ?? null,
+        metadata: values.metadata ?? {},
+      })
+      .returning();
+    if (!number) {
+      throw new Error("Failed to create telephone number.");
+    }
+    return number;
+  }
+
+  async updateTelephoneNumberInventory(
+    numberId: string,
+    input: Partial<TelephoneNumberInventoryInput>,
+  ): Promise<TelephoneNumberInventoryRecord> {
+    const [number] = await this.db
+      .update(telephoneNumberInventory)
+      .set({
+        ...telephoneNumberValues(input),
+        updatedAt: sql`now()`,
+      })
+      .where(eq(telephoneNumberInventory.id, numberId))
+      .returning();
+    if (!number) {
+      throw new Error("Telephone number not found.");
+    }
+    return number;
+  }
+
+  async createTelephoneNumberReservation(
+    tenantId: string,
+    input: {
+      numberId: string;
+      userId?: string | null | undefined;
+      expiresAt?: Date | undefined;
+    },
+  ): Promise<
+    TelephoneNumberReservationRecord & {
+      number: TelephoneNumberInventoryRecord;
+    }
+  > {
+    assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope(tenantId, (repo) =>
+        repo.createTelephoneNumberReservation(tenantId, input),
+      );
+    }
+
+    return this.withTransaction(async (repo) => {
+      await repo.expireTelephoneNumberReservations();
+
+      const released = await repo.db
+        .update(telephoneNumberReservations)
+        .set({ status: "released", updatedAt: sql`now()` })
+        .where(
+          and(
+            eq(telephoneNumberReservations.tenantId, tenantId),
+            eq(telephoneNumberReservations.status, "active"),
+          ),
+        )
+        .returning({ numberId: telephoneNumberReservations.numberId });
+
+      if (released.length > 0) {
+        await repo.db
+          .update(telephoneNumberInventory)
+          .set({ status: "available", updatedAt: sql`now()` })
+          .where(
+            and(
+              inArray(
+                telephoneNumberInventory.id,
+                released.map((item) => item.numberId),
+              ),
+              eq(telephoneNumberInventory.status, "reserved"),
+            ),
+          );
+      }
+
+      const [number] = await repo.db
+        .update(telephoneNumberInventory)
+        .set({
+          status: "reserved",
+          assignedTenantId: tenantId,
+          updatedAt: sql`now()`,
+        })
+        .where(
+          and(
+            eq(telephoneNumberInventory.id, input.numberId),
+            eq(telephoneNumberInventory.status, "available"),
+          ),
+        )
+        .returning();
+
+      if (!number) {
+        throw new Error("Telephone number is not available.");
+      }
+
+      const [reservation] = await repo.db
+        .insert(telephoneNumberReservations)
+        .values({
+          tenantId,
+          userId: input.userId ?? null,
+          numberId: number.id,
+          expiresAt: input.expiresAt ?? new Date(Date.now() + 30 * 60 * 1000),
+        })
+        .returning();
+
+      if (!reservation) {
+        throw new Error("Failed to reserve telephone number.");
+      }
+
+      await repo.audit(
+        tenantId,
+        "telephone_number.reserved",
+        "telephone_number",
+        number.id,
+        { phoneNumber: number.phoneNumber },
+      );
+
+      return { ...reservation, number };
+    });
+  }
+
+  async getActiveTelephoneNumberReservation(tenantId: string): Promise<
+    | (TelephoneNumberReservationRecord & {
+        number: TelephoneNumberInventoryRecord | null;
+      })
+    | null
+  > {
+    assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope(tenantId, (repo) =>
+        repo.getActiveTelephoneNumberReservation(tenantId),
+      );
+    }
+
+    await this.expireTelephoneNumberReservations();
+    const [row] = await this.db
+      .select({
+        reservation: telephoneNumberReservations,
+        number: telephoneNumberInventory,
+      })
+      .from(telephoneNumberReservations)
+      .leftJoin(
+        telephoneNumberInventory,
+        eq(telephoneNumberInventory.id, telephoneNumberReservations.numberId),
+      )
+      .where(
+        and(
+          eq(telephoneNumberReservations.tenantId, tenantId),
+          eq(telephoneNumberReservations.status, "active"),
+        ),
+      )
+      .limit(1);
+    return row ? { ...row.reservation, number: row.number } : null;
+  }
+
+  async getAssignedTelephoneNumber(
+    tenantId: string,
+  ): Promise<TelephoneNumberInventoryRecord | null> {
+    assertTenantId(tenantId);
+    const [number] = await this.db
+      .select()
+      .from(telephoneNumberInventory)
+      .where(eq(telephoneNumberInventory.assignedTenantId, tenantId))
+      .limit(1);
+    return number ?? null;
+  }
+
+  async getBillingAccount(
+    tenantId: string,
+  ): Promise<BillingAccountRecord | null> {
+    assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope(tenantId, (repo) =>
+        repo.getBillingAccount(tenantId),
+      );
+    }
+    const [account] = await this.db
+      .select()
+      .from(billingAccounts)
+      .where(eq(billingAccounts.tenantId, tenantId))
+      .limit(1);
+    return account ?? null;
+  }
+
+  async getOrCreateBillingAccount(
+    tenantId: string,
+    input: {
+      stripeCustomerId?: string | null | undefined;
+      status?: string | undefined;
+      defaultCurrency?: string | undefined;
+      metadata?: Record<string, unknown> | undefined;
+    } = {},
+  ): Promise<BillingAccountRecord> {
+    assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope(tenantId, (repo) =>
+        repo.getOrCreateBillingAccount(tenantId, input),
+      );
+    }
+
+    const existing = await this.getBillingAccount(tenantId);
+    const values = {
+      tenantId,
+      stripeCustomerId:
+        input.stripeCustomerId ?? existing?.stripeCustomerId ?? null,
+      status: input.status ?? existing?.status ?? "incomplete",
+      defaultCurrency:
+        input.defaultCurrency ?? existing?.defaultCurrency ?? "eur",
+      metadata: {
+        ...(existing?.metadata ?? {}),
+        ...(input.metadata ?? {}),
+      },
+    };
+
+    const [account] = await this.db
+      .insert(billingAccounts)
+      .values(values)
+      .onConflictDoUpdate({
+        target: billingAccounts.tenantId,
+        set: {
+          stripeCustomerId: values.stripeCustomerId,
+          status: values.status,
+          defaultCurrency: values.defaultCurrency,
+          metadata: values.metadata,
+          updatedAt: sql`now()`,
+        },
+      })
+      .returning();
+
+    if (!account) {
+      throw new Error("Failed to save billing account.");
+    }
+    return account;
+  }
+
+  async getBillingSubscription(
+    tenantId: string,
+  ): Promise<BillingSubscriptionRecord | null> {
+    assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope(tenantId, (repo) =>
+        repo.getBillingSubscription(tenantId),
+      );
+    }
+    const [subscription] = await this.db
+      .select()
+      .from(billingSubscriptions)
+      .where(eq(billingSubscriptions.tenantId, tenantId))
+      .orderBy(desc(billingSubscriptions.updatedAt))
+      .limit(1);
+    return subscription ?? null;
+  }
+
+  async upsertBillingSubscription(
+    tenantId: string,
+    input: {
+      billingAccountId: string;
+      stripeSubscriptionId?: string | null | undefined;
+      stripePriceId?: string | null | undefined;
+      status: string;
+      currentPeriodStart?: Date | null | undefined;
+      currentPeriodEnd?: Date | null | undefined;
+      metadata?: Record<string, unknown> | undefined;
+    },
+  ): Promise<BillingSubscriptionRecord> {
+    assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope(tenantId, (repo) =>
+        repo.upsertBillingSubscription(tenantId, input),
+      );
+    }
+
+    const existing = input.stripeSubscriptionId
+      ? await this.db
+          .select()
+          .from(billingSubscriptions)
+          .where(
+            eq(
+              billingSubscriptions.stripeSubscriptionId,
+              input.stripeSubscriptionId,
+            ),
+          )
+          .limit(1)
+      : [];
+
+    const [subscription] = existing[0]
+      ? await this.db
+          .update(billingSubscriptions)
+          .set({
+            stripePriceId: input.stripePriceId ?? null,
+            status: input.status,
+            currentPeriodStart: input.currentPeriodStart ?? null,
+            currentPeriodEnd: input.currentPeriodEnd ?? null,
+            metadata: input.metadata ?? {},
+            updatedAt: sql`now()`,
+          })
+          .where(eq(billingSubscriptions.id, existing[0].id))
+          .returning()
+      : await this.db
+          .insert(billingSubscriptions)
+          .values({
+            tenantId,
+            billingAccountId: input.billingAccountId,
+            stripeSubscriptionId: input.stripeSubscriptionId ?? null,
+            stripePriceId: input.stripePriceId ?? null,
+            status: input.status,
+            currentPeriodStart: input.currentPeriodStart ?? null,
+            currentPeriodEnd: input.currentPeriodEnd ?? null,
+            metadata: input.metadata ?? {},
+          })
+          .returning();
+
+    if (!subscription) {
+      throw new Error("Failed to save billing subscription.");
+    }
+    return subscription;
+  }
+
+  async recordStripeWebhookEvent(input: {
+    stripeEventId: string;
+    eventType: string;
+    tenantId?: string | null | undefined;
+    payload: Record<string, unknown>;
+  }): Promise<{
+    event: typeof stripeWebhookEvents.$inferSelect;
+    duplicate: boolean;
+  }> {
+    const [inserted] = await this.db
+      .insert(stripeWebhookEvents)
+      .values({
+        stripeEventId: input.stripeEventId,
+        eventType: input.eventType,
+        tenantId: input.tenantId ?? null,
+        payload: input.payload,
+      })
+      .onConflictDoNothing({ target: stripeWebhookEvents.stripeEventId })
+      .returning();
+
+    if (inserted) {
+      return { event: inserted, duplicate: false };
+    }
+
+    const [existing] = await this.db
+      .select()
+      .from(stripeWebhookEvents)
+      .where(eq(stripeWebhookEvents.stripeEventId, input.stripeEventId))
+      .limit(1);
+    if (!existing) {
+      throw new Error("Failed to record Stripe webhook event.");
+    }
+    return { event: existing, duplicate: true };
+  }
+
+  async markStripeWebhookEventProcessed(eventId: string) {
+    await this.db
+      .update(stripeWebhookEvents)
+      .set({ status: "processed", processedAt: sql`now()` })
+      .where(eq(stripeWebhookEvents.id, eventId));
+  }
+
+  async markStripeWebhookEventFailed(eventId: string, error: string) {
+    await this.db
+      .update(stripeWebhookEvents)
+      .set({ status: "failed", error, processedAt: sql`now()` })
+      .where(eq(stripeWebhookEvents.id, eventId));
+  }
+
+  async activateReservedTelephoneNumber(input: {
+    tenantId: string;
+    reservationId: string;
+    stripeCustomerId: string;
+    stripeSubscriptionId?: string | null | undefined;
+    stripePriceId?: string | null | undefined;
+    subscriptionStatus: string;
+    currentPeriodStart?: Date | null | undefined;
+    currentPeriodEnd?: Date | null | undefined;
+    metadata?: Record<string, unknown> | undefined;
+  }): Promise<OnboardingState> {
+    assertTenantId(input.tenantId);
+    if (this.needsTenantScope(input.tenantId)) {
+      return this.withTenantScope(input.tenantId, (repo) =>
+        repo.activateReservedTelephoneNumber(input),
+      );
+    }
+
+    return this.withTransaction(async (repo) => {
+      const [row] = await repo.db
+        .select({
+          reservation: telephoneNumberReservations,
+          number: telephoneNumberInventory,
+        })
+        .from(telephoneNumberReservations)
+        .innerJoin(
+          telephoneNumberInventory,
+          eq(telephoneNumberInventory.id, telephoneNumberReservations.numberId),
+        )
+        .where(
+          and(
+            eq(telephoneNumberReservations.id, input.reservationId),
+            eq(telephoneNumberReservations.tenantId, input.tenantId),
+            eq(telephoneNumberReservations.status, "active"),
+          ),
+        )
+        .limit(1);
+
+      if (!row) {
+        throw new Error("Active telephone number reservation not found.");
+      }
+
+      const billingStatus = billingStatusFromStripe(input.subscriptionStatus);
+      const billingAccount = await repo.getOrCreateBillingAccount(
+        input.tenantId,
+        {
+          stripeCustomerId: input.stripeCustomerId,
+          status: billingStatus,
+          metadata: input.metadata,
+        },
+      );
+      await repo.upsertBillingSubscription(input.tenantId, {
+        billingAccountId: billingAccount.id,
+        stripeSubscriptionId: input.stripeSubscriptionId ?? null,
+        stripePriceId: input.stripePriceId ?? null,
+        status: input.subscriptionStatus,
+        currentPeriodStart: input.currentPeriodStart ?? null,
+        currentPeriodEnd: input.currentPeriodEnd ?? null,
+        metadata: input.metadata,
+      });
+
+      await repo.db
+        .update(telephoneNumberReservations)
+        .set({
+          status: "completed",
+          completedAt: sql`now()`,
+          updatedAt: sql`now()`,
+        })
+        .where(eq(telephoneNumberReservations.id, row.reservation.id));
+
+      await repo.db
+        .update(telephoneNumberInventory)
+        .set({
+          status: "assigned",
+          assignedTenantId: input.tenantId,
+          updatedAt: sql`now()`,
+        })
+        .where(eq(telephoneNumberInventory.id, row.number.id));
+
+      const launchReady =
+        row.number.metadata &&
+        typeof row.number.metadata === "object" &&
+        (row.number.metadata as Record<string, unknown>).launchReady === true;
+      await repo.upsertChannelConnection(input.tenantId, {
+        channel: "telephone",
+        provider: row.number.provider,
+        externalAccountId: row.number.phoneNumber,
+        status: launchReady ? "connected" : "pending",
+        settings: {
+          mode: "self_service_number_pool",
+          setupType: "managed_number",
+          provider: row.number.provider,
+          phoneNumber: row.number.phoneNumber,
+          numberInventoryId: row.number.id,
+          sipTarget: row.number.sipTarget,
+          assistantId: row.number.assistantId,
+          billingStatus,
+          setupChecklist: {
+            numberOrdered: true,
+            sipConfigured: launchReady,
+            testCallCompleted: false,
+          },
+          updatedAt: new Date().toISOString(),
+        },
+      });
+
+      await repo.db
+        .update(tenants)
+        .set({ status: "active", updatedAt: sql`now()` })
+        .where(eq(tenants.id, input.tenantId));
+
+      await repo.audit(
+        input.tenantId,
+        "billing.activated",
+        "tenant",
+        input.tenantId,
+        {
+          phoneNumber: row.number.phoneNumber,
+          stripeSubscriptionId: input.stripeSubscriptionId ?? null,
+        },
+      );
+
+      return repo.getOnboardingState(input.tenantId);
+    });
+  }
+
+  async getOnboardingState(tenantId: string): Promise<OnboardingState> {
+    assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope(tenantId, (repo) =>
+        repo.getOnboardingState(tenantId),
+      );
+    }
+    const [
+      tenant,
+      billingAccount,
+      billingSubscription,
+      activeReservation,
+      assignedNumber,
+    ] = await Promise.all([
+      this.getTenant(tenantId),
+      this.getBillingAccount(tenantId),
+      this.getBillingSubscription(tenantId),
+      this.getActiveTelephoneNumberReservation(tenantId),
+      this.getAssignedTelephoneNumber(tenantId),
+    ]);
+    return {
+      tenant,
+      billingAccount,
+      billingSubscription,
+      activeReservation,
+      assignedNumber,
+    };
+  }
+
+  async getPlatformBillingOverview() {
+    const [accounts, subscriptionsRows, numbers, usageByStatus] =
+      await Promise.all([
+        this.db.select().from(billingAccounts),
+        this.db.select().from(billingSubscriptions),
+        this.listTelephoneNumberInventory(),
+        this.db
+          .select({
+            status: billableUsageEvents.status,
+            total: sql<number>`count(*)::int`,
+          })
+          .from(billableUsageEvents)
+          .groupBy(billableUsageEvents.status),
+      ]);
+
+    return {
+      billingAccounts: accounts,
+      subscriptions: subscriptionsRows,
+      numbers,
+      billableUsageByStatus: usageByStatus,
+    };
   }
 
   async listChannelConnections(
@@ -1601,6 +2569,919 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
         passwordHash: input.passwordHash,
       });
     });
+  }
+
+  private async publishOnboardingAnswer(
+    tenantId: string,
+    answer: BrainOnboardingAnswerRecord,
+  ): Promise<BrainOnboardingAnswerRecord> {
+    const title = answer.question;
+    const content = `Question: ${answer.question}\nAnswer: ${answer.answer}`;
+    const metadata = {
+      ...answer.metadata,
+      question: answer.question,
+      answer: answer.answer,
+      questionKey: answer.questionKey,
+      category: answer.category,
+      approvedFrom: "brain_onboarding",
+    };
+
+    if (answer.approvedChunkId) {
+      const [chunk] = await this.db
+        .select()
+        .from(knowledgeChunks)
+        .where(
+          and(
+            eq(knowledgeChunks.tenantId, tenantId),
+            eq(knowledgeChunks.id, answer.approvedChunkId),
+          ),
+        )
+        .limit(1);
+      if (chunk) {
+        await this.db
+          .update(knowledgeDocuments)
+          .set({
+            title,
+            content,
+            metadata,
+            updatedAt: sql`now()`,
+          })
+          .where(
+            and(
+              eq(knowledgeDocuments.tenantId, tenantId),
+              eq(knowledgeDocuments.id, chunk.documentId),
+            ),
+          );
+        await this.db
+          .update(knowledgeChunks)
+          .set({
+            title,
+            content,
+            tags: ["onboarding", answer.category],
+            metadata,
+            status: "approved",
+            embedding: null,
+            updatedAt: sql`now()`,
+          })
+          .where(
+            and(
+              eq(knowledgeChunks.tenantId, tenantId),
+              eq(knowledgeChunks.id, chunk.id),
+            ),
+          );
+        const [updatedAnswer] = await this.db
+          .update(brainOnboardingAnswers)
+          .set({
+            status: "approved",
+            updatedAt: sql`now()`,
+          })
+          .where(
+            and(
+              eq(brainOnboardingAnswers.tenantId, tenantId),
+              eq(brainOnboardingAnswers.id, answer.id),
+            ),
+          )
+          .returning();
+        if (updatedAnswer) {
+          return updatedAnswer;
+        }
+      }
+    }
+
+    const [source] = await this.db
+      .insert(knowledgeSources)
+      .values({
+        tenantId,
+        type: "onboarding",
+        name: "Project Brain onboarding",
+        metadata: {
+          questionKey: answer.questionKey,
+          category: answer.category,
+        },
+      })
+      .returning();
+    if (!source) {
+      throw new Error("Failed to create onboarding knowledge source.");
+    }
+
+    const [document] = await this.db
+      .insert(knowledgeDocuments)
+      .values({
+        tenantId,
+        sourceId: source.id,
+        title,
+        content,
+        metadata,
+      })
+      .returning();
+    if (!document) {
+      throw new Error("Failed to create onboarding knowledge document.");
+    }
+
+    const [chunk] = await this.db
+      .insert(knowledgeChunks)
+      .values({
+        tenantId,
+        sourceId: source.id,
+        documentId: document.id,
+        title,
+        content,
+        tags: ["onboarding", answer.category],
+        metadata,
+        status: "approved",
+      })
+      .returning();
+    if (!chunk) {
+      throw new Error("Failed to create onboarding knowledge chunk.");
+    }
+
+    const [updatedAnswer] = await this.db
+      .update(brainOnboardingAnswers)
+      .set({
+        status: "approved",
+        approvedChunkId: chunk.id,
+        updatedAt: sql`now()`,
+      })
+      .where(
+        and(
+          eq(brainOnboardingAnswers.tenantId, tenantId),
+          eq(brainOnboardingAnswers.id, answer.id),
+        ),
+      )
+      .returning();
+    if (!updatedAnswer) {
+      throw new Error(
+        "Failed to link onboarding answer to approved knowledge.",
+      );
+    }
+    return updatedAnswer;
+  }
+
+  async getTenantBrainSummary(tenantId: string): Promise<TenantBrainSummary> {
+    assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope(tenantId, (repo) =>
+        repo.getTenantBrainSummary(tenantId),
+      );
+    }
+    const [
+      [knowledgeStats],
+      [pendingSuggestionStats],
+      [onboardingStats],
+      [ingestionStats],
+    ] = await Promise.all([
+      this.db
+        .select({ total: sql<number>`count(*)::int` })
+        .from(knowledgeChunks)
+        .where(
+          and(
+            eq(knowledgeChunks.tenantId, tenantId),
+            eq(knowledgeChunks.status, "approved"),
+          ),
+        ),
+      this.db
+        .select({ total: sql<number>`count(*)::int` })
+        .from(knowledgeSuggestions)
+        .where(
+          and(
+            eq(knowledgeSuggestions.tenantId, tenantId),
+            eq(knowledgeSuggestions.status, "pending"),
+          ),
+        ),
+      this.db
+        .select({
+          total: sql<number>`count(*)::int`,
+          approved: sql<number>`count(*) filter (where ${brainOnboardingAnswers.status} = 'approved')::int`,
+        })
+        .from(brainOnboardingAnswers)
+        .where(eq(brainOnboardingAnswers.tenantId, tenantId)),
+      this.db
+        .select({
+          total: sql<number>`count(*)::int`,
+          failed: sql<number>`count(*) filter (where ${documentIngestionJobs.status} = 'failed')::int`,
+        })
+        .from(documentIngestionJobs)
+        .where(eq(documentIngestionJobs.tenantId, tenantId)),
+    ]);
+
+    return {
+      approvedKnowledge: knowledgeStats?.total ?? 0,
+      pendingSuggestions: pendingSuggestionStats?.total ?? 0,
+      onboardingAnswers: onboardingStats?.total ?? 0,
+      approvedOnboardingAnswers: onboardingStats?.approved ?? 0,
+      ingestionJobs: ingestionStats?.total ?? 0,
+      failedIngestionJobs: ingestionStats?.failed ?? 0,
+    };
+  }
+
+  async listBrainOnboardingAnswers(
+    tenantId: string,
+  ): Promise<BrainOnboardingAnswerRecord[]> {
+    assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<BrainOnboardingAnswerRecord[]>(
+        tenantId,
+        (repo) => repo.listBrainOnboardingAnswers(tenantId),
+      );
+    }
+    return this.db
+      .select()
+      .from(brainOnboardingAnswers)
+      .where(eq(brainOnboardingAnswers.tenantId, tenantId))
+      .orderBy(brainOnboardingAnswers.questionKey);
+  }
+
+  async upsertBrainOnboardingAnswers(
+    tenantId: string,
+    input: UpsertBrainOnboardingInput,
+  ): Promise<BrainOnboardingAnswerRecord[]> {
+    assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<BrainOnboardingAnswerRecord[]>(
+        tenantId,
+        (repo) => repo.upsertBrainOnboardingAnswers(tenantId, input),
+      );
+    }
+    return this.withTransaction(async (repo) => {
+      const saved: BrainOnboardingAnswerRecord[] = [];
+      for (const answer of input.answers) {
+        const status =
+          input.publishApproved || answer.status === "approved"
+            ? "approved"
+            : (answer.status ?? "draft");
+        const [record] = await repo.db
+          .insert(brainOnboardingAnswers)
+          .values({
+            tenantId,
+            questionKey: answer.questionKey,
+            question: answer.question,
+            answer: answer.answer,
+            category: answer.category ?? "general",
+            status,
+            metadata: answer.metadata ?? {},
+          })
+          .onConflictDoUpdate({
+            target: [
+              brainOnboardingAnswers.tenantId,
+              brainOnboardingAnswers.questionKey,
+            ],
+            set: {
+              question: answer.question,
+              answer: answer.answer,
+              category: answer.category ?? "general",
+              status,
+              metadata: answer.metadata ?? {},
+              updatedAt: sql`now()`,
+            },
+          })
+          .returning();
+        if (!record) {
+          throw new Error("Failed to save onboarding answer.");
+        }
+
+        saved.push(
+          input.publishApproved || status === "approved"
+            ? await repo.publishOnboardingAnswer(tenantId, record)
+            : record,
+        );
+      }
+
+      await repo.audit(
+        tenantId,
+        "brain.onboarding_answers.upserted",
+        "tenant",
+        tenantId,
+        {
+          count: saved.length,
+          publishApproved: Boolean(input.publishApproved),
+        },
+      );
+
+      return saved;
+    });
+  }
+
+  async listKnowledgeSuggestions(
+    tenantId: string,
+    options?: PaginationOptions,
+  ): Promise<KnowledgeSuggestionRecord[]> {
+    assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<KnowledgeSuggestionRecord[]>(
+        tenantId,
+        (repo) => repo.listKnowledgeSuggestions(tenantId, options),
+      );
+    }
+    const { limit, offset } = resolvePagination(options);
+    const status = normalizeListStatus(options) ?? "pending";
+    const query = normalizeFullTextQuery(options);
+    const filters: SQL[] = [eq(knowledgeSuggestions.tenantId, tenantId)];
+    if (status) {
+      filters.push(eq(knowledgeSuggestions.status, status));
+    }
+    if (query) {
+      const likeQuery = `%${query}%`;
+      filters.push(
+        or(
+          sql`${knowledgeSuggestions.suggestedQuestion} ilike ${likeQuery}`,
+          sql`${knowledgeSuggestions.suggestedAnswer} ilike ${likeQuery}`,
+          sql`${knowledgeSuggestions.suggestedTitle} ilike ${likeQuery}`,
+        )!,
+      );
+    }
+    return this.db
+      .select()
+      .from(knowledgeSuggestions)
+      .where(and(...filters))
+      .orderBy(desc(knowledgeSuggestions.createdAt))
+      .limit(limit)
+      .offset(offset);
+  }
+
+  async createKnowledgeSuggestion(
+    tenantId: string,
+    input: CreateKnowledgeSuggestionInput,
+  ): Promise<KnowledgeSuggestionRecord> {
+    assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<KnowledgeSuggestionRecord>(tenantId, (repo) =>
+        repo.createKnowledgeSuggestion(tenantId, input),
+      );
+    }
+    const [suggestion] = await this.db
+      .insert(knowledgeSuggestions)
+      .values({
+        tenantId,
+        sourceType: input.sourceType,
+        sourceConversationId: input.sourceConversationId ?? null,
+        sourceMessageId: input.sourceMessageId ?? null,
+        sourceDocumentId: input.sourceDocumentId ?? null,
+        suggestedQuestion: input.suggestedQuestion ?? null,
+        suggestedAnswer: input.suggestedAnswer ?? null,
+        suggestedTitle: input.suggestedTitle ?? null,
+        suggestedTags: input.suggestedTags ?? ["suggested"],
+        suggestedMetadata: input.suggestedMetadata ?? {},
+        confidence: String(clampConfidence(input.confidence ?? 0)),
+      })
+      .onConflictDoNothing()
+      .returning();
+
+    if (suggestion) {
+      await this.audit(
+        tenantId,
+        "knowledge_suggestion.created",
+        "knowledge_suggestion",
+        suggestion.id,
+        {
+          sourceType: input.sourceType,
+        },
+      );
+      return suggestion;
+    }
+
+    if (input.sourceMessageId) {
+      const [existing] = await this.db
+        .select()
+        .from(knowledgeSuggestions)
+        .where(
+          and(
+            eq(knowledgeSuggestions.tenantId, tenantId),
+            eq(knowledgeSuggestions.sourceMessageId, input.sourceMessageId),
+            eq(knowledgeSuggestions.sourceType, input.sourceType),
+          ),
+        )
+        .limit(1);
+      if (existing) {
+        return existing;
+      }
+    }
+
+    throw new Error("Failed to create knowledge suggestion.");
+  }
+
+  async approveKnowledgeSuggestion(
+    tenantId: string,
+    suggestionId: string,
+    input: ReviewKnowledgeSuggestionInput = {},
+  ): Promise<{
+    suggestion: KnowledgeSuggestionRecord;
+    chunk: KnowledgeChunkRecord;
+  }> {
+    assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope(tenantId, (repo) =>
+        repo.approveKnowledgeSuggestion(tenantId, suggestionId, input),
+      );
+    }
+    return this.withTransaction(async (repo) => {
+      const [suggestion] = await repo.db
+        .select()
+        .from(knowledgeSuggestions)
+        .where(
+          and(
+            eq(knowledgeSuggestions.tenantId, tenantId),
+            eq(knowledgeSuggestions.id, suggestionId),
+          ),
+        )
+        .limit(1);
+
+      if (!suggestion) {
+        throw new Error("Knowledge suggestion not found.");
+      }
+      if (suggestion.status !== "pending") {
+        throw new Error("Only pending suggestions can be approved.");
+      }
+
+      const question = (
+        input.question ??
+        suggestion.suggestedQuestion ??
+        suggestion.suggestedTitle ??
+        ""
+      ).trim();
+      const answer = (input.answer ?? suggestion.suggestedAnswer ?? "").trim();
+      if (!question || !answer) {
+        throw new Error("A question/title and answer are required to approve.");
+      }
+
+      const tags = input.tags?.length
+        ? input.tags
+        : suggestion.suggestedTags.length
+          ? suggestion.suggestedTags
+          : ["learned"];
+      const title = (
+        input.title ??
+        suggestion.suggestedTitle ??
+        question
+      ).trim();
+      const content = `Question: ${question}\nAnswer: ${answer}`;
+      const metadata = {
+        ...suggestion.suggestedMetadata,
+        question,
+        answer,
+        suggestionId: suggestion.id,
+        sourceType: suggestion.sourceType,
+        approvedFrom: "knowledge_suggestion",
+      };
+
+      const [source] = await repo.db
+        .insert(knowledgeSources)
+        .values({
+          tenantId,
+          type: "learned_suggestion",
+          name: "Approved learning suggestion",
+          metadata: {
+            suggestionId: suggestion.id,
+            sourceType: suggestion.sourceType,
+          },
+        })
+        .returning();
+      if (!source) {
+        throw new Error("Failed to create suggestion knowledge source.");
+      }
+
+      const [document] = await repo.db
+        .insert(knowledgeDocuments)
+        .values({
+          tenantId,
+          sourceId: source.id,
+          title,
+          content,
+          metadata,
+        })
+        .returning();
+      if (!document) {
+        throw new Error("Failed to create suggestion knowledge document.");
+      }
+
+      const [chunk] = await repo.db
+        .insert(knowledgeChunks)
+        .values({
+          tenantId,
+          sourceId: source.id,
+          documentId: document.id,
+          title,
+          content,
+          tags,
+          metadata,
+          status: "approved",
+        })
+        .returning();
+      if (!chunk) {
+        throw new Error("Failed to create suggestion knowledge chunk.");
+      }
+
+      const [updatedSuggestion] = await repo.db
+        .update(knowledgeSuggestions)
+        .set({
+          status: "approved",
+          suggestedQuestion: question,
+          suggestedAnswer: answer,
+          suggestedTitle: title,
+          suggestedTags: tags,
+          reviewedByUserId: input.reviewedByUserId ?? null,
+          reviewedAt: sql`now()`,
+          reviewNote: input.reviewNote ?? null,
+          approvedChunkId: chunk.id,
+          updatedAt: sql`now()`,
+        })
+        .where(
+          and(
+            eq(knowledgeSuggestions.tenantId, tenantId),
+            eq(knowledgeSuggestions.id, suggestionId),
+          ),
+        )
+        .returning();
+      if (!updatedSuggestion) {
+        throw new Error("Failed to mark suggestion approved.");
+      }
+
+      await repo.audit(
+        tenantId,
+        "knowledge_suggestion.approved",
+        "knowledge_suggestion",
+        suggestion.id,
+        {
+          chunkId: chunk.id,
+          question,
+        },
+      );
+
+      return { suggestion: updatedSuggestion, chunk };
+    });
+  }
+
+  async rejectKnowledgeSuggestion(
+    tenantId: string,
+    suggestionId: string,
+    input: ReviewKnowledgeSuggestionInput = {},
+  ): Promise<KnowledgeSuggestionRecord> {
+    assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<KnowledgeSuggestionRecord>(tenantId, (repo) =>
+        repo.rejectKnowledgeSuggestion(tenantId, suggestionId, input),
+      );
+    }
+    const [suggestion] = await this.db
+      .update(knowledgeSuggestions)
+      .set({
+        status: "rejected",
+        reviewedByUserId: input.reviewedByUserId ?? null,
+        reviewedAt: sql`now()`,
+        reviewNote: input.reviewNote ?? null,
+        updatedAt: sql`now()`,
+      })
+      .where(
+        and(
+          eq(knowledgeSuggestions.tenantId, tenantId),
+          eq(knowledgeSuggestions.id, suggestionId),
+          eq(knowledgeSuggestions.status, "pending"),
+        ),
+      )
+      .returning();
+
+    if (!suggestion) {
+      throw new Error("Pending knowledge suggestion not found.");
+    }
+
+    await this.audit(
+      tenantId,
+      "knowledge_suggestion.rejected",
+      "knowledge_suggestion",
+      suggestion.id,
+      {
+        reviewNote: input.reviewNote ?? null,
+      },
+    );
+
+    return suggestion;
+  }
+
+  async listDocumentIngestionJobs(
+    tenantId: string,
+    options?: PaginationOptions,
+  ): Promise<DocumentIngestionJobRecord[]> {
+    assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<DocumentIngestionJobRecord[]>(
+        tenantId,
+        (repo) => repo.listDocumentIngestionJobs(tenantId, options),
+      );
+    }
+    const { limit, offset } = resolvePagination(options);
+    const status = normalizeListStatus(options);
+    const filters: SQL[] = [eq(documentIngestionJobs.tenantId, tenantId)];
+    if (status) {
+      filters.push(eq(documentIngestionJobs.status, status));
+    }
+    return this.db
+      .select()
+      .from(documentIngestionJobs)
+      .where(and(...filters))
+      .orderBy(desc(documentIngestionJobs.createdAt))
+      .limit(limit)
+      .offset(offset);
+  }
+
+  async recordDocumentIngestionFailure(
+    tenantId: string,
+    input: RecordDocumentIngestionFailureInput,
+  ): Promise<DocumentIngestionJobRecord> {
+    assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<DocumentIngestionJobRecord>(
+        tenantId,
+        (repo) => repo.recordDocumentIngestionFailure(tenantId, input),
+      );
+    }
+    const [job] = await this.db
+      .insert(documentIngestionJobs)
+      .values({
+        tenantId,
+        objectKey: input.objectKey ?? null,
+        fileName: input.fileName,
+        contentType: input.contentType,
+        checksum: input.checksum ?? null,
+        status: "failed",
+        error: input.error,
+        parserMetadata: input.metadata ?? {},
+      })
+      .returning();
+    if (!job) {
+      throw new Error("Failed to record document ingestion failure.");
+    }
+    await this.audit(
+      tenantId,
+      "knowledge_document.ingestion_failed",
+      "document_ingestion_job",
+      job.id,
+      {
+        fileName: input.fileName,
+        error: input.error,
+      },
+    );
+    return job;
+  }
+
+  async ingestKnowledgeDocument(
+    tenantId: string,
+    input: IngestKnowledgeDocumentInput,
+  ): Promise<IngestKnowledgeDocumentResult> {
+    assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<IngestKnowledgeDocumentResult>(
+        tenantId,
+        (repo) => repo.ingestKnowledgeDocument(tenantId, input),
+      );
+    }
+
+    return this.withTransaction(async (repo) => {
+      const text = normalizeKnowledgeText(input.extractedText);
+      if (!text) {
+        throw new Error("Document extraction produced no text.");
+      }
+      const tags = input.suggestedTags?.length
+        ? input.suggestedTags
+        : ["document", "upload"];
+      const checksum = input.checksum?.trim() || null;
+      const metadata = {
+        ...(input.metadata ?? {}),
+        fileName: input.fileName,
+        contentType: input.contentType,
+        checksum,
+        ingestedFrom: "document_upload",
+      };
+
+      if (checksum) {
+        const [existing] = await repo.db
+          .select({
+            document: knowledgeDocuments,
+            source: knowledgeSources,
+          })
+          .from(knowledgeDocuments)
+          .innerJoin(
+            knowledgeSources,
+            eq(knowledgeSources.id, knowledgeDocuments.sourceId),
+          )
+          .where(
+            and(
+              eq(knowledgeDocuments.tenantId, tenantId),
+              eq(knowledgeDocuments.checksum, checksum),
+            ),
+          )
+          .limit(1);
+        if (existing) {
+          const [job] = await repo.db
+            .insert(documentIngestionJobs)
+            .values({
+              tenantId,
+              sourceId: existing.source.id,
+              documentId: existing.document.id,
+              objectKey: input.objectKey ?? null,
+              fileName: input.fileName,
+              contentType: input.contentType,
+              checksum,
+              status: "archived",
+              parserMetadata: {
+                ...metadata,
+                duplicate: true,
+                duplicateDocumentId: existing.document.id,
+              },
+            })
+            .returning();
+          if (!job) {
+            throw new Error("Failed to record duplicate ingestion job.");
+          }
+          return {
+            source: existing.source,
+            document: existing.document,
+            job,
+            suggestions: [],
+            duplicate: true,
+          };
+        }
+      }
+
+      const [source] = await repo.db
+        .insert(knowledgeSources)
+        .values({
+          tenantId,
+          type: "document_upload",
+          name: input.sourceName ?? input.fileName,
+          metadata,
+        })
+        .returning();
+      if (!source) {
+        throw new Error("Failed to create document knowledge source.");
+      }
+
+      const [document] = await repo.db
+        .insert(knowledgeDocuments)
+        .values({
+          tenantId,
+          sourceId: source.id,
+          title: input.fileName,
+          content: text,
+          status: "pending_review",
+          checksum,
+          metadata,
+        })
+        .returning();
+      if (!document) {
+        throw new Error("Failed to create knowledge document.");
+      }
+
+      const [job] = await repo.db
+        .insert(documentIngestionJobs)
+        .values({
+          tenantId,
+          sourceId: source.id,
+          documentId: document.id,
+          objectKey: input.objectKey ?? null,
+          fileName: input.fileName,
+          contentType: input.contentType,
+          checksum,
+          status: "pending_review",
+          parserMetadata: {
+            ...metadata,
+            textCharacters: text.length,
+          },
+        })
+        .returning();
+      if (!job) {
+        throw new Error("Failed to create document ingestion job.");
+      }
+
+      const sections = buildDocumentSuggestionSections(
+        text,
+        input.fileName,
+        input.maxSuggestions,
+      );
+      const suggestions: KnowledgeSuggestionRecord[] = [];
+      for (const section of sections) {
+        const suggestion = await repo.createKnowledgeSuggestion(tenantId, {
+          sourceType: "document_extraction",
+          sourceDocumentId: document.id,
+          suggestedQuestion: section.title,
+          suggestedTitle: section.title,
+          suggestedAnswer: section.content,
+          suggestedTags: tags,
+          suggestedMetadata: {
+            ...metadata,
+            documentId: document.id,
+            ingestionJobId: job.id,
+            sectionIndex: section.sectionIndex,
+          },
+          confidence: 0.7,
+        });
+        suggestions.push(suggestion);
+      }
+
+      await repo.audit(
+        tenantId,
+        "knowledge_document.ingested",
+        "knowledge_document",
+        document.id,
+        {
+          fileName: input.fileName,
+          suggestions: suggestions.length,
+          checksum,
+        },
+      );
+
+      return { source, document, job, suggestions, duplicate: false };
+    });
+  }
+
+  async scanKnowledgeSuggestions(
+    tenantId: string,
+    options: { limit?: number | undefined } = {},
+  ): Promise<ScanKnowledgeSuggestionsResult> {
+    assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<ScanKnowledgeSuggestionsResult>(
+        tenantId,
+        (repo) => repo.scanKnowledgeSuggestions(tenantId, options),
+      );
+    }
+
+    const limit = Math.min(Math.max(Math.trunc(options.limit ?? 50), 1), 200);
+    const handoffs = await this.db
+      .select()
+      .from(handoffRequests)
+      .where(eq(handoffRequests.tenantId, tenantId))
+      .orderBy(desc(handoffRequests.createdAt))
+      .limit(limit);
+
+    const created: KnowledgeSuggestionRecord[] = [];
+    let skipped = 0;
+    for (const handoff of handoffs) {
+      const question = normalizeKnowledgeText(handoff.requesterMessage);
+      if (
+        !isLearningHandoffReason(handoff.reason) ||
+        !isMeaningfulQuestion(question)
+      ) {
+        skipped += 1;
+        continue;
+      }
+
+      const filters: SQL[] = [
+        eq(knowledgeSuggestions.tenantId, tenantId),
+        eq(knowledgeSuggestions.sourceType, "unanswered_question"),
+        eq(knowledgeSuggestions.suggestedQuestion, question),
+      ];
+      if (handoff.conversationId) {
+        filters.push(
+          eq(knowledgeSuggestions.sourceConversationId, handoff.conversationId),
+        );
+      } else {
+        filters.push(
+          sql`${knowledgeSuggestions.suggestedMetadata}->>'handoffId' = ${handoff.id}`,
+        );
+      }
+
+      const [existing] = await this.db
+        .select({ id: knowledgeSuggestions.id })
+        .from(knowledgeSuggestions)
+        .where(and(...filters))
+        .limit(1);
+      if (existing) {
+        skipped += 1;
+        continue;
+      }
+
+      const suggestion = await this.createKnowledgeSuggestion(tenantId, {
+        sourceType: "unanswered_question",
+        sourceConversationId: handoff.conversationId ?? null,
+        suggestedQuestion: question,
+        suggestedTitle: question,
+        suggestedTags: ["unanswered", handoff.reason, handoff.channel].filter(
+          Boolean,
+        ),
+        suggestedMetadata: {
+          handoffId: handoff.id,
+          handoffReason: handoff.reason,
+          channel: handoff.channel,
+          needsHumanAnswer: true,
+        },
+        confidence: 0.45,
+      });
+      created.push(suggestion);
+    }
+
+    if (created.length > 0) {
+      await this.audit(
+        tenantId,
+        "knowledge_suggestion.scan.created",
+        "tenant",
+        tenantId,
+        {
+          created: created.length,
+          scanned: handoffs.length,
+        },
+      );
+    }
+
+    return { created, skipped, scanned: handoffs.length };
   }
 
   async addFaq(tenantId: string, input: AddFaqInput): Promise<AddFaqResult> {
@@ -3095,6 +4976,130 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     });
   }
 
+  async recordBillableAcceptedCall(input: {
+    tenantId: string;
+    providerCallId: string;
+    sourceUsageEventId?: string | null | undefined;
+    quantity?: number | undefined;
+    unitAmountCents?: number | undefined;
+    metadata?: Record<string, unknown> | undefined;
+  }): Promise<{ event: BillableUsageEventRecord; duplicate: boolean }> {
+    assertTenantId(input.tenantId);
+    if (this.needsTenantScope(input.tenantId)) {
+      return this.withTenantScope(input.tenantId, (repo) =>
+        repo.recordBillableAcceptedCall(input),
+      );
+    }
+
+    const providerCallId = input.providerCallId.trim();
+    if (!providerCallId) {
+      throw new Error("providerCallId is required.");
+    }
+
+    const [inserted] = await this.db
+      .insert(billableUsageEvents)
+      .values({
+        tenantId: input.tenantId,
+        providerCallId,
+        sourceUsageEventId: input.sourceUsageEventId ?? null,
+        channel: "telephone",
+        eventType: "accepted_call",
+        quantity: input.quantity ?? 1,
+        unitAmountCents: input.unitAmountCents ?? 10,
+        metadata: input.metadata ?? {},
+      })
+      .onConflictDoNothing({
+        target: [
+          billableUsageEvents.tenantId,
+          billableUsageEvents.providerCallId,
+        ],
+      })
+      .returning();
+
+    if (inserted) {
+      return { event: inserted, duplicate: false };
+    }
+
+    const [existing] = await this.db
+      .select()
+      .from(billableUsageEvents)
+      .where(
+        and(
+          eq(billableUsageEvents.tenantId, input.tenantId),
+          eq(billableUsageEvents.providerCallId, providerCallId),
+        ),
+      )
+      .limit(1);
+
+    if (!existing) {
+      throw new Error("Failed to record billable usage event.");
+    }
+    return { event: existing, duplicate: true };
+  }
+
+  async markBillableUsageReported(
+    tenantId: string,
+    eventId: string,
+    stripeMeterEventId: string,
+  ): Promise<void> {
+    assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope(tenantId, (repo) =>
+        repo.markBillableUsageReported(tenantId, eventId, stripeMeterEventId),
+      );
+    }
+    await this.db
+      .update(billableUsageEvents)
+      .set({
+        status: "reported",
+        stripeMeterEventId,
+        updatedAt: sql`now()`,
+      })
+      .where(
+        and(
+          eq(billableUsageEvents.tenantId, tenantId),
+          eq(billableUsageEvents.id, eventId),
+        ),
+      );
+  }
+
+  async markBillableUsageFailed(
+    tenantId: string,
+    eventId: string,
+    detail: string,
+  ): Promise<void> {
+    assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope(tenantId, (repo) =>
+        repo.markBillableUsageFailed(tenantId, eventId, detail),
+      );
+    }
+    const [existing] = await this.db
+      .select()
+      .from(billableUsageEvents)
+      .where(
+        and(
+          eq(billableUsageEvents.tenantId, tenantId),
+          eq(billableUsageEvents.id, eventId),
+        ),
+      )
+      .limit(1);
+    if (!existing) {
+      return;
+    }
+    await this.db
+      .update(billableUsageEvents)
+      .set({
+        status: "failed",
+        metadata: {
+          ...(existing.metadata ?? {}),
+          reportError: detail,
+        },
+        updatedAt: sql`now()`,
+      })
+      .where(eq(billableUsageEvents.id, eventId));
+  }
+
   async getTenantAnalytics(
     tenantId: string,
     options: { windowDays?: number } = {},
@@ -3585,6 +5590,9 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       tenantContacts,
       deliveries,
       templates,
+      onboardingAnswers,
+      suggestions,
+      ingestionJobs,
     ] = await Promise.all([
       this.getTenant(tenantId),
       this.listKnowledge(tenantId),
@@ -3609,6 +5617,12 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
         .from(messageDeliveries)
         .where(eq(messageDeliveries.tenantId, tenantId)),
       this.listWhatsappTemplates(tenantId),
+      this.listBrainOnboardingAnswers(tenantId),
+      this.listKnowledgeSuggestions(tenantId, { status: "all" }),
+      this.db
+        .select()
+        .from(documentIngestionJobs)
+        .where(eq(documentIngestionJobs.tenantId, tenantId)),
     ]);
 
     return {
@@ -3620,6 +5634,9 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       contacts: tenantContacts,
       messageDeliveries: deliveries,
       whatsappTemplates: templates,
+      brainOnboardingAnswers: onboardingAnswers,
+      knowledgeSuggestions: suggestions,
+      documentIngestionJobs: ingestionJobs,
     };
   }
 

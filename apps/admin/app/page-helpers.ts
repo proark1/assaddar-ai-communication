@@ -677,7 +677,7 @@ export function readAdminDeepLink(): AdminDeepLink {
   const params = new URLSearchParams(window.location.search);
   const rawTab = params.get("tab");
   const deepLink: AdminDeepLink = {};
-  const tenantId = params.get("tenantId");
+  const tenantId = params.get("tenantId") ?? params.get("tenant");
   const handoffId = params.get("handoffId");
   const conversationId = params.get("conversationId");
   const inviteToken = params.get("invite");
