@@ -216,6 +216,7 @@ const groundedGenerator = createGeminiGroundedAnswerGenerator(process.env);
 const engine = createAnswerEngine({
   dataStore: store,
   handoffStore: store,
+  preferDirectTelephoneAnswers: true,
   ...(groundedGenerator ? { groundedGenerator } : {}),
 });
 const adapter = new TwilioVoiceAdapter();

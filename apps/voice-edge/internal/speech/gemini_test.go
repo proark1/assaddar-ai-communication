@@ -8,53 +8,51 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/assaddar/ai-communication/apps/voice-edge/internal/audio"
 	"github.com/assaddar/ai-communication/apps/voice-edge/internal/config"
 )
 
-func TestGeminiProviderTranscribeUploadsAudioAndDeletesFile(t *testing.T) {
-	var startedUpload bool
-	var finalizedUpload bool
-	var deletedFile bool
+func TestGeminiProviderTranscribeSendsInlineAudio(t *testing.T) {
+	var sawInlineAudio bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/upload/v1beta/files":
-			startedUpload = true
-			if r.URL.Query().Get("key") != "key" {
-				t.Fatalf("key = %q", r.URL.Query().Get("key"))
-			}
-			if r.Header.Get("x-goog-upload-protocol") != "resumable" {
-				t.Fatalf("upload protocol = %q", r.Header.Get("x-goog-upload-protocol"))
-			}
-			w.Header().Set("x-goog-upload-url", serverURL(t, r)+"/upload-session")
-			w.WriteHeader(http.StatusOK)
-		case "/upload-session":
-			finalizedUpload = true
-			if r.Header.Get("x-goog-upload-command") != "upload, finalize" {
-				t.Fatalf("upload command = %q", r.Header.Get("x-goog-upload-command"))
+		case "/v1beta/interactions":
+			if r.Header.Get("x-goog-api-key") != "key" {
+				t.Fatalf("api key header = %q", r.Header.Get("x-goog-api-key"))
 			}
 			body, err := io.ReadAll(r.Body)
 			if err != nil {
 				t.Fatalf("ReadAll returned error: %v", err)
 			}
-			if !strings.HasPrefix(string(body), "RIFF") {
-				t.Fatal("expected wav upload")
+			var request struct {
+				Input []struct {
+					Type     string `json:"type"`
+					Data     string `json:"data"`
+					MIMEType string `json:"mime_type"`
+				} `json:"input"`
 			}
-			w.Header().Set("content-type", "application/json")
-			_, _ = w.Write([]byte(`{"file":{"name":"files/test-audio","uri":"gemini://files/test-audio","mimeType":"audio/wav"}}`))
-		case "/v1beta/interactions":
-			if r.Header.Get("x-goog-api-key") != "key" {
-				t.Fatalf("api key header = %q", r.Header.Get("x-goog-api-key"))
+			if err := json.Unmarshal(body, &request); err != nil {
+				t.Fatalf("Unmarshal returned error: %v", err)
 			}
+			if len(request.Input) != 2 {
+				t.Fatalf("len(input) = %d", len(request.Input))
+			}
+			audioInput := request.Input[1]
+			if audioInput.Type != "audio" || audioInput.MIMEType != "audio/wav" {
+				t.Fatalf("audio input = %#v", audioInput)
+			}
+			raw, err := base64.StdEncoding.DecodeString(audioInput.Data)
+			if err != nil {
+				t.Fatalf("DecodeString returned error: %v", err)
+			}
+			if len(raw) < 4 || string(raw[:4]) != "RIFF" {
+				t.Fatalf("expected inline wav data, got %q", string(raw[:min(len(raw), 4)]))
+			}
+			sawInlineAudio = true
 			w.Header().Set("content-type", "application/json")
 			_, _ = w.Write([]byte(`{"steps":[{"type":"model_output","content":[{"type":"text","text":"Hallo Welt"}]}]}`))
-		case "/v1beta/files/test-audio":
-			deletedFile = true
-			w.Header().Set("content-type", "application/json")
-			_, _ = w.Write([]byte(`{}`))
 		default:
 			t.Fatalf("unexpected request path %s", r.URL.Path)
 		}
@@ -72,8 +70,8 @@ func TestGeminiProviderTranscribeUploadsAudioAndDeletesFile(t *testing.T) {
 	if transcript.Text != "Hallo Welt" {
 		t.Fatalf("transcript = %q", transcript.Text)
 	}
-	if !startedUpload || !finalizedUpload || !deletedFile {
-		t.Fatalf("upload/delete flags = %t/%t/%t", startedUpload, finalizedUpload, deletedFile)
+	if !sawInlineAudio {
+		t.Fatal("expected inline audio request")
 	}
 }
 
@@ -173,13 +171,4 @@ func testGeminiConfig() config.GeminiConfig {
 		TTSModel: "gemini-3.1-flash-tts-preview",
 		TTSVoice: "Kore",
 	}
-}
-
-func serverURL(t *testing.T, r *http.Request) string {
-	t.Helper()
-	scheme := "http"
-	if r.TLS != nil {
-		scheme = "https"
-	}
-	return scheme + "://" + r.Host
 }

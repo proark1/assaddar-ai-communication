@@ -27,6 +27,7 @@ const DEFAULT_REFUSAL =
 const DEFAULT_REFUSAL_DE =
   "Dazu habe ich keine freigegebene Information. Ich kann Ihre Nachricht aufnehmen oder das an das Team weitergeben.";
 const MAX_GENERATED_ANSWER_LENGTH = 900;
+const MAX_DIRECT_TELEPHONE_ANSWER_LENGTH = 360;
 const NO_GROUNDED_ANSWER = "__NO_GROUNDED_ANSWER__";
 
 /**
@@ -74,6 +75,11 @@ export type AnswerEngineOptions = {
    * to the exact approved answer so customer calls never depend on model prose.
    */
   onGroundedGenerationError?: (error: unknown, tenantId: string) => void;
+  /**
+   * For latency-sensitive phone calls, return the approved FAQ answer directly
+   * when retrieval is already confident instead of asking a model to rewrite it.
+   */
+  preferDirectTelephoneAnswers?: boolean;
 };
 
 export class AnswerEngine {
@@ -84,6 +90,7 @@ export class AnswerEngine {
   private readonly onSemanticSearchError: AnswerEngineOptions["onSemanticSearchError"];
   private readonly groundedGenerator: AnswerEngineOptions["groundedGenerator"];
   private readonly onGroundedGenerationError: AnswerEngineOptions["onGroundedGenerationError"];
+  private readonly preferDirectTelephoneAnswers: boolean;
 
   constructor(options: AnswerEngineOptions) {
     this.dataStore = options.dataStore;
@@ -93,6 +100,8 @@ export class AnswerEngine {
     this.onSemanticSearchError = options.onSemanticSearchError;
     this.groundedGenerator = options.groundedGenerator;
     this.onGroundedGenerationError = options.onGroundedGenerationError;
+    this.preferDirectTelephoneAnswers =
+      options.preferDirectTelephoneAnswers ?? false;
   }
 
   async answer(input: InboundMessage): Promise<AnswerResult> {
@@ -207,6 +216,40 @@ export class AnswerEngine {
         "answer_validation_failed",
         defaultRefusal(input.locale),
       );
+    }
+    if (
+      this.preferDirectTelephoneAnswers &&
+      isDirectTelephoneAnswer(input, bestChunk, fallbackAnswer)
+    ) {
+      trace.push({
+        step: "grounded_generation",
+        outcome: "skipped",
+        detail: "direct_telephone_answer",
+      });
+      trace.push({ step: "generate_grounded_answer", outcome: "passed" });
+      trace.push({ step: "validate_answer", outcome: "passed" });
+
+      const citation: AnswerResult["citations"][number] = {
+        chunkId: bestChunk.id,
+        documentId: bestChunk.documentId,
+        sourceId: bestChunk.sourceId,
+      };
+      if (bestChunk.title) {
+        citation.title = bestChunk.title;
+      }
+
+      return {
+        status: "answered",
+        tenantId: input.tenantId,
+        channel: input.channel,
+        text: applyTone(fallbackAnswer, policy),
+        confidence: bestChunk.score,
+        intent: intent.name,
+        citations: [citation],
+        handoffRecommended: false,
+        usage: estimateUsage(normalized, fallbackAnswer),
+        trace,
+      };
     }
 
     const supportingChunks = rankedChunks
@@ -401,6 +444,23 @@ export class AnswerEngine {
       trace,
     };
   }
+}
+
+function isDirectTelephoneAnswer(
+  input: InboundMessage,
+  chunk: RetrievedChunk,
+  fallbackAnswer: string,
+) {
+  if (input.channel !== "telephone") {
+    return false;
+  }
+  if (fallbackAnswer.length > MAX_DIRECT_TELEPHONE_ANSWER_LENGTH) {
+    return false;
+  }
+  return (
+    typeof chunk.metadata.answer === "string" &&
+    chunk.metadata.answer.trim() === fallbackAnswer
+  );
 }
 
 export function createAnswerEngine(options: AnswerEngineOptions): AnswerEngine {

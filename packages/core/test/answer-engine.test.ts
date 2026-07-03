@@ -264,6 +264,45 @@ describe("AnswerEngine", () => {
     });
   });
 
+  it("can return direct approved answers for latency-sensitive phone calls", async () => {
+    let generated = false;
+    const engine = createAnswerEngine({
+      dataStore: new MemoryAnswerStore(
+        {
+          [tenantA]: createDefaultTenantPolicy(tenantA),
+        },
+        [
+          faqChunk(
+            tenantA,
+            "What are your prices?",
+            "Tenant A pricing starts at 100 EUR.",
+          ),
+        ],
+      ),
+      preferDirectTelephoneAnswers: true,
+      groundedGenerator: async () => {
+        generated = true;
+        return "Generated answer should not be used.";
+      },
+    });
+
+    const result = await engine.answer({
+      tenantId: tenantA,
+      channel: "telephone",
+      text: "What are your prices?",
+      metadata: {},
+    });
+
+    expect(result.status).toBe("answered");
+    expect(result.text).toBe("Tenant A pricing starts at 100 EUR.");
+    expect(generated).toBe(false);
+    expect(result.trace).toContainEqual({
+      step: "grounded_generation",
+      outcome: "skipped",
+      detail: "direct_telephone_answer",
+    });
+  });
+
   it("falls back to the approved answer when grounded generation refuses", async () => {
     const engine = createAnswerEngine({
       dataStore: new MemoryAnswerStore(

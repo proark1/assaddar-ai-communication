@@ -80,12 +80,7 @@ func (provider *GeminiProvider) Transcribe(ctx context.Context, pcm PCMBuffer) (
 	if pcm.SampleRate != geminiInputRateHz {
 		samples = audio.ResampleLinear(samples, pcm.SampleRate, geminiInputRateHz)
 	}
-	file, err := provider.uploadAudio(ctx, audio.EncodeWAVPCM16(samples, geminiInputRateHz), geminiAudioMIME, "assaddar-utterance.wav")
-	if err != nil {
-		return Transcript{}, err
-	}
-	defer provider.deleteFileSoon(file.Name)
-
+	encodedAudio := base64.StdEncoding.EncodeToString(audio.EncodeWAVPCM16(samples, geminiInputRateHz))
 	request := map[string]any{
 		"model": provider.sttModel,
 		"input": []map[string]any{
@@ -95,8 +90,8 @@ func (provider *GeminiProvider) Transcribe(ctx context.Context, pcm PCMBuffer) (
 			},
 			{
 				"type":      "audio",
-				"uri":       file.URI,
-				"mime_type": file.MIMETypeOr(geminiAudioMIME),
+				"data":      encodedAudio,
+				"mime_type": geminiAudioMIME,
 			},
 		},
 		"generation_config": map[string]any{
