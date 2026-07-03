@@ -1,6 +1,7 @@
 package speech
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -118,24 +119,7 @@ func (provider *GeminiProvider) Synthesize(ctx context.Context, text string, opt
 	if text == "" {
 		return PCMBuffer{}, nil
 	}
-	voice := strings.TrimSpace(options.Voice)
-	if voice == "" {
-		voice = provider.ttsVoice
-	}
-	speechConfig := map[string]any{"voice": voice}
-	if strings.TrimSpace(options.Locale) != "" {
-		speechConfig["language"] = options.Locale
-	}
-	request := map[string]any{
-		"model": provider.ttsModel,
-		"input": fmt.Sprintf("Read this naturally for a phone call in %s. Say only this text:\n\n%s", localeOrDefault(options.Locale), text),
-		"response_format": map[string]any{
-			"type": "audio",
-		},
-		"generation_config": map[string]any{
-			"speech_config": []map[string]any{speechConfig},
-		},
-	}
+	request := provider.ttsRequest(text, options)
 	var response interactionResponse
 	if err := provider.postInteraction(ctx, request, &response); err != nil {
 		return PCMBuffer{}, err
@@ -156,6 +140,92 @@ func (provider *GeminiProvider) Synthesize(ctx context.Context, text string, opt
 		sampleRate = geminiOutputRateHz
 	}
 	return PCMBuffer{SampleRate: sampleRate, Samples: samples}, nil
+}
+
+func (provider *GeminiProvider) SynthesizeStream(ctx context.Context, text string, options SynthesisOptions, onChunk PCMChunkHandler) error {
+	if onChunk == nil {
+		return errors.New("synthesis stream handler is required")
+	}
+	if err := provider.validate(); err != nil {
+		return err
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	request := provider.ttsRequest(text, options)
+	request["stream"] = true
+	body, err := json.Marshal(request)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, provider.endpoint("/v1beta/interactions"), bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("content-type", "application/json")
+	req.Header.Set("x-goog-api-key", provider.apiKey)
+	req.Header.Set("Api-Revision", "2026-05-20")
+	resp, err := provider.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if err := checkResponse(resp); err != nil {
+		return err
+	}
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	chunks := 0
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if payload == "" || payload == "[DONE]" {
+			continue
+		}
+		pcm, ok, err := decodeStreamAudioPayload(payload)
+		if err != nil {
+			return err
+		}
+		if !ok || len(pcm.Samples) == 0 {
+			continue
+		}
+		chunks++
+		if err := onChunk(pcm); err != nil {
+			return err
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	if chunks == 0 {
+		return errors.New("gemini stream returned no audio data")
+	}
+	return nil
+}
+
+func (provider *GeminiProvider) ttsRequest(text string, options SynthesisOptions) map[string]any {
+	voice := strings.TrimSpace(options.Voice)
+	if voice == "" {
+		voice = provider.ttsVoice
+	}
+	speechConfig := map[string]any{"voice": voice}
+	if strings.TrimSpace(options.Locale) != "" {
+		speechConfig["language"] = options.Locale
+	}
+	return map[string]any{
+		"model": provider.ttsModel,
+		"input": fmt.Sprintf("Read this naturally for a phone call in %s. Say only this text:\n\n%s", localeOrDefault(options.Locale), text),
+		"response_format": map[string]any{
+			"type": "audio",
+		},
+		"generation_config": map[string]any{
+			"speech_config": []map[string]any{speechConfig},
+		},
+	}
 }
 
 func (provider *GeminiProvider) validate() error {
@@ -337,6 +407,22 @@ type contentBlock struct {
 	} `json:"inlineData"`
 }
 
+type streamAudioEvent struct {
+	Delta *streamAudioDelta `json:"delta"`
+}
+
+type streamAudioDelta struct {
+	Data         string `json:"data"`
+	MIMEType     string `json:"mimeType"`
+	MIMETypeJSON string `json:"mime_type"`
+	InlineData   *struct {
+		Data string `json:"data"`
+	} `json:"inline_data"`
+	InlineDataCam *struct {
+		Data string `json:"data"`
+	} `json:"inlineData"`
+}
+
 func (response interactionResponse) Text() string {
 	if strings.TrimSpace(response.OutputText) != "" {
 		return response.OutputText
@@ -392,6 +478,56 @@ func (block contentBlock) audioData() string {
 		return block.InlineDataCam.Data
 	}
 	return ""
+}
+
+func decodeStreamAudioPayload(payload string) (PCMBuffer, bool, error) {
+	var event streamAudioEvent
+	if err := json.Unmarshal([]byte(payload), &event); err != nil {
+		return PCMBuffer{}, false, fmt.Errorf("decode gemini stream event: %w", err)
+	}
+	if event.Delta == nil {
+		return PCMBuffer{}, false, nil
+	}
+	encoded := event.Delta.audioData()
+	if encoded == "" {
+		return PCMBuffer{}, false, nil
+	}
+	raw, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return PCMBuffer{}, false, fmt.Errorf("decode gemini stream audio: %w", err)
+	}
+	mimeType := strings.ToLower(event.Delta.mimeType())
+	if strings.Contains(mimeType, "wav") {
+		samples, sampleRate, err := audio.DecodeWAVPCM16(raw)
+		if err != nil {
+			return PCMBuffer{}, false, fmt.Errorf("decode gemini stream wav audio: %w", err)
+		}
+		if sampleRate == 0 {
+			sampleRate = geminiOutputRateHz
+		}
+		return PCMBuffer{SampleRate: sampleRate, Samples: samples}, true, nil
+	}
+	return PCMBuffer{SampleRate: geminiOutputRateHz, Samples: audio.LittleEndianToPCM16(raw)}, true, nil
+}
+
+func (delta streamAudioDelta) audioData() string {
+	if strings.TrimSpace(delta.Data) != "" {
+		return delta.Data
+	}
+	if delta.InlineData != nil && strings.TrimSpace(delta.InlineData.Data) != "" {
+		return delta.InlineData.Data
+	}
+	if delta.InlineDataCam != nil && strings.TrimSpace(delta.InlineDataCam.Data) != "" {
+		return delta.InlineDataCam.Data
+	}
+	return ""
+}
+
+func (delta streamAudioDelta) mimeType() string {
+	if strings.TrimSpace(delta.MIMEType) != "" {
+		return delta.MIMEType
+	}
+	return delta.MIMETypeJSON
 }
 
 func normalizeModelText(text string) string {

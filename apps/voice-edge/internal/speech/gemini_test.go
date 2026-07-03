@@ -3,6 +3,8 @@ package speech
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -97,6 +99,71 @@ func TestGeminiProviderSynthesizeReturnsPCM(t *testing.T) {
 	if len(pcm.Samples) != 3 {
 		t.Fatalf("len(Samples) = %d", len(pcm.Samples))
 	}
+}
+
+func TestGeminiProviderSynthesizeStreamSendsPCMChunks(t *testing.T) {
+	sawStream := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1beta/interactions" {
+			t.Fatalf("unexpected request path %s", r.URL.Path)
+		}
+		if r.Header.Get("Api-Revision") != "2026-05-20" {
+			t.Fatalf("Api-Revision = %q", r.Header.Get("Api-Revision"))
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("ReadAll returned error: %v", err)
+		}
+		var request map[string]any
+		if err := json.Unmarshal(body, &request); err != nil {
+			t.Fatalf("Unmarshal returned error: %v", err)
+		}
+		if request["stream"] != true {
+			t.Fatalf("stream = %#v", request["stream"])
+		}
+		sawStream = true
+		w.Header().Set("content-type", "text/event-stream")
+		writeStreamAudioEvent(t, w, []int16{0, 500})
+		writeStreamAudioEvent(t, w, []int16{-500, 1000})
+		_, _ = fmt.Fprint(w, "event: interaction.completed\ndata: {}\n\n")
+	}))
+	defer server.Close()
+
+	provider := NewGeminiProvider(testGeminiConfig(), WithGeminiBaseURL(server.URL), WithGeminiHTTPClient(server.Client()))
+	var chunks [][]int16
+	err := provider.SynthesizeStream(context.Background(), "Hallo", SynthesisOptions{Locale: "de-DE", Voice: "Kore"}, func(pcm PCMBuffer) error {
+		if pcm.SampleRate != 24000 {
+			t.Fatalf("SampleRate = %d", pcm.SampleRate)
+		}
+		chunks = append(chunks, append([]int16(nil), pcm.Samples...))
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("SynthesizeStream returned error: %v", err)
+	}
+	if !sawStream {
+		t.Fatal("expected streaming request")
+	}
+	if len(chunks) != 2 {
+		t.Fatalf("len(chunks) = %d", len(chunks))
+	}
+	if chunks[0][1] != 500 || chunks[1][0] != -500 {
+		t.Fatalf("chunks = %#v", chunks)
+	}
+}
+
+func writeStreamAudioEvent(t *testing.T, w http.ResponseWriter, samples []int16) {
+	t.Helper()
+	event, err := json.Marshal(map[string]any{
+		"delta": map[string]any{
+			"mime_type": "audio/l16",
+			"data":      base64.StdEncoding.EncodeToString(audio.PCM16ToLittleEndian(samples)),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+	_, _ = fmt.Fprintf(w, "event: step.delta\ndata: %s\n\n", event)
 }
 
 func testGeminiConfig() config.GeminiConfig {

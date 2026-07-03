@@ -621,23 +621,37 @@ func (server *Server) processUtterance(ctx context.Context, session *CallSession
 	if len(utterance) == 0 {
 		return nil
 	}
-	server.playThinking(ctx, session)
 	telephonyRate := session.Codec.ClockRate
 	if telephonyRate <= 0 {
 		telephonyRate = 8000
 	}
-	startedAt := time.Now()
-	transcript, err := server.speechProvider.Transcribe(ctx, speech.PCMBuffer{
-		SampleRate: telephonyRate,
-		Samples:    utterance,
-	})
-	if err != nil {
-		if sendErr := server.sendText(ctx, session, localizedPrompt(server.cfg.DefaultLocale, "repeat")); sendErr != nil {
-			return fmt.Errorf("transcribe: %w; fallback: %v", err, sendErr)
-		}
-		return fmt.Errorf("transcribe: %w", err)
+	type transcribeResult struct {
+		transcript speech.Transcript
+		err        error
 	}
-	text := strings.TrimSpace(transcript.Text)
+	startedAt := time.Now()
+	transcribed := make(chan transcribeResult, 1)
+	go func() {
+		transcript, err := server.speechProvider.Transcribe(ctx, speech.PCMBuffer{
+			SampleRate: telephonyRate,
+			Samples:    utterance,
+		})
+		transcribed <- transcribeResult{transcript: transcript, err: err}
+	}()
+	server.playThinking(ctx, session)
+	var result transcribeResult
+	select {
+	case result = <-transcribed:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	if result.err != nil {
+		if sendErr := server.sendText(ctx, session, localizedPrompt(server.cfg.DefaultLocale, "repeat")); sendErr != nil {
+			return fmt.Errorf("transcribe: %w; fallback: %v", result.err, sendErr)
+		}
+		return fmt.Errorf("transcribe: %w", result.err)
+	}
+	text := strings.TrimSpace(result.transcript.Text)
 	if text == "" {
 		return server.sendText(ctx, session, localizedPrompt(server.cfg.DefaultLocale, "repeat"))
 	}
@@ -659,7 +673,7 @@ func (server *Server) processUtterance(ctx context.Context, session *CallSession
 		Metadata: map[string]any{
 			"codec":                session.Codec.Name,
 			"rtpPacketsReceived":   session.RTP.PacketsReceived.Load(),
-			"transcriptConfidence": transcript.Confidence,
+			"transcriptConfidence": result.transcript.Confidence,
 		},
 	})
 	if err != nil {
@@ -682,11 +696,19 @@ func (server *Server) sendText(ctx context.Context, session *CallSession, text s
 	if text == "" {
 		return nil
 	}
-	synthesisStartedAt := time.Now()
-	pcm, err := server.speechProvider.Synthesize(ctx, text, speech.SynthesisOptions{
+	options := speech.SynthesisOptions{
 		Locale: server.cfg.DefaultLocale,
 		Voice:  server.cfg.Gemini.TTSVoice,
-	})
+	}
+	if streamer, ok := server.speechProvider.(speech.StreamingProvider); ok {
+		if err := server.sendTextStream(ctx, session, streamer, text, options); err == nil {
+			return nil
+		} else if !errors.Is(err, errNoStreamedAudio) {
+			return err
+		}
+	}
+	synthesisStartedAt := time.Now()
+	pcm, err := server.speechProvider.Synthesize(ctx, text, options)
 	if err != nil {
 		return fmt.Errorf("synthesize: %w", err)
 	}
@@ -698,6 +720,54 @@ func (server *Server) sendText(ctx context.Context, session *CallSession, text s
 		"samples", len(pcm.Samples),
 	)
 	return server.sendPCM(ctx, session, pcm)
+}
+
+var errNoStreamedAudio = errors.New("no streamed audio")
+
+func (server *Server) sendTextStream(ctx context.Context, session *CallSession, streamer speech.StreamingProvider, text string, options speech.SynthesisOptions) error {
+	synthesisStartedAt := time.Now()
+	chunks := 0
+	samples := 0
+	err := streamer.SynthesizeStream(ctx, text, options, func(pcm speech.PCMBuffer) error {
+		if len(pcm.Samples) == 0 {
+			return nil
+		}
+		chunks++
+		samples += len(pcm.Samples)
+		if chunks == 1 {
+			server.logger.Info(
+				"assistant speech stream started",
+				"callId", session.CallID,
+				"firstChunkMs", time.Since(synthesisStartedAt).Milliseconds(),
+				"sampleRate", pcm.SampleRate,
+				"samples", len(pcm.Samples),
+			)
+		}
+		return server.sendPCM(ctx, session, pcm)
+	})
+	if err != nil {
+		if chunks == 0 {
+			server.logger.Warn(
+				"assistant speech stream failed before audio; falling back to buffered synthesis",
+				"callId", session.CallID,
+				"durationMs", time.Since(synthesisStartedAt).Milliseconds(),
+				"error", err,
+			)
+			return errNoStreamedAudio
+		}
+		return fmt.Errorf("stream synthesize: %w", err)
+	}
+	if chunks == 0 {
+		return errNoStreamedAudio
+	}
+	server.logger.Info(
+		"assistant speech stream completed",
+		"callId", session.CallID,
+		"durationMs", time.Since(synthesisStartedAt).Milliseconds(),
+		"chunks", chunks,
+		"samples", samples,
+	)
+	return nil
 }
 
 func turnReplyText(response turn.Response, locale string) string {

@@ -51,7 +51,8 @@ export function createGeminiGroundedAnswerGenerator(
                 "Use only the approved business knowledge supplied by the system. " +
                 `If the answer is not fully supported, return exactly ${NO_GROUNDED_ANSWER}. ` +
                 "Do not invent prices, addresses, policies, guarantees, or capabilities. " +
-                "Write a concise, natural phone answer in the caller's language.",
+                "Write a concise, natural phone answer in the caller's language. " +
+                "Prefer one short sentence under 25 words unless the approved answer requires more.",
             },
           ],
         },
@@ -64,7 +65,7 @@ export function createGeminiGroundedAnswerGenerator(
         generationConfig: {
           temperature: 0.1,
           topP: 0.8,
-          maxOutputTokens: 180,
+          maxOutputTokens: 90,
           thinkingConfig: {
             thinkingBudget: 0,
           },
