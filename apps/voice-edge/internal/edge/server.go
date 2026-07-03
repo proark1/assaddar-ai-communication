@@ -112,6 +112,7 @@ func (server *Server) Start(ctx context.Context) error {
 	}
 	server.registrarAddr = registrarAddr
 
+	go server.warmGreeting(ctx)
 	go server.registrationLoop(ctx)
 	return server.readLoop(ctx)
 }
@@ -248,7 +249,6 @@ func (server *Server) handleInvite(ctx context.Context, request sip.Message, rem
 			server.logger.Warn("rtp read loop ended with error", "callId", callID, "error", err)
 		}
 	}()
-	go server.warmGreeting(callCtx)
 	go server.answerAfterDelay(callCtx, session, request, remote)
 
 	server.logger.Info(
@@ -266,15 +266,21 @@ func (server *Server) answerAfterDelay(ctx context.Context, session *CallSession
 	if session == nil {
 		return
 	}
+	greetingReady := server.startGreetingWarmup(ctx)
 	if server.cfg.AnswerDelay > 0 {
 		server.markSessionPhase(session.CallID, "early-media")
 		server.sendProgress(request, remote, session)
-		if err := server.playRingback(ctx, session, server.cfg.AnswerDelay); err != nil {
+		if err := server.playRingbackUntilReady(ctx, session, server.cfg.AnswerDelay, greetingReady); err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return
 			}
 			server.logger.Warn("failed to play early media ringback", "callId", session.CallID, "error", err)
 		}
+	} else if err := waitForGreeting(ctx, greetingReady); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return
+		}
+		server.logger.Warn("failed to warm greeting before answer", "callId", session.CallID, "error", err)
 	}
 	select {
 	case <-ctx.Done():
@@ -317,12 +323,10 @@ func (server *Server) handleACK(callID string) {
 	go server.playGreeting(session.Context, session)
 }
 
-func (server *Server) playRingback(ctx context.Context, session *CallSession, duration time.Duration) error {
-	if session == nil || duration <= 0 {
-		return nil
-	}
+func (server *Server) playRingbackUntilReady(ctx context.Context, session *CallSession, minDuration time.Duration, ready <-chan error) error {
+	startedAt := time.Now()
 	if !session.processing.CompareAndSwap(false, true) {
-		return waitForDuration(ctx, duration)
+		return waitForMinimumAndGreeting(ctx, startedAt, minDuration, ready)
 	}
 	defer session.processing.Store(false)
 
@@ -334,9 +338,22 @@ func (server *Server) playRingback(ctx context.Context, session *CallSession, du
 	if frameSize <= 0 {
 		frameSize = 160
 	}
-	totalFrames := int((duration + rtpFrameDuration - 1) / rtpFrameDuration)
 	var sendErr error
-	for frameIndex := 0; frameIndex < totalFrames; frameIndex++ {
+	var greetingErr error
+	greetingReady := ready == nil
+	framesSent := 0
+	for {
+		if !greetingReady {
+			select {
+			case greetingErr = <-ready:
+				greetingReady = true
+			default:
+			}
+		}
+		if time.Since(startedAt) >= minDuration && greetingReady {
+			break
+		}
+		frameIndex := framesSent
 		if frameIndex > 0 {
 			if err := waitForDuration(ctx, rtpFrameDuration); err != nil {
 				return err
@@ -350,13 +367,17 @@ func (server *Server) playRingback(ctx context.Context, session *CallSession, du
 		if err := session.RTP.SendPayload(payload); err != nil && sendErr == nil {
 			sendErr = err
 		}
+		framesSent++
 	}
 	server.logger.Info(
 		"early media ringback sent",
 		"callId", session.CallID,
-		"frames", totalFrames,
-		"durationMs", duration.Milliseconds(),
+		"frames", framesSent,
+		"durationMs", time.Since(startedAt).Milliseconds(),
 	)
+	if greetingErr != nil {
+		return greetingErr
+	}
 	return sendErr
 }
 
@@ -405,6 +426,19 @@ func (server *Server) warmGreeting(ctx context.Context) {
 	if _, err := server.greetingPCMFor(ctx); err != nil {
 		server.logger.Warn("failed to warm greeting", "error", err)
 	}
+}
+
+func (server *Server) startGreetingWarmup(ctx context.Context) <-chan error {
+	done := make(chan error, 1)
+	go func() {
+		if strings.TrimSpace(server.cfg.GreetingText) == "" {
+			done <- nil
+			return
+		}
+		_, err := server.greetingPCMFor(ctx)
+		done <- err
+	}()
+	return done
 }
 
 func (server *Server) playGreeting(ctx context.Context, session *CallSession) {
@@ -647,6 +681,28 @@ func waitForDuration(ctx context.Context, duration time.Duration) error {
 	case <-timer.C:
 		return nil
 	}
+}
+
+func waitForGreeting(ctx context.Context, ready <-chan error) error {
+	if ready == nil {
+		return nil
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case err := <-ready:
+		return err
+	}
+}
+
+func waitForMinimumAndGreeting(ctx context.Context, startedAt time.Time, minDuration time.Duration, ready <-chan error) error {
+	remaining := minDuration - time.Since(startedAt)
+	if remaining > 0 {
+		if err := waitForDuration(ctx, remaining); err != nil {
+			return err
+		}
+	}
+	return waitForGreeting(ctx, ready)
 }
 
 func durationMillis(samples int, sampleRate int) int {

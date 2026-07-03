@@ -120,6 +120,59 @@ func TestHandleInviteAnswersAfterDelay(t *testing.T) {
 	}
 }
 
+func TestAnswerWaitsForGreetingWarmupWhileRingbackContinues(t *testing.T) {
+	cfg := testConfig()
+	cfg.AnswerDelay = 100 * time.Millisecond
+	cfg.GreetingDelay = 0
+	cfg.GreetingText = "Hallo."
+	server, err := New(cfg, nil)
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	provider := &countingSpeechProvider{
+		synthesis:      speech.PCMBuffer{SampleRate: 8000, Samples: testSamples(4000, 320)},
+		synthesisDelay: 250 * time.Millisecond,
+	}
+	server.speechProvider = provider
+
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatalf("ListenUDP returned error: %v", err)
+	}
+	defer conn.Close()
+	server.conn = conn
+
+	client, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatalf("client ListenUDP returned error: %v", err)
+	}
+	defer client.Close()
+
+	rtpReceiver, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatalf("rtp ListenUDP returned error: %v", err)
+	}
+	defer rtpReceiver.Close()
+	rtpPort := rtpReceiver.LocalAddr().(*net.UDPAddr).Port
+
+	request := mustParseSIP(t, inviteRaw("call-warmup", rtpPort, "8 PCMA/8000"))
+	server.handleInvite(testContext(t), request, client.LocalAddr().(*net.UDPAddr))
+	t.Cleanup(func() { server.endSession("call-warmup") })
+
+	immediate := strings.Join(readSIPResponses(t, client, 3), "\n")
+	if !strings.Contains(immediate, "SIP/2.0 183 Session Progress") {
+		t.Fatalf("expected early media response, got:\n%s", immediate)
+	}
+	if response, ok := readOptionalSIPResponse(t, client, 150*time.Millisecond); ok {
+		t.Fatalf("received answer before greeting warmup completed:\n%s", response)
+	}
+	_ = readRTPPacket(t, rtpReceiver, time.Second)
+	delayed := strings.Join(readSIPResponses(t, client, 1), "\n")
+	if !strings.Contains(delayed, "SIP/2.0 200 OK") {
+		t.Fatalf("expected answer after greeting warmup, got:\n%s", delayed)
+	}
+}
+
 func TestGreetingIsSentAfterACKWithoutInboundRTP(t *testing.T) {
 	cfg := testConfig()
 	cfg.AnswerDelay = 0
@@ -245,9 +298,10 @@ func testConfig() config.Config {
 }
 
 type countingSpeechProvider struct {
-	transcribes atomic.Int32
-	synthesizes atomic.Int32
-	synthesis   speech.PCMBuffer
+	transcribes    atomic.Int32
+	synthesizes    atomic.Int32
+	synthesis      speech.PCMBuffer
+	synthesisDelay time.Duration
 }
 
 func (provider *countingSpeechProvider) Transcribe(context.Context, speech.PCMBuffer) (speech.Transcript, error) {
@@ -255,8 +309,15 @@ func (provider *countingSpeechProvider) Transcribe(context.Context, speech.PCMBu
 	return speech.Transcript{}, nil
 }
 
-func (provider *countingSpeechProvider) Synthesize(context.Context, string, speech.SynthesisOptions) (speech.PCMBuffer, error) {
+func (provider *countingSpeechProvider) Synthesize(ctx context.Context, _ string, _ speech.SynthesisOptions) (speech.PCMBuffer, error) {
 	provider.synthesizes.Add(1)
+	if provider.synthesisDelay > 0 {
+		select {
+		case <-ctx.Done():
+			return speech.PCMBuffer{}, ctx.Err()
+		case <-time.After(provider.synthesisDelay):
+		}
+	}
 	return clonePCM(provider.synthesis), nil
 }
 
