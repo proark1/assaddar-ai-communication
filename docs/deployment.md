@@ -100,8 +100,21 @@ GEMINI_ANSWER_TIMEOUT_MS=12000
 ```
 
 Gemini is used only after approved knowledge has matched, so unsupported
-questions still route to handoff instead of freeform answers. OpenAI is optional
-for embeddings and legacy provider-backed paths:
+questions still route to handoff instead of freeform answers.
+
+Self-service billing:
+
+```text
+SELF_SERVICE_ONBOARDING_ENABLED=true
+STRIPE_SECRET_KEY=<stripe-secret-key>
+STRIPE_WEBHOOK_SECRET=<stripe-webhook-signing-secret>
+STRIPE_NUMBER_PRICE_ID=<recurring-eur-3-phone-number-price>
+STRIPE_ACCEPTED_CALL_PRICE_ID=<metered-accepted-call-price>
+STRIPE_ACCEPTED_CALL_METER_EVENT_NAME=accepted_call
+STRIPE_CUSTOMER_PORTAL_RETURN_URL=https://your-admin-domain
+```
+
+OpenAI is optional for embeddings and legacy provider-backed paths:
 
 ```text
 OPENAI_API_KEY=<only when provider-backed generation is enabled>

@@ -85,6 +85,29 @@ content-type: application/json
 
 Returns the tenant, including `id` and public `publicId`. The public ID is safe to expose in the widget. The internal tenant ID is not.
 
+## Self-Service Onboarding And Billing
+
+```http
+POST /onboarding/projects
+GET /onboarding/tenants/{tenantId}/phone-numbers
+POST /onboarding/tenants/{tenantId}/phone-number-reservations
+GET /onboarding/tenants/{tenantId}/state
+POST /billing/tenants/{tenantId}/checkout-sessions
+POST /billing/tenants/{tenantId}/customer-portal
+POST /webhooks/stripe
+```
+
+User-session tenants can create a `setup_pending` project, reserve an available platform phone number, and start Stripe Checkout. `checkout.session.completed` activates the reserved number, creates/updates the billing account and subscription, and enables the telephone channel. Accepted call usage is recorded idempotently and can be reported to Stripe Billing Meters through `POST /admin/tenants/{tenantId}/billing/accepted-calls`.
+
+Platform owners manage the available number pool with:
+
+```http
+GET /admin/telephone/numbers
+POST /admin/telephone/numbers
+PATCH /admin/telephone/numbers/{numberId}
+GET /admin/billing/overview
+```
+
 ## Add FAQ Knowledge
 
 ```http
@@ -99,6 +122,23 @@ content-type: application/json
 ```
 
 FAQ entries are stored as approved knowledge source, document, and chunk records under that tenant.
+
+## Project Brain & Learning Queue
+
+```http
+GET /admin/tenants/{tenantId}/brain
+GET /admin/tenants/{tenantId}/brain/onboarding
+PUT /admin/tenants/{tenantId}/brain/onboarding
+POST /admin/tenants/{tenantId}/knowledge/uploads
+GET /admin/tenants/{tenantId}/knowledge/ingestion-jobs
+GET /admin/tenants/{tenantId}/knowledge/suggestions?status=pending
+POST /admin/tenants/{tenantId}/knowledge/suggestions
+POST /admin/tenants/{tenantId}/knowledge/suggestions/scan
+POST /admin/tenants/{tenantId}/knowledge/suggestions/{suggestionId}/approve
+POST /admin/tenants/{tenantId}/knowledge/suggestions/{suggestionId}/reject
+```
+
+The project brain stores reusable tenant facts once and serves them to every channel through the approved knowledge base. Onboarding answers cover standard setup questions and can be published immediately. Document uploads accept text, Markdown, CSV, JSON, and text-based PDFs; extracted content is stored once and turned into pending review suggestions. Customer handoff gaps can be scanned into pending learning suggestions. Tenant admins review, edit, approve, or reject suggestions before they affect live answers.
 
 ## Test Assistant
 
@@ -160,7 +200,7 @@ GET /admin/tenants/{tenantId}/contacts
 GET /admin/tenants/{tenantId}/workflows/suggestions
 ```
 
-The dashboard endpoint returns the admin workspace bootstrap payload in one request. The production-readiness endpoint returns a conservative 0-100 score, blockers, and next actions across beta scope, provider delivery, voice, handoff operations, AI quality, security/GDPR, reliability, observability, onboarding, and SaaS controls. The inbox endpoint returns conversations enriched with contact profile, latest message, open handoffs, message count, and next action. Contacts are tenant-scoped profiles merged from channel IDs, email, phone, company, and lead form fields. Workflow suggestions are deterministic operational recommendations for handoffs, WhatsApp readiness, and contact completion.
+The dashboard endpoint returns the admin workspace bootstrap payload in one request. The production-readiness endpoint returns a conservative 0-100 score, blockers, and next actions across beta scope, provider delivery, voice, handoff operations, AI quality, security/GDPR, reliability, observability, onboarding, SaaS controls, and project brain coverage. The inbox endpoint returns conversations enriched with contact profile, latest message, open handoffs, message count, and next action. Contacts are tenant-scoped profiles merged from channel IDs, email, phone, company, and lead form fields. Workflow suggestions are deterministic operational recommendations for handoffs, WhatsApp readiness, contact completion, and pending brain learning reviews.
 
 ## WhatsApp Operations
 

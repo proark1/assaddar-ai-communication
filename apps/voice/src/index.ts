@@ -338,6 +338,15 @@ app.post(
         provider: body.provider,
       },
     });
+    await store.recordBillableAcceptedCall({
+      tenantId: tenant.id,
+      providerCallId: body.callId ?? conversation.publicId,
+      metadata: {
+        provider: body.provider,
+        from: body.from ?? null,
+        to: body.to ?? null,
+      },
+    });
 
     return {
       conversationId: conversation.id,
@@ -474,6 +483,17 @@ app.post("/twilio/voice", async (request, reply) => {
     metadata: {
       intent: answer.intent,
       confidence: answer.confidence,
+    },
+  });
+  await store.recordBillableAcceptedCall({
+    tenantId: tenant.id,
+    providerCallId:
+      event.externalConversationId ??
+      event.providerEventId ??
+      conversation.publicId,
+    metadata: {
+      provider: "twilio",
+      from: event.externalUserId ?? null,
     },
   });
 

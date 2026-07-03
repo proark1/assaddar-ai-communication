@@ -30,6 +30,7 @@ import { Readable } from "node:stream";
 import tls from "node:tls";
 import { promisify } from "node:util";
 import { z } from "zod";
+import type { BillingProvider, StripeWebhookEvent } from "./billing";
 import { openApiDocument } from "./openapi";
 import { AppError } from "./errors";
 import { MetricsRegistry, METRICS_CONTENT_TYPE } from "./metrics";
@@ -38,6 +39,7 @@ import type { SupabaseAuthProvider } from "./supabase-auth";
 import {
   ParamsTenantSchema,
   ParamsKnowledgeSchema,
+  ParamsKnowledgeSuggestionSchema,
   ParamsContactSchema,
   ParamsConversationSchema,
   ParamsHandoffSchema,
@@ -46,8 +48,14 @@ import {
   ParamsChannelSchema,
   PaginationQuerySchema,
   CreateTenantSchema,
+  OnboardingProjectSchema,
   UpdateTenantSchema,
   AddFaqSchema,
+  UpsertBrainOnboardingSchema,
+  CreateKnowledgeSuggestionSchema,
+  ReviewKnowledgeSuggestionSchema,
+  KnowledgeDocumentUploadSchema,
+  ScanKnowledgeSuggestionsSchema,
   UpdateHandoffSchema,
   TestAssistantSchema,
   WidgetChatSchema,
@@ -60,6 +68,12 @@ import {
   TelephoneNumberTypeSchema,
   TwilioNumberTypeSchema,
   TwilioNumberSearchQuerySchema,
+  OnboardingPhoneNumberQuerySchema,
+  ReservePhoneNumberSchema,
+  BillingCheckoutSessionSchema,
+  TelephoneNumberInventorySchema,
+  TelephoneNumberInventoryUpdateSchema,
+  BillableAcceptedCallSchema,
   PurchaseTwilioNumberSchema,
   ConnectExistingTwilioNumberSchema,
   NewTelephoneNumberSetupSchema,
@@ -76,6 +90,11 @@ import {
   type CreateTenantInput,
   type UpdateTenantInput,
   type AddFaqInput,
+  type UpsertBrainOnboardingInput,
+  type CreateKnowledgeSuggestionInput,
+  type ReviewKnowledgeSuggestionInput,
+  type KnowledgeDocumentUploadInput,
+  type ScanKnowledgeSuggestionsInput,
   type UpdateHandoffInput,
   type ChannelConnectionInput,
   type WhatsappTemplateInput,
@@ -85,6 +104,8 @@ import {
 } from "./schemas";
 
 const scryptAsync = promisify(scrypt);
+
+const DOCUMENT_UPLOAD_BODY_LIMIT_BYTES = 7 * 1024 * 1024;
 
 type ContactProfileInput = {
   displayName?: string | null;
@@ -153,9 +174,28 @@ export type PaginationOptions = {
   status?: string | undefined;
 };
 
+type ResolvedBilling = {
+  provider: BillingProvider;
+  numberPriceId: string;
+  acceptedCallPriceId?: string | undefined;
+  acceptedCallMeterEventName?: string | undefined;
+  customerPortalReturnUrl?: string | undefined;
+};
+
 export type PlatformStore = AnswerDataStore &
   HandoffStore & {
     createTenant(input: CreateTenantInput): Promise<unknown>;
+    createSelfServiceTenant(input: {
+      name: string;
+      slug: string;
+      owner: {
+        email: string;
+        name: string;
+        authUserId?: string | null | undefined;
+      };
+      defaultLocale?: string | undefined;
+      theme?: WidgetThemeInput | undefined;
+    }): Promise<unknown>;
     updateTenant(tenantId: string, input: UpdateTenantInput): Promise<unknown>;
     listTenants(): Promise<unknown[]>;
     listTenantsForUser(userId: string): Promise<unknown[]>;
@@ -226,6 +266,67 @@ export type PlatformStore = AnswerDataStore &
       tenantId: string,
       options?: PaginationOptions,
     ): Promise<unknown[]>;
+    getTenantBrainSummary(tenantId: string): Promise<unknown>;
+    listBrainOnboardingAnswers(tenantId: string): Promise<unknown[]>;
+    upsertBrainOnboardingAnswers(
+      tenantId: string,
+      input: UpsertBrainOnboardingInput,
+    ): Promise<unknown[]>;
+    listKnowledgeSuggestions(
+      tenantId: string,
+      options?: PaginationOptions,
+    ): Promise<unknown[]>;
+    listDocumentIngestionJobs(
+      tenantId: string,
+      options?: PaginationOptions,
+    ): Promise<unknown[]>;
+    recordDocumentIngestionFailure(
+      tenantId: string,
+      input: {
+        fileName: string;
+        contentType: string;
+        checksum?: string | null;
+        objectKey?: string | null;
+        error: string;
+        metadata?: Record<string, unknown>;
+      },
+    ): Promise<unknown>;
+    createKnowledgeSuggestion(
+      tenantId: string,
+      input: CreateKnowledgeSuggestionInput,
+    ): Promise<unknown>;
+    ingestKnowledgeDocument(
+      tenantId: string,
+      input: {
+        fileName: string;
+        contentType: string;
+        extractedText: string;
+        checksum?: string | null;
+        objectKey?: string | null;
+        sourceName?: string;
+        suggestedTags?: string[];
+        metadata?: Record<string, unknown>;
+        maxSuggestions?: number;
+      },
+    ): Promise<unknown>;
+    scanKnowledgeSuggestions(
+      tenantId: string,
+      input?: ScanKnowledgeSuggestionsInput,
+    ): Promise<unknown>;
+    approveKnowledgeSuggestion(
+      tenantId: string,
+      suggestionId: string,
+      input?: ReviewKnowledgeSuggestionInput & {
+        reviewedByUserId?: string | null;
+      },
+    ): Promise<unknown>;
+    rejectKnowledgeSuggestion(
+      tenantId: string,
+      suggestionId: string,
+      input?: ReviewKnowledgeSuggestionInput & {
+        reviewedByUserId?: string | null;
+      },
+    ): Promise<unknown>;
     listConversations(
       tenantId: string,
       options?: PaginationOptions,
@@ -252,6 +353,137 @@ export type PlatformStore = AnswerDataStore &
       tenantId: string,
       input: ChannelConnectionInput,
     ): Promise<unknown>;
+    listAvailableTelephoneNumbers(options?: {
+      country?: string | undefined;
+      locality?: string | undefined;
+      numberType?: string | undefined;
+      limit?: number | undefined;
+    }): Promise<unknown[]>;
+    listTelephoneNumberInventory(): Promise<unknown[]>;
+    createTelephoneNumberInventory(input: {
+      provider?: z.infer<typeof TelephoneProviderSchema> | undefined;
+      phoneNumber: string;
+      country?: string | undefined;
+      locality?: string | null | undefined;
+      numberType?: z.infer<typeof TelephoneNumberTypeSchema> | undefined;
+      sipTarget?: string | null | undefined;
+      assistantId?: string | null | undefined;
+      status?:
+        | "available"
+        | "reserved"
+        | "assigned"
+        | "suspended"
+        | "retired"
+        | undefined;
+      assignedTenantId?: string | null | undefined;
+      metadata?: Record<string, unknown> | undefined;
+    }): Promise<unknown>;
+    updateTelephoneNumberInventory(
+      numberId: string,
+      input: {
+        provider?: z.infer<typeof TelephoneProviderSchema> | undefined;
+        phoneNumber?: string | undefined;
+        country?: string | undefined;
+        locality?: string | null | undefined;
+        numberType?: z.infer<typeof TelephoneNumberTypeSchema> | undefined;
+        sipTarget?: string | null | undefined;
+        assistantId?: string | null | undefined;
+        status?:
+          | "available"
+          | "reserved"
+          | "assigned"
+          | "suspended"
+          | "retired"
+          | undefined;
+        assignedTenantId?: string | null | undefined;
+        metadata?: Record<string, unknown> | undefined;
+      },
+    ): Promise<unknown>;
+    createTelephoneNumberReservation(
+      tenantId: string,
+      input: {
+        numberId: string;
+        userId?: string | null;
+        expiresAt?: Date;
+      },
+    ): Promise<unknown>;
+    getActiveTelephoneNumberReservation(tenantId: string): Promise<unknown>;
+    getBillingAccount(tenantId: string): Promise<{
+      id: string;
+      stripeCustomerId?: string | null;
+      status: string;
+    } | null>;
+    getOrCreateBillingAccount(
+      tenantId: string,
+      input?: {
+        stripeCustomerId?: string | null;
+        status?: string;
+        defaultCurrency?: string;
+        metadata?: Record<string, unknown>;
+      },
+    ): Promise<{
+      id: string;
+      stripeCustomerId?: string | null;
+      status: string;
+    }>;
+    upsertBillingSubscription(
+      tenantId: string,
+      input: {
+        billingAccountId: string;
+        stripeSubscriptionId?: string | null;
+        stripePriceId?: string | null;
+        status: string;
+        currentPeriodStart?: Date | null;
+        currentPeriodEnd?: Date | null;
+        metadata?: Record<string, unknown>;
+      },
+    ): Promise<unknown>;
+    activateReservedTelephoneNumber(input: {
+      tenantId: string;
+      reservationId: string;
+      stripeCustomerId: string;
+      stripeSubscriptionId?: string | null;
+      stripePriceId?: string | null;
+      subscriptionStatus: string;
+      currentPeriodStart?: Date | null;
+      currentPeriodEnd?: Date | null;
+      metadata?: Record<string, unknown>;
+    }): Promise<unknown>;
+    getOnboardingState(tenantId: string): Promise<unknown>;
+    getPlatformBillingOverview(): Promise<unknown>;
+    recordStripeWebhookEvent(input: {
+      stripeEventId: string;
+      eventType: string;
+      tenantId?: string | null;
+      payload: Record<string, unknown>;
+    }): Promise<{ event: { id: string; status: string }; duplicate: boolean }>;
+    markStripeWebhookEventProcessed(eventId: string): Promise<void>;
+    markStripeWebhookEventFailed(eventId: string, error: string): Promise<void>;
+    recordBillableAcceptedCall(input: {
+      tenantId: string;
+      providerCallId: string;
+      quantity?: number | undefined;
+      unitAmountCents?: number | undefined;
+      metadata?: Record<string, unknown> | undefined;
+    }): Promise<{
+      event: {
+        id: string;
+        providerCallId: string;
+        quantity: number;
+        status: string;
+      };
+      duplicate: boolean;
+    }>;
+    markBillableUsageReported(
+      tenantId: string,
+      eventId: string,
+      stripeMeterEventId: string,
+    ): Promise<void>;
+    markBillableUsageFailed(
+      tenantId: string,
+      eventId: string,
+      detail: string,
+    ): Promise<void>;
     getTenantByChannelConnection(
       channel: Channel,
       provider: string,
@@ -404,6 +636,14 @@ export type BuildServerOptions = {
   messengerPageAccessToken?: string;
   twilioAccountSid?: string;
   twilioAuthToken?: string;
+  billingProvider?: BillingProvider;
+  billing?: {
+    selfServiceEnabled?: boolean;
+    numberPriceId?: string;
+    acceptedCallPriceId?: string;
+    acceptedCallMeterEventName?: string;
+    customerPortalReturnUrl?: string;
+  };
   /**
    * Optional query embedder. When supplied, the answer engine runs hybrid
    * keyword + semantic retrieval. Omitted in keyword-only mode.
@@ -525,6 +765,7 @@ export async function buildServer(
     // any client spoof its IP. In production set TRUST_PROXY=1 (one known proxy)
     // or a CIDR allowlist — never `true` unless every hop is trusted.
     trustProxy: parseTrustProxy(process.env.TRUST_PROXY),
+    bodyLimit: DOCUMENT_UPLOAD_BODY_LIMIT_BYTES,
     logger: {
       level: process.env.LOG_LEVEL ?? "info",
       // Never write credentials into logs.
@@ -785,6 +1026,255 @@ export async function buildServer(
     }
     return buildUserSessionPayload(session);
   });
+
+  app.post(
+    "/onboarding/projects",
+    { preHandler: requireAuth(options) },
+    async (request, reply) => {
+      const auth = getRequestAuth(request);
+      if (auth.kind !== "user") {
+        return reply.code(403).send({ error: "User login required." });
+      }
+      const body = OnboardingProjectSchema.parse(request.body);
+      const tenant = await options.store.createSelfServiceTenant({
+        name: body.name,
+        slug: body.slug,
+        owner: {
+          email: auth.user.email,
+          name: auth.user.name,
+          authUserId: auth.sessionId.startsWith("supabase:")
+            ? auth.sessionId.slice("supabase:".length)
+            : null,
+        },
+        defaultLocale: body.defaultLocale,
+        ...(body.theme ? { theme: body.theme } : {}),
+      });
+      return reply.code(201).send(tenant);
+    },
+  );
+
+  app.get(
+    "/onboarding/tenants/:tenantId/phone-numbers",
+    { preHandler: requireTenantAccess(options, "tenant_admin") },
+    async (request) => {
+      const query = OnboardingPhoneNumberQuerySchema.parse(request.query);
+      const numbers = await options.store.listAvailableTelephoneNumbers(query);
+      return {
+        currency: "eur",
+        numberMonthlyPriceCents: 300,
+        acceptedCallPriceCents: 10,
+        numbers,
+      };
+    },
+  );
+
+  app.post(
+    "/onboarding/tenants/:tenantId/phone-number-reservations",
+    { preHandler: requireTenantAccess(options, "tenant_admin") },
+    async (request, reply) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      const body = ReservePhoneNumberSchema.parse(request.body);
+      const auth = getRequestAuth(request);
+      const reservation = await options.store.createTelephoneNumberReservation(
+        tenantId,
+        {
+          numberId: body.numberId,
+          userId: auth.kind === "user" ? auth.user.id : null,
+        },
+      );
+      return reply.code(201).send(reservation);
+    },
+  );
+
+  app.get(
+    "/onboarding/tenants/:tenantId/state",
+    { preHandler: requireTenantAccess(options, "viewer") },
+    async (request) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      return options.store.getOnboardingState(tenantId);
+    },
+  );
+
+  app.post(
+    "/billing/tenants/:tenantId/checkout-sessions",
+    { preHandler: requireTenantAccess(options, "tenant_owner") },
+    async (request, reply) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      const body = BillingCheckoutSessionSchema.parse(request.body);
+      const auth = getRequestAuth(request);
+      if (auth.kind !== "user") {
+        return reply.code(403).send({ error: "User login required." });
+      }
+      const billing = requireBilling(options, reply);
+      if (!billing) {
+        return reply;
+      }
+      const reservation =
+        await options.store.getActiveTelephoneNumberReservation(tenantId);
+      const reservationRecord = asRecord(reservation);
+      if (!reservationRecord?.id) {
+        return reply
+          .code(400)
+          .send({ error: "Reserve a telephone number before checkout." });
+      }
+      const account = await ensureStripeCustomerForTenant({
+        options,
+        tenantId,
+        auth,
+      });
+      const session = await billing.provider.createCheckoutSession({
+        customerId: account.stripeCustomerId,
+        successUrl:
+          body.successUrl ??
+          buildAdminReturnUrl(options, `/?tenant=${tenantId}&billing=success`),
+        cancelUrl:
+          body.cancelUrl ??
+          buildAdminReturnUrl(options, `/?tenant=${tenantId}&billing=cancel`),
+        numberPriceId: billing.numberPriceId,
+        acceptedCallPriceId: billing.acceptedCallPriceId,
+        metadata: {
+          tenant_id: tenantId,
+          reservation_id: String(reservationRecord.id),
+          number_id: String(reservationRecord.numberId ?? ""),
+          billing_mode: "phone_ai_v1",
+        },
+      });
+      return { checkoutSessionId: session.id, url: session.url };
+    },
+  );
+
+  app.post(
+    "/billing/tenants/:tenantId/customer-portal",
+    { preHandler: requireTenantAccess(options, "tenant_owner") },
+    async (request, reply) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      const billing = requireBilling(options, reply);
+      if (!billing) {
+        return reply;
+      }
+      const account = await options.store.getBillingAccount(tenantId);
+      if (!account?.stripeCustomerId) {
+        return reply
+          .code(400)
+          .send({ error: "Stripe customer is not configured." });
+      }
+      const session = await billing.provider.createCustomerPortalSession({
+        customerId: account.stripeCustomerId,
+        returnUrl:
+          billing.customerPortalReturnUrl ??
+          buildAdminReturnUrl(options, `/?tenant=${tenantId}&billing=portal`),
+      });
+      return { url: session.url };
+    },
+  );
+
+  app.post(
+    "/webhooks/stripe",
+    {
+      preParsing: async (request, _reply, payload) => {
+        const chunks: Buffer[] = [];
+        for await (const chunk of payload) {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        }
+        const raw = Buffer.concat(chunks);
+        (request as RequestWithRawBody).rawBody = raw;
+        return Readable.from([raw]);
+      },
+    },
+    async (request, reply) => {
+      const billing = requireBilling(options, reply);
+      if (!billing) {
+        return reply;
+      }
+      let event: StripeWebhookEvent;
+      try {
+        event = billing.provider.verifyWebhook({
+          rawBody: (request as RequestWithRawBody).rawBody ?? Buffer.alloc(0),
+          signatureHeader: firstHeader(request.headers["stripe-signature"]),
+        });
+      } catch (error) {
+        return reply.code(400).send({
+          error:
+            error instanceof Error ? error.message : "Invalid Stripe webhook.",
+        });
+      }
+
+      const tenantId = stripeObjectMetadata(event).tenant_id;
+      const recorded = await options.store.recordStripeWebhookEvent({
+        stripeEventId: event.id,
+        eventType: event.type,
+        tenantId: typeof tenantId === "string" ? tenantId : null,
+        payload: event as unknown as Record<string, unknown>,
+      });
+      if (recorded.duplicate) {
+        return { received: true, duplicate: true };
+      }
+
+      try {
+        await processStripeWebhookEvent(options, billing, event);
+        await options.store.markStripeWebhookEventProcessed(recorded.event.id);
+        return { received: true };
+      } catch (error) {
+        await options.store.markStripeWebhookEventFailed(
+          recorded.event.id,
+          error instanceof Error ? error.message : "Stripe webhook failed.",
+        );
+        throw error;
+      }
+    },
+  );
+
+  app.get(
+    "/admin/billing/overview",
+    { preHandler: requirePlatformOwner(options) },
+    async () => options.store.getPlatformBillingOverview(),
+  );
+
+  app.get(
+    "/admin/telephone/numbers",
+    { preHandler: requirePlatformOwner(options) },
+    async () => options.store.listTelephoneNumberInventory(),
+  );
+
+  app.post(
+    "/admin/telephone/numbers",
+    { preHandler: requirePlatformOwner(options) },
+    async (request, reply) => {
+      const body = TelephoneNumberInventorySchema.parse(request.body);
+      const number = await options.store.createTelephoneNumberInventory(body);
+      return reply.code(201).send(number);
+    },
+  );
+
+  app.patch(
+    "/admin/telephone/numbers/:numberId",
+    { preHandler: requirePlatformOwner(options) },
+    async (request) => {
+      const { numberId } = z
+        .object({ numberId: z.string().uuid() })
+        .parse(request.params);
+      const body = TelephoneNumberInventoryUpdateSchema.parse(request.body);
+      return options.store.updateTelephoneNumberInventory(numberId, body);
+    },
+  );
+
+  app.post(
+    "/admin/tenants/:tenantId/billing/accepted-calls",
+    { preHandler: requireTenantAccess(options, "tenant_admin") },
+    async (request) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      const body = BillableAcceptedCallSchema.parse(request.body);
+      const recorded = await options.store.recordBillableAcceptedCall({
+        tenantId,
+        providerCallId: body.providerCallId,
+        quantity: body.quantity,
+        unitAmountCents: body.unitAmountCents,
+        ...(body.metadata ? { metadata: body.metadata } : {}),
+      });
+      await reportBillableUsageToStripe(options, tenantId, recorded.event);
+      return recorded;
+    },
+  );
 
   app.get(
     "/admin/session",
@@ -1437,6 +1927,173 @@ export async function buildServer(
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const pagination = PaginationQuerySchema.parse(request.query);
       return options.store.listKnowledge(tenantId, pagination);
+    },
+  );
+
+  app.get(
+    "/admin/tenants/:tenantId/brain",
+    { preHandler: requireTenantAccess(options, "viewer") },
+    async (request) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      return options.store.getTenantBrainSummary(tenantId);
+    },
+  );
+
+  app.get(
+    "/admin/tenants/:tenantId/brain/onboarding",
+    { preHandler: requireTenantAccess(options, "viewer") },
+    async (request) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      return options.store.listBrainOnboardingAnswers(tenantId);
+    },
+  );
+
+  app.put(
+    "/admin/tenants/:tenantId/brain/onboarding",
+    { preHandler: requireTenantAccess(options, "tenant_admin") },
+    async (request) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      const body = UpsertBrainOnboardingSchema.parse(request.body);
+      return options.store.upsertBrainOnboardingAnswers(tenantId, body);
+    },
+  );
+
+  app.get(
+    "/admin/tenants/:tenantId/knowledge/suggestions",
+    { preHandler: requireTenantAccess(options, "viewer") },
+    async (request) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      const pagination = PaginationQuerySchema.parse(request.query);
+      return options.store.listKnowledgeSuggestions(tenantId, pagination);
+    },
+  );
+
+  app.get(
+    "/admin/tenants/:tenantId/knowledge/ingestion-jobs",
+    { preHandler: requireTenantAccess(options, "viewer") },
+    async (request) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      const pagination = PaginationQuerySchema.parse(request.query);
+      return options.store.listDocumentIngestionJobs(tenantId, pagination);
+    },
+  );
+
+  app.post(
+    "/admin/tenants/:tenantId/knowledge/uploads",
+    { preHandler: requireTenantAccess(options, "tenant_admin") },
+    async (request, reply) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      const body = KnowledgeDocumentUploadSchema.parse(request.body);
+      const decoded = decodeKnowledgeUpload(body);
+      let extracted: ExtractedKnowledgeUploadText;
+      try {
+        extracted = extractUploadedKnowledgeText(body, decoded);
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Document extraction failed.";
+        const job = await options.store.recordDocumentIngestionFailure(
+          tenantId,
+          {
+            fileName: body.fileName,
+            contentType: body.contentType,
+            checksum: decoded.checksum,
+            error: message,
+            metadata: {
+              ...(body.metadata ?? {}),
+              originalBytes: decoded.bytes,
+            },
+          },
+        );
+        return reply.code(400).send({
+          error: message,
+          code: "document_parse_failed",
+          job,
+        });
+      }
+      const uploadInput: Parameters<
+        PlatformStore["ingestKnowledgeDocument"]
+      >[1] = {
+        fileName: body.fileName,
+        contentType: body.contentType,
+        extractedText: extracted.text,
+        checksum: extracted.checksum,
+        metadata: {
+          ...(body.metadata ?? {}),
+          parser: extracted.parser,
+          originalBytes: extracted.bytes,
+        },
+      };
+      if (body.suggestedTags) {
+        uploadInput.suggestedTags = body.suggestedTags;
+      }
+      if (body.maxSuggestions) {
+        uploadInput.maxSuggestions = body.maxSuggestions;
+      }
+      const result = await options.store.ingestKnowledgeDocument(
+        tenantId,
+        uploadInput,
+      );
+      return reply.code(201).send(result);
+    },
+  );
+
+  app.post(
+    "/admin/tenants/:tenantId/knowledge/suggestions",
+    { preHandler: requireTenantAccess(options, "tenant_admin") },
+    async (request, reply) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      const body = CreateKnowledgeSuggestionSchema.parse(request.body);
+      const result = await options.store.createKnowledgeSuggestion(
+        tenantId,
+        body,
+      );
+      return reply.code(201).send(result);
+    },
+  );
+
+  app.post(
+    "/admin/tenants/:tenantId/knowledge/suggestions/scan",
+    { preHandler: requireTenantAccess(options, "tenant_admin") },
+    async (request) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      const body = ScanKnowledgeSuggestionsSchema.parse(request.body ?? {});
+      return options.store.scanKnowledgeSuggestions(tenantId, body);
+    },
+  );
+
+  app.post(
+    "/admin/tenants/:tenantId/knowledge/suggestions/:suggestionId/approve",
+    { preHandler: requireTenantAccess(options, "tenant_admin") },
+    async (request) => {
+      const { tenantId, suggestionId } = ParamsKnowledgeSuggestionSchema.parse(
+        request.params,
+      );
+      const body = ReviewKnowledgeSuggestionSchema.parse(request.body ?? {});
+      const auth = getRequestAuth(request);
+      const reviewedByUserId = auth.kind === "user" ? auth.user.id : null;
+      return options.store.approveKnowledgeSuggestion(tenantId, suggestionId, {
+        ...body,
+        reviewedByUserId,
+      });
+    },
+  );
+
+  app.post(
+    "/admin/tenants/:tenantId/knowledge/suggestions/:suggestionId/reject",
+    { preHandler: requireTenantAccess(options, "tenant_admin") },
+    async (request) => {
+      const { tenantId, suggestionId } = ParamsKnowledgeSuggestionSchema.parse(
+        request.params,
+      );
+      const body = ReviewKnowledgeSuggestionSchema.parse(request.body ?? {});
+      const auth = getRequestAuth(request);
+      const reviewedByUserId = auth.kind === "user" ? auth.user.id : null;
+      return options.store.rejectKnowledgeSuggestion(tenantId, suggestionId, {
+        ...body,
+        reviewedByUserId,
+      });
     },
   );
 
@@ -3035,6 +3692,227 @@ function highestUserRole(memberships: StoreTenantMembership[]) {
   );
 }
 
+function requireBilling(
+  options: BuildServerOptions,
+  reply: FastifyReply,
+): ResolvedBilling | null {
+  if (options.billing?.selfServiceEnabled === false) {
+    reply.code(503).send({ error: "Self-service onboarding is disabled." });
+    return null;
+  }
+  if (!options.billingProvider || !options.billing?.numberPriceId) {
+    reply.code(503).send({ error: "Stripe billing is not configured." });
+    return null;
+  }
+  return {
+    provider: options.billingProvider,
+    numberPriceId: options.billing.numberPriceId,
+    acceptedCallPriceId: options.billing.acceptedCallPriceId,
+    acceptedCallMeterEventName: options.billing.acceptedCallMeterEventName,
+    customerPortalReturnUrl: options.billing.customerPortalReturnUrl,
+  };
+}
+
+async function ensureStripeCustomerForTenant(input: {
+  options: BuildServerOptions;
+  tenantId: string;
+  auth: Extract<RequestAuth, { kind: "user" }>;
+}) {
+  const existing = await input.options.store.getBillingAccount(input.tenantId);
+  if (existing?.stripeCustomerId) {
+    return {
+      ...existing,
+      stripeCustomerId: existing.stripeCustomerId,
+    };
+  }
+  if (!input.options.billingProvider) {
+    throw new Error("Stripe billing is not configured.");
+  }
+  const customer = await input.options.billingProvider.createCustomer({
+    email: input.auth.user.email,
+    name: input.auth.user.name,
+    metadata: {
+      tenant_id: input.tenantId,
+      user_id: input.auth.user.id,
+    },
+  });
+  const account = await input.options.store.getOrCreateBillingAccount(
+    input.tenantId,
+    {
+      stripeCustomerId: customer.id,
+      status: "incomplete",
+      metadata: {
+        createdByUserId: input.auth.user.id,
+      },
+    },
+  );
+  if (!account.stripeCustomerId) {
+    throw new Error("Failed to save Stripe customer.");
+  }
+  return {
+    ...account,
+    stripeCustomerId: account.stripeCustomerId,
+  };
+}
+
+async function processStripeWebhookEvent(
+  options: BuildServerOptions,
+  billing: ResolvedBilling,
+  event: StripeWebhookEvent,
+) {
+  const object = event.data.object;
+  const metadata = stripeObjectMetadata(event);
+  if (event.type === "checkout.session.completed") {
+    const tenantId = metadata.tenant_id;
+    const reservationId = metadata.reservation_id;
+    const stripeCustomerId = stringValue(object.customer);
+    if (!tenantId || !reservationId || !stripeCustomerId) {
+      throw new Error(
+        "Stripe checkout session is missing activation metadata.",
+      );
+    }
+    await options.store.activateReservedTelephoneNumber({
+      tenantId,
+      reservationId,
+      stripeCustomerId,
+      stripeSubscriptionId: stringValue(object.subscription),
+      stripePriceId: billing.numberPriceId,
+      subscriptionStatus:
+        stringValue(object.subscription_status) ??
+        (stringValue(object.payment_status) === "paid"
+          ? "active"
+          : "incomplete"),
+      metadata: {
+        stripeCheckoutSessionId: stringValue(object.id) ?? event.id,
+      },
+    });
+    return;
+  }
+
+  if (
+    event.type === "customer.subscription.updated" ||
+    event.type === "customer.subscription.deleted"
+  ) {
+    const tenantId = metadata.tenant_id;
+    const stripeCustomerId = stringValue(object.customer);
+    if (!tenantId || !stripeCustomerId) {
+      return;
+    }
+    const subscriptionStatus =
+      event.type === "customer.subscription.deleted"
+        ? "canceled"
+        : (stringValue(object.status) ?? "incomplete");
+    const account = await options.store.getOrCreateBillingAccount(tenantId, {
+      stripeCustomerId,
+      status: billingAccountStatusFromStripe(subscriptionStatus),
+      metadata: {
+        lastStripeEventId: event.id,
+      },
+    });
+    await options.store.upsertBillingSubscription(tenantId, {
+      billingAccountId: account.id,
+      stripeSubscriptionId: stringValue(object.id),
+      stripePriceId: billing.numberPriceId,
+      status: subscriptionStatus,
+      currentPeriodStart: stripeUnixDate(object.current_period_start),
+      currentPeriodEnd: stripeUnixDate(object.current_period_end),
+      metadata: {
+        lastStripeEventId: event.id,
+      },
+    });
+  }
+}
+
+async function reportBillableUsageToStripe(
+  options: BuildServerOptions,
+  tenantId: string,
+  event: {
+    id: string;
+    providerCallId: string;
+    quantity: number;
+    status: string;
+  },
+) {
+  if (event.status === "reported") {
+    return;
+  }
+  const eventName = options.billing?.acceptedCallMeterEventName;
+  if (!options.billingProvider || !eventName) {
+    return;
+  }
+  const account = await options.store.getBillingAccount(tenantId);
+  if (!account?.stripeCustomerId) {
+    return;
+  }
+
+  try {
+    const meterEvent = await options.billingProvider.reportMeterEvent({
+      eventName,
+      customerId: account.stripeCustomerId,
+      value: event.quantity,
+      identifier: `call_${event.id}`,
+      metadata: {
+        tenant_id: tenantId,
+        provider_call_id: event.providerCallId,
+      },
+    });
+    await options.store.markBillableUsageReported(
+      tenantId,
+      event.id,
+      meterEvent.id,
+    );
+  } catch (error) {
+    await options.store.markBillableUsageFailed(
+      tenantId,
+      event.id,
+      error instanceof Error ? error.message : "Stripe meter report failed.",
+    );
+    throw error;
+  }
+}
+
+function stripeObjectMetadata(event: StripeWebhookEvent) {
+  const metadata = event.data.object.metadata;
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return {} as Record<string, string>;
+  }
+  return Object.fromEntries(
+    Object.entries(metadata).filter(
+      (entry): entry is [string, string] => typeof entry[1] === "string",
+    ),
+  );
+}
+
+function billingAccountStatusFromStripe(status: string) {
+  if (status === "active" || status === "trialing") {
+    return "active";
+  }
+  if (status === "past_due" || status === "unpaid" || status === "incomplete") {
+    return "past_due";
+  }
+  if (status === "canceled" || status === "incomplete_expired") {
+    return "canceled";
+  }
+  return "incomplete";
+}
+
+function stripeUnixDate(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value)
+    ? new Date(value * 1000)
+    : null;
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function buildAdminReturnUrl(options: BuildServerOptions, path: string) {
+  return new URL(
+    path,
+    options.adminPublicUrl ?? defaultAdminPublicUrl,
+  ).toString();
+}
+
 type TwilioCredentials = {
   accountSid: string;
   authToken: string;
@@ -3970,6 +4848,198 @@ function getPermissions(role: LegacyAdminRole | RoleName) {
     ],
   };
   return permissions[role];
+}
+
+type DecodedKnowledgeUpload = {
+  buffer: Buffer;
+  checksum: string;
+  bytes: number;
+};
+
+type ExtractedKnowledgeUploadText = {
+  text: string;
+  checksum: string;
+  parser: string;
+  bytes: number;
+};
+
+function decodeKnowledgeUpload(
+  input: KnowledgeDocumentUploadInput,
+): DecodedKnowledgeUpload {
+  const cleaned = input.contentBase64
+    .replace(/^data:[^;]+;base64,/i, "")
+    .replace(/\s/g, "");
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(cleaned)) {
+    throw new AppError(
+      400,
+      "invalid_document_upload",
+      "Document content must be base64 encoded.",
+    );
+  }
+  const buffer = Buffer.from(cleaned, "base64");
+  if (buffer.byteLength === 0) {
+    throw new AppError(
+      400,
+      "invalid_document_upload",
+      "Document upload is empty.",
+    );
+  }
+  if (buffer.byteLength > 5 * 1024 * 1024) {
+    throw new AppError(
+      400,
+      "document_too_large",
+      "Document upload must be 5 MB or smaller.",
+    );
+  }
+  return {
+    buffer,
+    checksum: createHash("sha256").update(buffer).digest("hex"),
+    bytes: buffer.byteLength,
+  };
+}
+
+function extractUploadedKnowledgeText(
+  input: KnowledgeDocumentUploadInput,
+  decoded: DecodedKnowledgeUpload,
+): ExtractedKnowledgeUploadText {
+  const contentType = input.contentType.toLowerCase();
+  const fileName = input.fileName.toLowerCase();
+  const isPdf =
+    contentType.includes("application/pdf") || fileName.endsWith(".pdf");
+  const isText =
+    contentType.startsWith("text/") ||
+    contentType.includes("json") ||
+    contentType.includes("csv") ||
+    /\.(txt|md|markdown|csv|json)$/i.test(input.fileName);
+
+  const text = isPdf
+    ? extractTextFromSimplePdf(decoded.buffer)
+    : isText
+      ? decoded.buffer.toString("utf8")
+      : "";
+  if (!text) {
+    throw new AppError(
+      400,
+      "unsupported_document_type",
+      "Only text, Markdown, CSV, JSON, and text-based PDFs are supported.",
+    );
+  }
+  const normalized = normalizeUploadedText(text);
+  if (normalized.length < 20) {
+    throw new AppError(
+      400,
+      "document_parse_failed",
+      "Document extraction produced too little readable text.",
+    );
+  }
+  return {
+    text: normalized,
+    checksum: decoded.checksum,
+    parser: isPdf ? "simple_pdf_text" : "plain_text",
+    bytes: decoded.bytes,
+  };
+}
+
+function normalizeUploadedText(value: string) {
+  return value
+    .split(String.fromCharCode(0))
+    .join("")
+    .replace(/\r\n/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
+function extractTextFromSimplePdf(buffer: Buffer) {
+  const source = buffer.toString("latin1");
+  const streamMatches = Array.from(
+    source.matchAll(/stream\r?\n([\s\S]*?)\r?\nendstream/g),
+  ).map((match) => match[1] ?? "");
+  const candidates = streamMatches.length ? streamMatches : [source];
+  const text = candidates
+    .flatMap((candidate) => extractPdfTextOperators(candidate))
+    .join("\n");
+  const normalized = normalizeUploadedText(text);
+  if (!normalized) {
+    throw new AppError(
+      400,
+      "document_parse_failed",
+      "This PDF does not expose readable text. Upload a text PDF or OCR export.",
+    );
+  }
+  return normalized;
+}
+
+function extractPdfTextOperators(source: string): string[] {
+  const output: string[] = [];
+  for (const match of source.matchAll(/\(((?:\\.|[^\\)])*)\)\s*(?:Tj|'|")/g)) {
+    output.push(decodePdfLiteralString(match[1] ?? ""));
+  }
+  for (const match of source.matchAll(/\[((?:.|\n|\r)*?)\]\s*TJ/g)) {
+    const arraySource = match[1] ?? "";
+    const parts = Array.from(
+      arraySource.matchAll(/\(((?:\\.|[^\\)])*)\)/g),
+    ).map((part) => decodePdfLiteralString(part[1] ?? ""));
+    if (parts.length) {
+      output.push(parts.join(""));
+    }
+  }
+  for (const match of source.matchAll(/<([0-9A-Fa-f\s]{4,})>\s*Tj/g)) {
+    output.push(decodePdfHexString(match[1] ?? ""));
+  }
+  return output.map((item) => item.trim()).filter(Boolean);
+}
+
+function decodePdfLiteralString(value: string) {
+  let output = "";
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if (char !== "\\") {
+      output += char;
+      continue;
+    }
+    const next = value[index + 1];
+    if (!next) {
+      continue;
+    }
+    if (next === "n") {
+      output += "\n";
+    } else if (next === "r") {
+      output += "\r";
+    } else if (next === "t") {
+      output += "\t";
+    } else if (next === "b") {
+      output += "\b";
+    } else if (next === "f") {
+      output += "\f";
+    } else if (/[0-7]/.test(next)) {
+      const octal = value.slice(index + 1).match(/^[0-7]{1,3}/)?.[0] ?? next;
+      output += String.fromCharCode(Number.parseInt(octal, 8));
+      index += octal.length;
+      continue;
+    } else {
+      output += next;
+    }
+    index += 1;
+  }
+  return output;
+}
+
+function decodePdfHexString(value: string) {
+  const hex = value.replace(/\s/g, "");
+  if (hex.length < 2 || hex.length % 2 !== 0) {
+    return "";
+  }
+  const bytes = Buffer.from(hex, "hex");
+  if (bytes[0] === 0xfe && bytes[1] === 0xff) {
+    const chars: string[] = [];
+    for (let index = 2; index + 1 < bytes.length; index += 2) {
+      chars.push(String.fromCharCode(bytes.readUInt16BE(index)));
+    }
+    return chars.join("");
+  }
+  return bytes.toString("latin1");
 }
 
 async function crawlTextDocuments(url: string, maxPages: number) {

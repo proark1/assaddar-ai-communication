@@ -57,6 +57,32 @@ export type KnowledgeItem = {
   };
 };
 
+export type KnowledgeSuggestion = {
+  id: string;
+  sourceType: string;
+  sourceConversationId?: string | null;
+  sourceMessageId?: string | null;
+  suggestedQuestion?: string | null;
+  suggestedAnswer?: string | null;
+  suggestedTitle?: string | null;
+  suggestedTags: string[];
+  confidence: number | string;
+  status: string;
+  reviewNote?: string | null;
+  createdAt: string;
+};
+
+export type KnowledgeIngestionJob = {
+  id: string;
+  fileName: string;
+  contentType: string;
+  checksum?: string | null;
+  status: string;
+  error?: string | null;
+  parserMetadata?: Record<string, unknown>;
+  createdAt: string;
+};
+
 export type Conversation = {
   id: string;
   publicId: string;
@@ -391,6 +417,51 @@ export type TelephoneProvider =
   | "custom_sip";
 
 export type TelephoneNumberType = "local" | "mobile" | "toll-free";
+
+export type TelephoneNumberInventoryItem = {
+  id: string;
+  provider: TelephoneProvider | "twilio";
+  phoneNumber: string;
+  country: string;
+  locality?: string | null;
+  numberType: TelephoneNumberType;
+  sipTarget?: string | null;
+  assistantId?: string | null;
+  status: "available" | "reserved" | "assigned" | "suspended" | "retired";
+  assignedTenantId?: string | null;
+  metadata?: Record<string, unknown>;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type OnboardingPhoneNumbersResult = {
+  currency: string;
+  numberMonthlyPriceCents: number;
+  acceptedCallPriceCents: number;
+  numbers: TelephoneNumberInventoryItem[];
+};
+
+export type OnboardingState = {
+  tenant?: Tenant | null;
+  billingAccount?: {
+    id: string;
+    stripeCustomerId?: string | null;
+    status: string;
+  } | null;
+  billingSubscription?: {
+    id: string;
+    status: string;
+    stripeSubscriptionId?: string | null;
+  } | null;
+  activeReservation?: {
+    id: string;
+    status: string;
+    expiresAt: string;
+    number?: TelephoneNumberInventoryItem | null;
+  } | null;
+  assignedNumber?: TelephoneNumberInventoryItem | null;
+  checklist?: Record<string, boolean>;
+};
 
 export type TwilioNumberCapabilities = {
   voice: boolean;

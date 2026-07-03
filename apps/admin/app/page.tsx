@@ -113,15 +113,20 @@ import type {
   HandoffFilter,
   InboxFilter,
   InstallCheckResult,
+  KnowledgeIngestionJob,
   KnowledgeItem,
+  KnowledgeSuggestion,
   KnowledgeStatusFilter,
   LeadPipelineStage,
+  OnboardingPhoneNumbersResult,
+  OnboardingState,
   TabKey,
   Tenant,
   TenantAnalytics,
   TenantInvite,
   TenantRole,
   TenantUser,
+  TelephoneNumberInventoryItem,
   ProductionReadinessResult,
   TelephoneNumberType,
   TelephoneProvider,
@@ -313,6 +318,18 @@ const pipelineStages: Array<{ key: LeadPipelineStage; label: string }> = [
 
 const listPageSize = 50;
 
+function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error("Read failed"));
+    reader.onload = () => {
+      const result = typeof reader.result === "string" ? reader.result : "";
+      resolve(result.split(",")[1] ?? result);
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 export default function DashboardPage() {
   const [deepLink] = useState<AdminDeepLink>(() => readAdminDeepLink());
   const [apiBase, setApiBase] = useState(defaultApiBase);
@@ -321,13 +338,38 @@ export default function DashboardPage() {
   const [adminSession, setAdminSession] = useState<AdminSession | null>(null);
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
-  const [authMode, setAuthMode] = useState<"login" | "admin_token">("login");
+  const [signupName, setSignupName] = useState("");
+  const [signupEmail, setSignupEmail] = useState("");
+  const [signupPassword, setSignupPassword] = useState("");
+  const [authMode, setAuthMode] = useState<"login" | "signup" | "admin_token">(
+    "login",
+  );
   const [inviteName, setInviteName] = useState("");
   const [invitePassword, setInvitePassword] = useState("");
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [selectedTenantId, setSelectedTenantId] = useState("");
   const [tenantName, setTenantName] = useState("");
   const [tenantSlug, setTenantSlug] = useState("");
+  const [selfServiceProjectName, setSelfServiceProjectName] = useState("");
+  const [selfServiceProjectSlug, setSelfServiceProjectSlug] = useState("");
+  const [selfServiceLocality, setSelfServiceLocality] = useState("Berlin");
+  const [availablePhoneNumbers, setAvailablePhoneNumbers] = useState<
+    TelephoneNumberInventoryItem[]
+  >([]);
+  const [selectedPhoneNumberId, setSelectedPhoneNumberId] = useState("");
+  const [onboardingState, setOnboardingState] =
+    useState<OnboardingState | null>(null);
+  const [onboardingPrices, setOnboardingPrices] = useState({
+    currency: "eur",
+    numberMonthlyPriceCents: 300,
+    acceptedCallPriceCents: 10,
+  });
+  const [telephoneInventory, setTelephoneInventory] = useState<
+    TelephoneNumberInventoryItem[]
+  >([]);
+  const [inventoryPhoneNumber, setInventoryPhoneNumber] = useState("");
+  const [inventoryLocality, setInventoryLocality] = useState("Berlin");
+  const [inventorySipTarget, setInventorySipTarget] = useState("");
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("");
   const [tagInput, setTagInput] = useState("faq");
@@ -335,6 +377,15 @@ export default function DashboardPage() {
   const [testMessage, setTestMessage] = useState("");
   const [testAnswer, setTestAnswer] = useState<TestAnswer | null>(null);
   const [knowledge, setKnowledge] = useState<KnowledgeItem[]>([]);
+  const [knowledgeSuggestions, setKnowledgeSuggestions] = useState<
+    KnowledgeSuggestion[]
+  >([]);
+  const [knowledgeIngestionJobs, setKnowledgeIngestionJobs] = useState<
+    KnowledgeIngestionJob[]
+  >([]);
+  const [knowledgeUploadFile, setKnowledgeUploadFile] = useState<File | null>(
+    null,
+  );
   const [analytics, setAnalytics] = useState<TenantAnalytics | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [unifiedInbox, setUnifiedInbox] = useState<UnifiedInboxItem[]>([]);
@@ -452,6 +503,9 @@ export default function DashboardPage() {
   const [editingKnowledgeId, setEditingKnowledgeId] = useState("");
   const [editQuestion, setEditQuestion] = useState("");
   const [editAnswer, setEditAnswer] = useState("");
+  const [editingSuggestionId, setEditingSuggestionId] = useState("");
+  const [suggestionQuestionDraft, setSuggestionQuestionDraft] = useState("");
+  const [suggestionAnswerDraft, setSuggestionAnswerDraft] = useState("");
   const [activeTab, setActiveTab] = useState<TabKey>("home");
   const [knowledgeSearch, setKnowledgeSearch] = useState("");
   const [knowledgeStatusFilter, setKnowledgeStatusFilter] =
@@ -1394,11 +1448,25 @@ export default function DashboardPage() {
     setRetentionDays(selectedTenant.retentionDays ?? 365);
     setInstallCheck(null);
     setWebsiteImport(null);
+    setKnowledgeSuggestions([]);
+    setKnowledgeIngestionJobs([]);
+    setKnowledgeUploadFile(null);
+    setEditingSuggestionId("");
   }, [selectedTenant?.id]);
 
   useEffect(() => {
     if (selectedTenant?.id) {
       void refreshWorkspace(selectedTenant.id);
+    }
+  }, [selectedTenant?.id]);
+
+  useEffect(() => {
+    if (selectedTenant?.id) {
+      void refreshOnboardingState(selectedTenant.id);
+    } else {
+      setOnboardingState(null);
+      setAvailablePhoneNumbers([]);
+      setSelectedPhoneNumberId("");
     }
   }, [selectedTenant?.id]);
 
@@ -1415,7 +1483,11 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (selectedTenant?.id && activeTab === "knowledge") {
-      void refreshKnowledge(selectedTenant.id);
+      void Promise.all([
+        refreshKnowledge(selectedTenant.id),
+        refreshKnowledgeSuggestions(selectedTenant.id),
+        refreshKnowledgeIngestionJobs(selectedTenant.id),
+      ]);
     }
   }, [activeTab, knowledgeSearch, knowledgeStatusFilter, selectedTenant?.id]);
 
@@ -1440,6 +1512,12 @@ export default function DashboardPage() {
       void refreshTenantUsers(selectedTenant.id);
     }
   }, [activeTab, selectedTenant?.id, adminSession?.user.role]);
+
+  useEffect(() => {
+    if (activeTab === "channels" && canManagePlatformBilling()) {
+      void refreshTelephoneInventory();
+    }
+  }, [activeTab, adminSession?.authType, adminSession?.user.role]);
 
   useEffect(() => {
     if (!deepLink.handoffId || !handoffs.length) {
@@ -1624,6 +1702,64 @@ export default function DashboardPage() {
     } catch (error) {
       setStatus(readableError(error));
       setConnectionAttempted(false);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function signUpWithPassword(event: FormEvent) {
+    event.preventDefault();
+    if (!signupName || !signupEmail || !signupPassword) {
+      return;
+    }
+
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      setStatus("Registration needs Supabase Auth to be configured.");
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const { data, error } = await supabase.auth.signUp({
+        email: signupEmail,
+        password: signupPassword,
+        options: {
+          data: {
+            name: signupName,
+          },
+        },
+      });
+      if (error) {
+        throw error;
+      }
+      setLoginEmail(signupEmail);
+      setSignupPassword("");
+      if (!data.session?.access_token) {
+        setAuthMode("login");
+        setStatus("Account created. Confirm your email, then log in.");
+        return;
+      }
+
+      const authHeaders = {
+        authorization: `Bearer ${data.session.access_token}`,
+      };
+      setSupabaseAccessToken(data.session.access_token);
+      const session = await apiFetch<AdminSession>("/admin/session", {
+        headers: authHeaders,
+      });
+      const nextTenants = await apiFetch<Tenant[]>("/admin/tenants", {
+        headers: authHeaders,
+      });
+      setAdminSession(session);
+      setTenants(nextTenants);
+      setConnectionAttempted(true);
+      if (nextTenants[0]) {
+        setSelectedTenantId(nextTenants[0].id);
+      }
+      setStatus(nextTenants.length ? "Account ready" : "Create your project");
+    } catch (error) {
+      setStatus(readableError(error));
     } finally {
       setBusy(false);
     }
@@ -1831,7 +1967,11 @@ export default function DashboardPage() {
 
       const detailLoads: Promise<unknown>[] = [];
       if (activeTab === "knowledge") {
-        detailLoads.push(refreshKnowledge(tenantId));
+        detailLoads.push(
+          refreshKnowledge(tenantId),
+          refreshKnowledgeSuggestions(tenantId),
+          refreshKnowledgeIngestionJobs(tenantId),
+        );
       }
 
       if (activeTab === "leads") {
@@ -1883,6 +2023,42 @@ export default function DashboardPage() {
         options.append ? [...current, ...items] : items,
       );
       setKnowledgeHasMore(items.length === listPageSize);
+    } catch (error) {
+      setStatus(readableError(error));
+    }
+  }
+
+  async function refreshKnowledgeSuggestions(tenantId = selectedTenant?.id) {
+    if (!tenantId) {
+      setKnowledgeSuggestions([]);
+      return;
+    }
+
+    try {
+      const items = await apiFetch<KnowledgeSuggestion[]>(
+        buildListPath(`/admin/tenants/${tenantId}/knowledge/suggestions`, {
+          status: "pending",
+        }),
+      );
+      setKnowledgeSuggestions(items);
+    } catch (error) {
+      setStatus(readableError(error));
+    }
+  }
+
+  async function refreshKnowledgeIngestionJobs(tenantId = selectedTenant?.id) {
+    if (!tenantId) {
+      setKnowledgeIngestionJobs([]);
+      return;
+    }
+
+    try {
+      const items = await apiFetch<KnowledgeIngestionJob[]>(
+        buildListPath(`/admin/tenants/${tenantId}/knowledge/ingestion-jobs`, {
+          limit: 8,
+        }),
+      );
+      setKnowledgeIngestionJobs(items);
     } catch (error) {
       setStatus(readableError(error));
     }
@@ -2213,6 +2389,189 @@ export default function DashboardPage() {
     }
   }
 
+  async function createSelfServiceProject(event: FormEvent) {
+    event.preventDefault();
+    if (!selfServiceProjectName) {
+      return;
+    }
+    if (adminSession?.authType !== "user_session") {
+      setStatus("Log in as a user before creating a self-service project.");
+      return;
+    }
+
+    const slug = selfServiceProjectSlug || slugFromName(selfServiceProjectName);
+    setBusy(true);
+    try {
+      const tenant = await apiFetch<Tenant>("/onboarding/projects", {
+        method: "POST",
+        body: JSON.stringify({
+          name: selfServiceProjectName,
+          slug,
+          defaultLocale: "de-DE",
+          theme: currentTheme,
+        }),
+      });
+      setTenants((current) => [tenant, ...current]);
+      setSelectedTenantId(tenant.id);
+      setSelfServiceProjectName("");
+      setSelfServiceProjectSlug("");
+      setActiveTab("channels");
+      await Promise.all([
+        refreshOnboardingState(tenant.id),
+        loadAvailablePhoneNumbers(tenant.id),
+      ]);
+      setStatus("Project created. Choose a phone number next.");
+    } catch (error) {
+      setStatus(readableError(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function refreshOnboardingState(tenantId = selectedTenant?.id) {
+    if (!tenantId) {
+      setOnboardingState(null);
+      return;
+    }
+    try {
+      const state = await apiFetch<OnboardingState>(
+        `/onboarding/tenants/${tenantId}/state`,
+      );
+      setOnboardingState(state);
+    } catch {
+      setOnboardingState(null);
+    }
+  }
+
+  async function loadAvailablePhoneNumbers(tenantId = selectedTenant?.id) {
+    if (!tenantId) {
+      return;
+    }
+    setBusy(true);
+    try {
+      const params = new URLSearchParams({
+        country: "DE",
+        numberType: "local",
+        limit: "24",
+      });
+      if (selfServiceLocality.trim()) {
+        params.set("locality", selfServiceLocality.trim());
+      }
+      const result = await apiFetch<OnboardingPhoneNumbersResult>(
+        `/onboarding/tenants/${tenantId}/phone-numbers?${params.toString()}`,
+      );
+      setAvailablePhoneNumbers(result.numbers);
+      setOnboardingPrices({
+        currency: result.currency,
+        numberMonthlyPriceCents: result.numberMonthlyPriceCents,
+        acceptedCallPriceCents: result.acceptedCallPriceCents,
+      });
+      setSelectedPhoneNumberId((current) =>
+        result.numbers.some((number) => number.id === current)
+          ? current
+          : (result.numbers[0]?.id ?? ""),
+      );
+      setStatus(
+        result.numbers.length
+          ? "Available numbers loaded"
+          : "No available numbers found",
+      );
+    } catch (error) {
+      setStatus(readableError(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function reserveSelectedPhoneNumber() {
+    if (!selectedTenant || !selectedPhoneNumberId) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await apiFetch(
+        `/onboarding/tenants/${selectedTenant.id}/phone-number-reservations`,
+        {
+          method: "POST",
+          body: JSON.stringify({ numberId: selectedPhoneNumberId }),
+        },
+      );
+      await refreshOnboardingState(selectedTenant.id);
+      setStatus("Phone number reserved");
+    } catch (error) {
+      setStatus(readableError(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function startBillingCheckout() {
+    if (!selectedTenant) {
+      return;
+    }
+    setBusy(true);
+    try {
+      const result = await apiFetch<{ url: string }>(
+        `/billing/tenants/${selectedTenant.id}/checkout-sessions`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            successUrl: `${window.location.origin}/?tenant=${selectedTenant.id}&billing=success`,
+            cancelUrl: `${window.location.origin}/?tenant=${selectedTenant.id}&billing=cancel`,
+          }),
+        },
+      );
+      window.location.assign(result.url);
+    } catch (error) {
+      setStatus(readableError(error));
+      setBusy(false);
+    }
+  }
+
+  async function refreshTelephoneInventory() {
+    if (!canManagePlatformBilling()) {
+      return;
+    }
+    try {
+      const numbers = await apiFetch<TelephoneNumberInventoryItem[]>(
+        "/admin/telephone/numbers",
+      );
+      setTelephoneInventory(numbers);
+    } catch {
+      setTelephoneInventory([]);
+    }
+  }
+
+  async function createTelephoneInventoryNumber(event: FormEvent) {
+    event.preventDefault();
+    if (!inventoryPhoneNumber || !canManagePlatformBilling()) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await apiFetch<TelephoneNumberInventoryItem>("/admin/telephone/numbers", {
+        method: "POST",
+        body: JSON.stringify({
+          provider: "easybell",
+          phoneNumber: inventoryPhoneNumber,
+          country: "DE",
+          locality: inventoryLocality || null,
+          numberType: "local",
+          sipTarget: inventorySipTarget || null,
+          metadata: { launchReady: Boolean(inventorySipTarget) },
+        }),
+      });
+      setInventoryPhoneNumber("");
+      setInventorySipTarget("");
+      await refreshTelephoneInventory();
+      setStatus("Phone number added to inventory");
+    } catch (error) {
+      setStatus(readableError(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function saveTenantSettings() {
     if (!canManageTenantSettings()) {
       setStatus("Your role cannot change tenant settings.");
@@ -2351,6 +2710,80 @@ export default function DashboardPage() {
       );
       setWebsiteImport(result);
       setStatus(`${result.suggestedFaqs.length} website FAQs suggested`);
+    } catch (error) {
+      setStatus(readableError(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function uploadKnowledgeDocument() {
+    if (!canManageKnowledge()) {
+      setStatus("Your role cannot upload knowledge documents.");
+      return;
+    }
+    if (!selectedTenant || !knowledgeUploadFile) {
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const contentBase64 = await readFileAsBase64(knowledgeUploadFile);
+      const result = await apiFetch<{ suggestions?: KnowledgeSuggestion[] }>(
+        `/admin/tenants/${selectedTenant.id}/knowledge/uploads`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            fileName: knowledgeUploadFile.name,
+            contentType: knowledgeUploadFile.type || "application/octet-stream",
+            contentBase64,
+            maxSuggestions: 8,
+            suggestedTags: ["document", "upload"],
+          }),
+        },
+      );
+      setKnowledgeUploadFile(null);
+      await Promise.all([
+        refreshKnowledgeSuggestions(selectedTenant.id),
+        refreshKnowledgeIngestionJobs(selectedTenant.id),
+      ]);
+      setStatus(
+        `${result.suggestions?.length ?? 0} document suggestions queued`,
+      );
+    } catch (error) {
+      await refreshKnowledgeIngestionJobs(selectedTenant.id);
+      setStatus(readableError(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function scanInteractionsForKnowledge() {
+    if (!canManageKnowledge()) {
+      setStatus("Your role cannot scan customer interactions.");
+      return;
+    }
+    if (!selectedTenant) {
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const result = await apiFetch<{
+        created: KnowledgeSuggestion[];
+        skipped: number;
+        scanned: number;
+      }>(`/admin/tenants/${selectedTenant.id}/knowledge/suggestions/scan`, {
+        method: "POST",
+        body: JSON.stringify({ limit: 50 }),
+      });
+      await Promise.all([
+        refreshKnowledgeSuggestions(selectedTenant.id),
+        refreshWorkflowSuggestions(selectedTenant.id),
+      ]);
+      setStatus(
+        `${result.created.length} learning suggestions created from ${result.scanned} interaction signals`,
+      );
     } catch (error) {
       setStatus(readableError(error));
     } finally {
@@ -2934,6 +3367,98 @@ export default function DashboardPage() {
         refreshWorkflowSuggestions(selectedTenant.id),
       ]);
       setStatus("Knowledge deleted");
+    } catch (error) {
+      setStatus(readableError(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function startSuggestionEdit(item: KnowledgeSuggestion) {
+    if (!canManageKnowledge()) {
+      setStatus("Your role cannot approve knowledge suggestions.");
+      return;
+    }
+    setEditingSuggestionId(item.id);
+    setSuggestionQuestionDraft(
+      item.suggestedQuestion ?? item.suggestedTitle ?? "",
+    );
+    setSuggestionAnswerDraft(item.suggestedAnswer ?? "");
+  }
+
+  function cancelSuggestionEdit() {
+    setEditingSuggestionId("");
+    setSuggestionQuestionDraft("");
+    setSuggestionAnswerDraft("");
+  }
+
+  async function approveKnowledgeSuggestion(item: KnowledgeSuggestion) {
+    if (!canManageKnowledge()) {
+      setStatus("Your role cannot approve knowledge suggestions.");
+      return;
+    }
+    if (!selectedTenant) {
+      return;
+    }
+
+    const isEditing = editingSuggestionId === item.id;
+    const payload = isEditing
+      ? {
+          question: suggestionQuestionDraft,
+          answer: suggestionAnswerDraft,
+          tags: item.suggestedTags,
+        }
+      : {};
+
+    setBusy(true);
+    try {
+      await apiFetch(
+        `/admin/tenants/${selectedTenant.id}/knowledge/suggestions/${item.id}/approve`,
+        {
+          method: "POST",
+          body: JSON.stringify(payload),
+        },
+      );
+      cancelSuggestionEdit();
+      await Promise.all([
+        refreshKnowledge(selectedTenant.id),
+        refreshKnowledgeSuggestions(selectedTenant.id),
+        refreshAnalytics(selectedTenant.id),
+        refreshWorkflowSuggestions(selectedTenant.id),
+      ]);
+      setStatus("Knowledge suggestion approved");
+    } catch (error) {
+      setStatus(readableError(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function rejectKnowledgeSuggestion(item: KnowledgeSuggestion) {
+    if (!canManageKnowledge()) {
+      setStatus("Your role cannot reject knowledge suggestions.");
+      return;
+    }
+    if (!selectedTenant) {
+      return;
+    }
+
+    setBusy(true);
+    try {
+      await apiFetch(
+        `/admin/tenants/${selectedTenant.id}/knowledge/suggestions/${item.id}/reject`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            reviewNote: "Rejected in Knowledge review.",
+          }),
+        },
+      );
+      if (editingSuggestionId === item.id) {
+        cancelSuggestionEdit();
+      }
+      await refreshKnowledgeSuggestions(selectedTenant.id);
+      setStatus("Knowledge suggestion rejected");
     } catch (error) {
       setStatus(readableError(error));
     } finally {
@@ -3824,11 +4349,216 @@ export default function DashboardPage() {
     );
   }
 
+  function renderKnowledgeUploadsPanel(canEditKnowledge: boolean) {
+    return (
+      <section className="panel">
+        <div className="panelHeader">
+          <div className="panelTitle">
+            <Upload size={18} />
+            <h2>Document uploads</h2>
+          </div>
+          <span className="countPill">{knowledgeIngestionJobs.length}</span>
+        </div>
+        <div className="knowledgeTools">
+          <label className="field">
+            <span>File</span>
+            <input
+              key={knowledgeUploadFile?.name ?? "empty-upload"}
+              type="file"
+              accept=".txt,.md,.markdown,.csv,.json,.pdf,text/*,application/pdf"
+              disabled={!canEditKnowledge}
+              onChange={(event) =>
+                setKnowledgeUploadFile(event.target.files?.[0] ?? null)
+              }
+            />
+          </label>
+          <button
+            className="primaryButton"
+            type="button"
+            disabled={busy || !canEditKnowledge || !knowledgeUploadFile}
+            onClick={uploadKnowledgeDocument}
+          >
+            <Upload size={15} />
+            Upload
+          </button>
+        </div>
+        {knowledgeIngestionJobs.length ? (
+          <div className="suggestionStack">
+            {knowledgeIngestionJobs.map((job) => (
+              <article className="suggestionItem" key={job.id}>
+                <strong>{job.fileName}</strong>
+                <p>{job.error ?? titleCase(job.status)}</p>
+                <div className="tagRow">
+                  <small>{titleCase(job.status)}</small>
+                  <small>{job.contentType}</small>
+                  <small>{formatDate(job.createdAt)}</small>
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <div className="emptyState compact">No document jobs yet.</div>
+        )}
+      </section>
+    );
+  }
+
+  function renderKnowledgeSuggestionsPanel(canEditKnowledge: boolean) {
+    return (
+      <section className="panel">
+        <div className="panelHeader">
+          <div className="panelTitle">
+            <Sparkles size={18} />
+            <h2>Brain suggestions</h2>
+          </div>
+          <div className="rowActions">
+            <span className="countPill">{knowledgeSuggestions.length}</span>
+            <button
+              className="secondaryButton"
+              type="button"
+              disabled={busy || !canEditKnowledge}
+              onClick={scanInteractionsForKnowledge}
+            >
+              <RefreshCw size={15} />
+              Scan
+            </button>
+          </div>
+        </div>
+        {!knowledgeSuggestions.length ? (
+          <div className="emptyState compact">
+            No pending learning suggestions.
+          </div>
+        ) : (
+          <div className="suggestionStack">
+            {knowledgeSuggestions.map((item) => {
+              const isEditing = editingSuggestionId === item.id;
+              const confidence = Number(item.confidence);
+              return (
+                <article className="suggestionItem" key={item.id}>
+                  {isEditing ? (
+                    <div className="editStack">
+                      <label className="field">
+                        <span>Question</span>
+                        <input
+                          value={suggestionQuestionDraft}
+                          disabled={!canEditKnowledge}
+                          onChange={(event) =>
+                            setSuggestionQuestionDraft(event.target.value)
+                          }
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Answer</span>
+                        <textarea
+                          value={suggestionAnswerDraft}
+                          disabled={!canEditKnowledge}
+                          onChange={(event) =>
+                            setSuggestionAnswerDraft(event.target.value)
+                          }
+                          rows={4}
+                        />
+                      </label>
+                    </div>
+                  ) : (
+                    <>
+                      <strong>
+                        {item.suggestedQuestion ??
+                          item.suggestedTitle ??
+                          "Untitled suggestion"}
+                      </strong>
+                      <p>
+                        {item.suggestedAnswer ??
+                          "Add an answer before approving this suggestion."}
+                      </p>
+                    </>
+                  )}
+                  <div className="tagRow">
+                    <small>{titleCase(item.sourceType)}</small>
+                    <small>{formatPercent(confidence * 100)} confidence</small>
+                    {item.suggestedTags.map((tag) => (
+                      <small key={tag}>{tag}</small>
+                    ))}
+                  </div>
+                  <div className="rowActions">
+                    {isEditing ? (
+                      <>
+                        <button
+                          className="secondaryButton"
+                          type="button"
+                          disabled={busy}
+                          onClick={cancelSuggestionEdit}
+                        >
+                          <X size={15} />
+                          Cancel
+                        </button>
+                        <button
+                          className="primaryButton"
+                          type="button"
+                          disabled={
+                            busy ||
+                            !canEditKnowledge ||
+                            !suggestionQuestionDraft ||
+                            !suggestionAnswerDraft
+                          }
+                          onClick={() => approveKnowledgeSuggestion(item)}
+                        >
+                          <CheckCircle2 size={15} />
+                          Save approval
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          className="primaryButton"
+                          type="button"
+                          disabled={
+                            busy ||
+                            !canEditKnowledge ||
+                            !item.suggestedAnswer ||
+                            !(item.suggestedQuestion || item.suggestedTitle)
+                          }
+                          onClick={() => approveKnowledgeSuggestion(item)}
+                        >
+                          <CheckCircle2 size={15} />
+                          Approve
+                        </button>
+                        <button
+                          className="secondaryButton"
+                          type="button"
+                          disabled={busy || !canEditKnowledge}
+                          onClick={() => startSuggestionEdit(item)}
+                        >
+                          <Save size={15} />
+                          Edit
+                        </button>
+                        <button
+                          className="dangerButton"
+                          type="button"
+                          disabled={busy || !canEditKnowledge}
+                          onClick={() => rejectKnowledgeSuggestion(item)}
+                        >
+                          <X size={15} />
+                          Reject
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        )}
+      </section>
+    );
+  }
+
   function renderKnowledge() {
     const canEditKnowledge = canManageKnowledge();
     return (
       <div className="workspaceStack">
         {renderKnowledgeLoopPanel(canEditKnowledge)}
+        {renderKnowledgeUploadsPanel(canEditKnowledge)}
+        {renderKnowledgeSuggestionsPanel(canEditKnowledge)}
         <section className="panel">
           <div className="panelHeader">
             <div className="panelTitle">
@@ -5849,6 +6579,205 @@ export default function DashboardPage() {
     );
   }
 
+  function renderSelfServiceBillingPanel() {
+    const reservedNumber = onboardingState?.activeReservation?.number ?? null;
+    const assignedNumber = onboardingState?.assignedNumber ?? null;
+    const billingStatus = onboardingState?.billingAccount?.status ?? "missing";
+    const billingActive = billingStatus === "active";
+    const hasReservedNumber = Boolean(reservedNumber || assignedNumber);
+
+    return (
+      <section className="panel selfServicePanel">
+        <div className="panelHeader">
+          <div className="panelTitle">
+            <ShoppingCart size={18} />
+            <h2>Self-service number and billing</h2>
+          </div>
+          <span
+            className="countPill"
+            data-tone={billingActive ? "good" : "warn"}
+          >
+            {billingActive ? "Active" : titleCase(billingStatus)}
+          </span>
+        </div>
+
+        <div className="phoneLineProgress" aria-hidden="true">
+          <span data-active="true" />
+          <span data-active={hasReservedNumber ? "true" : "false"} />
+          <span data-active={billingActive ? "true" : "false"} />
+          <span
+            data-active={
+              telephoneConnection?.status === "connected" ? "true" : "false"
+            }
+          />
+        </div>
+
+        <div className="selfServiceGrid">
+          <article className="selfServiceStep">
+            <strong>1. Choose number</strong>
+            <span>
+              {formatCents(onboardingPrices.numberMonthlyPriceCents)} per month,{" "}
+              {formatCents(onboardingPrices.acceptedCallPriceCents)} per
+              accepted call.
+            </span>
+            <div className="formGrid two">
+              <label className="field">
+                <span>Locality</span>
+                <input
+                  value={selfServiceLocality}
+                  onChange={(event) =>
+                    setSelfServiceLocality(event.target.value)
+                  }
+                  placeholder="Berlin"
+                />
+              </label>
+              <button
+                className="secondaryButton"
+                type="button"
+                disabled={busy || !selectedTenant}
+                onClick={() => loadAvailablePhoneNumbers()}
+              >
+                <Search size={16} />
+                Search
+              </button>
+            </div>
+            <div className="numberChoiceGrid">
+              {availablePhoneNumbers.length ? (
+                availablePhoneNumbers.map((number) => (
+                  <button
+                    type="button"
+                    key={number.id}
+                    className="numberChoice"
+                    data-active={
+                      selectedPhoneNumberId === number.id ? "true" : "false"
+                    }
+                    onClick={() => setSelectedPhoneNumberId(number.id)}
+                  >
+                    <PhoneCall size={16} />
+                    <span>{number.phoneNumber}</span>
+                    <small>{number.locality ?? number.country}</small>
+                  </button>
+                ))
+              ) : (
+                <div className="emptyState compact">No numbers loaded.</div>
+              )}
+            </div>
+            <button
+              className="primaryButton"
+              type="button"
+              disabled={busy || !selectedPhoneNumberId || hasReservedNumber}
+              onClick={reserveSelectedPhoneNumber}
+            >
+              <CheckCircle2 size={16} />
+              Reserve number
+            </button>
+          </article>
+
+          <article className="selfServiceStep">
+            <strong>2. Activate billing</strong>
+            <span>
+              {assignedNumber?.phoneNumber ??
+                reservedNumber?.phoneNumber ??
+                "Reserve a number before checkout."}
+            </span>
+            <div className="billingStatusRows">
+              <article data-ready={hasReservedNumber ? "true" : "false"}>
+                <span>Number</span>
+                <strong>{hasReservedNumber ? "Reserved" : "Missing"}</strong>
+              </article>
+              <article data-ready={billingActive ? "true" : "false"}>
+                <span>Stripe</span>
+                <strong>{billingActive ? "Paid" : "Checkout needed"}</strong>
+              </article>
+              <article
+                data-ready={
+                  telephoneConnection?.status === "connected" ? "true" : "false"
+                }
+              >
+                <span>Routing</span>
+                <strong>
+                  {telephoneConnection?.status === "connected"
+                    ? "Live"
+                    : "Pending"}
+                </strong>
+              </article>
+            </div>
+            <button
+              className="primaryButton"
+              type="button"
+              disabled={busy || !hasReservedNumber || billingActive}
+              onClick={startBillingCheckout}
+            >
+              <ShoppingCart size={16} />
+              Open Stripe checkout
+            </button>
+          </article>
+        </div>
+
+        {canManagePlatformBilling() ? renderTelephoneInventoryPanel() : null}
+      </section>
+    );
+  }
+
+  function renderTelephoneInventoryPanel() {
+    return (
+      <div className="inventoryPanel">
+        <div className="panelTitle">
+          <RadioTower size={18} />
+          <h2>Number inventory</h2>
+        </div>
+        <form
+          className="inventoryForm"
+          onSubmit={createTelephoneInventoryNumber}
+        >
+          <label className="field">
+            <span>Phone number</span>
+            <input
+              value={inventoryPhoneNumber}
+              onChange={(event) => setInventoryPhoneNumber(event.target.value)}
+              placeholder="+49301234567"
+            />
+          </label>
+          <label className="field">
+            <span>Locality</span>
+            <input
+              value={inventoryLocality}
+              onChange={(event) => setInventoryLocality(event.target.value)}
+              placeholder="Berlin"
+            />
+          </label>
+          <label className="field">
+            <span>SIP target</span>
+            <input
+              value={inventorySipTarget}
+              onChange={(event) => setInventorySipTarget(event.target.value)}
+              placeholder="sip:asst_xxx@voice-edge.example.com"
+            />
+          </label>
+          <button
+            className="secondaryButton"
+            disabled={busy || !inventoryPhoneNumber}
+          >
+            <Plus size={16} />
+            Add number
+          </button>
+        </form>
+        <div className="inventoryList">
+          {telephoneInventory.slice(0, 8).map((number) => (
+            <article key={number.id}>
+              <strong>{number.phoneNumber}</strong>
+              <span>{number.locality ?? number.country}</span>
+              <small data-status={number.status}>{number.status}</small>
+            </article>
+          ))}
+          {!telephoneInventory.length ? (
+            <div className="emptyState compact">No inventory loaded.</div>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
   function renderChannels() {
     const canEditChannels = canManageChannels();
     return (
@@ -5916,6 +6845,8 @@ export default function DashboardPage() {
             </div>
           ) : null}
         </section>
+
+        {renderSelfServiceBillingPanel()}
 
         {renderTelephoneSetup(telephoneConnection)}
 
@@ -7550,6 +8481,13 @@ export default function DashboardPage() {
     return canUseTenantRole("tenant_admin");
   }
 
+  function canManagePlatformBilling() {
+    return (
+      adminSession?.authType === "admin_token" ||
+      adminSession?.user.role === "platform_owner"
+    );
+  }
+
   function canManageLeads() {
     return canUseTenantRole("operator");
   }
@@ -7563,6 +8501,26 @@ export default function DashboardPage() {
       platform_owner: 50,
     };
     return ranks[role] ?? 0;
+  }
+
+  function slugFromName(value: string) {
+    return (
+      value
+        .trim()
+        .toLowerCase()
+        .normalize("NFKD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 80) || "new-project"
+    );
+  }
+
+  function formatCents(value: number, currency = "EUR") {
+    return new Intl.NumberFormat("de-DE", {
+      style: "currency",
+      currency,
+    }).format(value / 100);
   }
 
   function channelAccountLabel(channel: ChannelConnection["channel"]) {
@@ -8485,15 +9443,106 @@ export default function DashboardPage() {
     );
   }
 
+  function renderProjectOnboarding() {
+    const generatedSlug = slugFromName(selfServiceProjectName);
+    const effectiveSlug = selfServiceProjectSlug || generatedSlug;
+    const canCreateSelfService = adminSession?.authType === "user_session";
+
+    return (
+      <div className="onboardingWorkspace">
+        <section className="panel onboardingHeroPanel">
+          <div className="panelHeader">
+            <div className="panelTitle">
+              <PhoneCall size={18} />
+              <h2>Start a phone AI project</h2>
+            </div>
+            <span className="countPill" data-tone="warn">
+              {formatCents(onboardingPrices.numberMonthlyPriceCents)}/mo
+            </span>
+          </div>
+          <div className="phoneLineProgress" aria-hidden="true">
+            <span data-active="true" />
+            <span data-active="true" />
+            <span />
+            <span />
+          </div>
+          <p className="mutedCopy">
+            Create the project first, choose one available number, then continue
+            to Stripe. Accepted calls are billed at{" "}
+            {formatCents(onboardingPrices.acceptedCallPriceCents)} each.
+          </p>
+        </section>
+
+        <section className="panel onboardingActionPanel">
+          {canCreateSelfService ? (
+            <form className="form" onSubmit={createSelfServiceProject}>
+              <label className="field">
+                <span>Project name</span>
+                <input
+                  value={selfServiceProjectName}
+                  onChange={(event) =>
+                    setSelfServiceProjectName(event.target.value)
+                  }
+                  placeholder="Muster GmbH Kundenservice"
+                />
+              </label>
+              <label className="field">
+                <span>Slug</span>
+                <input
+                  value={effectiveSlug}
+                  onChange={(event) =>
+                    setSelfServiceProjectSlug(slugFromName(event.target.value))
+                  }
+                  placeholder="muster-gmbh"
+                />
+              </label>
+              <button
+                className="primaryButton"
+                disabled={busy || !selfServiceProjectName || !effectiveSlug}
+              >
+                {busy ? (
+                  <Loader2 className="spin" size={16} />
+                ) : (
+                  <Plus size={16} />
+                )}
+                Create project
+              </button>
+            </form>
+          ) : (
+            <div className="emptyState">
+              <Building2 size={22} />
+              <strong>Create a tenant from the sidebar</strong>
+              <span>
+                Bootstrap admins can create platform tenants with the New tenant
+                form. User accounts get the guided self-service flow here.
+              </span>
+            </div>
+          )}
+        </section>
+
+        <section className="panel onboardingChecklistPanel">
+          <div className="setupList onboardingSetupList">
+            {[
+              ["Account", Boolean(adminSession), "Login is active"],
+              ["Project", false, "Create a tenant workspace"],
+              ["Number", false, "Reserve a German phone number"],
+              ["Payment", false, "Activate the monthly plan"],
+            ].map(([label, done, detail]) => (
+              <article data-done={done ? "true" : "false"} key={String(label)}>
+                {done ? <CheckCircle2 size={16} /> : <RadioTower size={16} />}
+                <span>{label}</span>
+                <small>{detail}</small>
+              </article>
+            ))}
+          </div>
+        </section>
+      </div>
+    );
+  }
+
   function renderActiveTab() {
     if (!selectedTenant) {
-      return (
-        <section className="emptyWorkspace">
-          <Bot size={28} />
-          <h2>No tenant selected</h2>
-          {renderSetupChecklist()}
-        </section>
-      );
+      return renderProjectOnboarding();
     }
 
     if (activeTab === "home") {
@@ -8608,6 +9657,13 @@ export default function DashboardPage() {
                   User login
                 </button>
                 <button
+                  data-active={authMode === "signup" ? "true" : "false"}
+                  type="button"
+                  onClick={() => setAuthMode("signup")}
+                >
+                  Register
+                </button>
+                <button
                   data-active={authMode === "admin_token" ? "true" : "false"}
                   type="button"
                   onClick={() => setAuthMode("admin_token")}
@@ -8661,6 +9717,82 @@ export default function DashboardPage() {
                       <ShieldCheck size={16} />
                     )}
                     Login
+                  </button>
+                  <button
+                    className="textToggle"
+                    type="button"
+                    onClick={() =>
+                      setShowAdvancedConnection((current) => !current)
+                    }
+                  >
+                    {showAdvancedConnection ? "Hide advanced" : "Advanced"}
+                  </button>
+                  {status ? (
+                    <span className="status authStatus" data-tone={statusKind}>
+                      {statusKind === "danger" ? (
+                        <AlertCircle size={16} />
+                      ) : (
+                        <CheckCircle2 size={16} />
+                      )}
+                      {status}
+                    </span>
+                  ) : null}
+                </form>
+              ) : authMode === "signup" ? (
+                <form className="authForm" onSubmit={signUpWithPassword}>
+                  <label className="field">
+                    <span>Name</span>
+                    <input
+                      value={signupName}
+                      onChange={(event) => setSignupName(event.target.value)}
+                      autoComplete="name"
+                      autoFocus
+                    />
+                  </label>
+                  <label className="field">
+                    <span>Email</span>
+                    <input
+                      type="email"
+                      value={signupEmail}
+                      onChange={(event) => setSignupEmail(event.target.value)}
+                      autoComplete="email"
+                    />
+                  </label>
+                  <label className="field">
+                    <span>Password</span>
+                    <div className="inputIcon">
+                      <KeyRound size={16} />
+                      <input
+                        type="password"
+                        value={signupPassword}
+                        onChange={(event) =>
+                          setSignupPassword(event.target.value)
+                        }
+                        autoComplete="new-password"
+                      />
+                    </div>
+                  </label>
+                  {showAdvancedConnection ? (
+                    <label className="field">
+                      <span>API base</span>
+                      <input
+                        value={apiBase}
+                        onChange={(event) => setApiBase(event.target.value)}
+                      />
+                    </label>
+                  ) : null}
+                  <button
+                    className="primaryButton full"
+                    disabled={
+                      busy || !signupName || !signupEmail || !signupPassword
+                    }
+                  >
+                    {busy ? (
+                      <Loader2 className="spin" size={16} />
+                    ) : (
+                      <ShieldCheck size={16} />
+                    )}
+                    Create account
                   </button>
                   <button
                     className="textToggle"

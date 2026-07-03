@@ -16,6 +16,7 @@ import {
   parseTrustProxy,
   type PlatformStore,
 } from "../src/server";
+import type { BillingProvider } from "../src/billing";
 
 const originalFetch = globalThis.fetch;
 
@@ -27,6 +28,7 @@ class MemoryPlatformStore
     publicId: string;
     name: string;
     slug: string;
+    status?: string;
     defaultLocale: string;
     tone?: "friendly" | "neutral" | "formal";
     theme?: Record<string, unknown>;
@@ -34,7 +36,62 @@ class MemoryPlatformStore
     maxMessageLength?: number;
     retentionDays?: number;
   }> = [];
-  chunks: KnowledgeChunk[] = [];
+  chunks: Array<
+    KnowledgeChunk & {
+      status?: string;
+      createdAt?: Date;
+      updatedAt?: Date;
+    }
+  > = [];
+  brainOnboardingAnswers: Array<{
+    id: string;
+    tenantId: string;
+    questionKey: string;
+    question: string;
+    answer: string;
+    category: string;
+    status: string;
+    approvedChunkId?: string | null;
+    metadata: Record<string, unknown>;
+    createdAt: Date;
+    updatedAt: Date;
+  }> = [];
+  knowledgeSuggestions: Array<{
+    id: string;
+    tenantId: string;
+    sourceType: string;
+    sourceConversationId?: string | null;
+    sourceMessageId?: string | null;
+    sourceDocumentId?: string | null;
+    suggestedQuestion?: string | null;
+    suggestedAnswer?: string | null;
+    suggestedTitle?: string | null;
+    suggestedTags: string[];
+    suggestedMetadata: Record<string, unknown>;
+    confidence: number;
+    status: string;
+    reviewedByUserId?: string | null;
+    reviewedAt?: Date | null;
+    reviewNote?: string | null;
+    approvedChunkId?: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+  }> = [];
+  documentIngestionJobs: Array<{
+    id: string;
+    tenantId: string;
+    sourceId?: string | null;
+    documentId?: string | null;
+    objectKey?: string | null;
+    fileName: string;
+    contentType: string;
+    checksum?: string | null;
+    status: string;
+    error?: string | null;
+    parserMetadata: Record<string, unknown>;
+    createdAt: Date;
+    updatedAt: Date;
+  }> = [];
   conversations: Array<{
     id: string;
     publicId: string;
@@ -158,22 +215,130 @@ class MemoryPlatformStore
     credits: number;
     metadata?: Record<string, unknown>;
   }> = [];
+  telephoneNumbers: Array<{
+    id: string;
+    provider: string;
+    phoneNumber: string;
+    country: string;
+    locality?: string | null;
+    numberType: string;
+    sipTarget?: string | null;
+    assistantId?: string | null;
+    status: string;
+    assignedTenantId?: string | null;
+    metadata: Record<string, unknown>;
+    createdAt: Date;
+    updatedAt: Date;
+  }> = [];
+  telephoneReservations: Array<{
+    id: string;
+    tenantId: string;
+    numberId: string;
+    userId?: string | null;
+    status: string;
+    expiresAt: Date;
+    activatedAt?: Date | null;
+    createdAt: Date;
+    updatedAt: Date;
+  }> = [];
+  billingAccounts: Array<{
+    id: string;
+    tenantId: string;
+    stripeCustomerId?: string | null;
+    status: string;
+    defaultCurrency: string;
+    metadata: Record<string, unknown>;
+    createdAt: Date;
+    updatedAt: Date;
+  }> = [];
+  billingSubscriptions: Array<{
+    id: string;
+    tenantId: string;
+    billingAccountId: string;
+    stripeSubscriptionId?: string | null;
+    stripePriceId?: string | null;
+    status: string;
+    currentPeriodStart?: Date | null;
+    currentPeriodEnd?: Date | null;
+    metadata: Record<string, unknown>;
+    createdAt: Date;
+    updatedAt: Date;
+  }> = [];
+  stripeWebhookEvents: Array<{
+    id: string;
+    stripeEventId: string;
+    eventType: string;
+    tenantId?: string | null;
+    payload: Record<string, unknown>;
+    status: string;
+    error?: string | null;
+    processedAt?: Date | null;
+    createdAt: Date;
+    updatedAt: Date;
+  }> = [];
+  billableUsageEvents: Array<{
+    id: string;
+    tenantId: string;
+    providerCallId: string;
+    quantity: number;
+    unitAmountCents: number;
+    status: string;
+    stripeMeterEventId?: string | null;
+    metadata: Record<string, unknown>;
+    reportedAt?: Date | null;
+    createdAt: Date;
+    updatedAt: Date;
+  }> = [];
 
-  async createTenant(input: { name: string; slug: string }) {
+  async createTenant(input: {
+    name: string;
+    slug: string;
+    status?: string | undefined;
+    defaultLocale?: string | undefined;
+    theme?: Record<string, unknown> | undefined;
+  }) {
     const tenant = {
       id: crypto.randomUUID(),
       publicId: `asst_${crypto.randomUUID().replaceAll("-", "").slice(0, 24)}`,
       name: input.name,
       slug: input.slug,
-      defaultLocale: "en",
+      status: input.status ?? "active",
+      defaultLocale: input.defaultLocale ?? "en",
       tone: "friendly" as const,
-      theme: {
+      theme: input.theme ?? {
         primaryColor: "#155eef",
         openingMessage: "Hi",
       },
       maxMessageLength: 1200,
     };
     this.tenants.push(tenant);
+    return tenant;
+  }
+
+  async createSelfServiceTenant(input: {
+    name: string;
+    slug: string;
+    owner: {
+      email: string;
+      name: string;
+      authUserId?: string | null | undefined;
+    };
+    defaultLocale?: string | undefined;
+    theme?: Record<string, unknown> | undefined;
+  }) {
+    const tenant = await this.createTenant({
+      name: input.name,
+      slug: input.slug,
+      status: "setup_pending",
+      defaultLocale: input.defaultLocale,
+      theme: input.theme,
+    });
+    await this.upsertTenantUser(tenant.id, {
+      email: input.owner.email,
+      name: input.owner.name,
+      role: "tenant_owner",
+      authUserId: input.owner.authUserId ?? null,
+    });
     return tenant;
   }
 
@@ -612,6 +777,478 @@ class MemoryPlatformStore
     return connection;
   }
 
+  async listAvailableTelephoneNumbers(
+    options: {
+      country?: string | undefined;
+      locality?: string | undefined;
+      numberType?: string | undefined;
+      limit?: number | undefined;
+    } = {},
+  ) {
+    return this.telephoneNumbers
+      .filter(
+        (number) =>
+          number.status === "available" &&
+          (!options.country || number.country === options.country) &&
+          (!options.locality || number.locality === options.locality) &&
+          (!options.numberType || number.numberType === options.numberType),
+      )
+      .slice(0, options.limit ?? 25);
+  }
+
+  async listTelephoneNumberInventory() {
+    return this.telephoneNumbers;
+  }
+
+  async createTelephoneNumberInventory(input: {
+    provider?: string | undefined;
+    phoneNumber: string;
+    country?: string | undefined;
+    locality?: string | null | undefined;
+    numberType?: string | undefined;
+    sipTarget?: string | null | undefined;
+    assistantId?: string | null | undefined;
+    status?: string | undefined;
+    assignedTenantId?: string | null | undefined;
+    metadata?: Record<string, unknown> | undefined;
+  }) {
+    const number = {
+      id: crypto.randomUUID(),
+      provider: input.provider ?? "easybell",
+      phoneNumber: input.phoneNumber,
+      country: input.country ?? "DE",
+      locality: input.locality ?? null,
+      numberType: input.numberType ?? "local",
+      sipTarget: input.sipTarget ?? null,
+      assistantId: input.assistantId ?? null,
+      status: input.status ?? "available",
+      assignedTenantId: input.assignedTenantId ?? null,
+      metadata: input.metadata ?? {},
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    this.telephoneNumbers.push(number);
+    return number;
+  }
+
+  async updateTelephoneNumberInventory(
+    numberId: string,
+    input: {
+      provider?: string | undefined;
+      phoneNumber?: string | undefined;
+      country?: string | undefined;
+      locality?: string | null | undefined;
+      numberType?: string | undefined;
+      sipTarget?: string | null | undefined;
+      assistantId?: string | null | undefined;
+      status?: string | undefined;
+      assignedTenantId?: string | null | undefined;
+      metadata?: Record<string, unknown> | undefined;
+    },
+  ) {
+    const number = this.telephoneNumbers.find((item) => item.id === numberId);
+    if (!number) {
+      throw new Error("Telephone number not found.");
+    }
+    Object.assign(number, input, {
+      metadata: { ...number.metadata, ...(input.metadata ?? {}) },
+      updatedAt: new Date(),
+    });
+    return number;
+  }
+
+  async createTelephoneNumberReservation(
+    tenantId: string,
+    input: { numberId: string; userId?: string | null; expiresAt?: Date },
+  ) {
+    const number = this.telephoneNumbers.find(
+      (item) => item.id === input.numberId,
+    );
+    if (!number || number.status !== "available") {
+      throw new Error("Telephone number is not available.");
+    }
+    for (const reservation of this.telephoneReservations) {
+      if (
+        reservation.tenantId === tenantId &&
+        reservation.status === "active"
+      ) {
+        reservation.status = "released";
+        reservation.updatedAt = new Date();
+        const priorNumber = this.telephoneNumbers.find(
+          (item) => item.id === reservation.numberId,
+        );
+        if (priorNumber?.status === "reserved") {
+          priorNumber.status = "available";
+          priorNumber.assignedTenantId = null;
+          priorNumber.updatedAt = new Date();
+        }
+      }
+    }
+    number.status = "reserved";
+    number.assignedTenantId = tenantId;
+    number.updatedAt = new Date();
+    const reservation = {
+      id: crypto.randomUUID(),
+      tenantId,
+      numberId: input.numberId,
+      userId: input.userId ?? null,
+      status: "active",
+      expiresAt: input.expiresAt ?? new Date(Date.now() + 30 * 60 * 1000),
+      activatedAt: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    this.telephoneReservations.push(reservation);
+    return reservation;
+  }
+
+  async getActiveTelephoneNumberReservation(tenantId: string) {
+    return (
+      this.telephoneReservations.find(
+        (reservation) =>
+          reservation.tenantId === tenantId &&
+          reservation.status === "active" &&
+          reservation.expiresAt.getTime() > Date.now(),
+      ) ?? null
+    );
+  }
+
+  async getBillingAccount(tenantId: string) {
+    return (
+      this.billingAccounts.find((account) => account.tenantId === tenantId) ??
+      null
+    );
+  }
+
+  async getOrCreateBillingAccount(
+    tenantId: string,
+    input: {
+      stripeCustomerId?: string | null | undefined;
+      status?: string | undefined;
+      defaultCurrency?: string | undefined;
+      metadata?: Record<string, unknown> | undefined;
+    } = {},
+  ) {
+    const existing = await this.getBillingAccount(tenantId);
+    if (existing) {
+      if (input.stripeCustomerId !== undefined) {
+        existing.stripeCustomerId = input.stripeCustomerId;
+      }
+      existing.status = input.status ?? existing.status;
+      existing.defaultCurrency =
+        input.defaultCurrency ?? existing.defaultCurrency;
+      existing.metadata = { ...existing.metadata, ...(input.metadata ?? {}) };
+      existing.updatedAt = new Date();
+      return existing;
+    }
+    const account = {
+      id: crypto.randomUUID(),
+      tenantId,
+      stripeCustomerId: input.stripeCustomerId ?? null,
+      status: input.status ?? "incomplete",
+      defaultCurrency: input.defaultCurrency ?? "eur",
+      metadata: input.metadata ?? {},
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    this.billingAccounts.push(account);
+    return account;
+  }
+
+  async upsertBillingSubscription(
+    tenantId: string,
+    input: {
+      billingAccountId: string;
+      stripeSubscriptionId?: string | null | undefined;
+      stripePriceId?: string | null | undefined;
+      status: string;
+      currentPeriodStart?: Date | null | undefined;
+      currentPeriodEnd?: Date | null | undefined;
+      metadata?: Record<string, unknown> | undefined;
+    },
+  ) {
+    const existing =
+      (input.stripeSubscriptionId
+        ? this.billingSubscriptions.find(
+            (subscription) =>
+              subscription.tenantId === tenantId &&
+              subscription.stripeSubscriptionId === input.stripeSubscriptionId,
+          )
+        : undefined) ??
+      this.billingSubscriptions.find(
+        (subscription) =>
+          subscription.tenantId === tenantId &&
+          subscription.billingAccountId === input.billingAccountId,
+      );
+    if (existing) {
+      Object.assign(existing, input, {
+        metadata: { ...existing.metadata, ...(input.metadata ?? {}) },
+        updatedAt: new Date(),
+      });
+      return existing;
+    }
+    const subscription = {
+      id: crypto.randomUUID(),
+      tenantId,
+      billingAccountId: input.billingAccountId,
+      stripeSubscriptionId: input.stripeSubscriptionId ?? null,
+      stripePriceId: input.stripePriceId ?? null,
+      status: input.status,
+      currentPeriodStart: input.currentPeriodStart ?? null,
+      currentPeriodEnd: input.currentPeriodEnd ?? null,
+      metadata: input.metadata ?? {},
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    this.billingSubscriptions.push(subscription);
+    return subscription;
+  }
+
+  async activateReservedTelephoneNumber(input: {
+    tenantId: string;
+    reservationId: string;
+    stripeCustomerId: string;
+    stripeSubscriptionId?: string | null | undefined;
+    stripePriceId?: string | null | undefined;
+    subscriptionStatus: string;
+    currentPeriodStart?: Date | null | undefined;
+    currentPeriodEnd?: Date | null | undefined;
+    metadata?: Record<string, unknown> | undefined;
+  }) {
+    const reservation = this.telephoneReservations.find(
+      (item) =>
+        item.id === input.reservationId &&
+        item.tenantId === input.tenantId &&
+        item.status === "active",
+    );
+    if (!reservation) {
+      throw new Error("Active telephone number reservation not found.");
+    }
+    const number = this.telephoneNumbers.find(
+      (item) => item.id === reservation.numberId,
+    );
+    if (!number) {
+      throw new Error("Telephone number not found.");
+    }
+    const account = await this.getOrCreateBillingAccount(input.tenantId, {
+      stripeCustomerId: input.stripeCustomerId,
+      status:
+        input.subscriptionStatus === "active" ||
+        input.subscriptionStatus === "trialing"
+          ? "active"
+          : "past_due",
+      metadata: input.metadata,
+    });
+    await this.upsertBillingSubscription(input.tenantId, {
+      billingAccountId: account.id,
+      stripeSubscriptionId: input.stripeSubscriptionId ?? null,
+      stripePriceId: input.stripePriceId ?? null,
+      status: input.subscriptionStatus,
+      currentPeriodStart: input.currentPeriodStart ?? null,
+      currentPeriodEnd: input.currentPeriodEnd ?? null,
+      metadata: input.metadata,
+    });
+    reservation.status = "completed";
+    reservation.activatedAt = new Date();
+    reservation.updatedAt = new Date();
+    number.status = "assigned";
+    number.assignedTenantId = input.tenantId;
+    number.updatedAt = new Date();
+    const tenant = this.tenants.find((item) => item.id === input.tenantId);
+    if (tenant) {
+      tenant.status = "active";
+    }
+    await this.upsertChannelConnection(input.tenantId, {
+      channel: "telephone",
+      provider: number.provider,
+      externalAccountId: number.phoneNumber,
+      status: number.metadata.launchReady === true ? "connected" : "pending",
+      settings: {
+        phoneNumber: number.phoneNumber,
+        mode: "self_service_number_pool",
+        sipTarget: number.sipTarget ?? null,
+        assistantId: number.assistantId ?? tenant?.publicId ?? null,
+      },
+    });
+    return { reservation, number, account };
+  }
+
+  async getOnboardingState(tenantId: string) {
+    const reservation =
+      await this.getActiveTelephoneNumberReservation(tenantId);
+    const assignedNumber =
+      this.telephoneNumbers.find(
+        (number) =>
+          number.assignedTenantId === tenantId && number.status === "assigned",
+      ) ?? null;
+    const billingAccount = await this.getBillingAccount(tenantId);
+    const subscription =
+      this.billingSubscriptions.find((item) => item.tenantId === tenantId) ??
+      null;
+    const telephoneConnection =
+      this.channelConnections.find(
+        (connection) =>
+          connection.tenantId === tenantId &&
+          connection.channel === "telephone",
+      ) ?? null;
+    return {
+      tenant: await this.getTenant(tenantId),
+      reservation,
+      phoneNumber: assignedNumber,
+      billingAccount,
+      subscription,
+      telephoneConnection,
+      checklist: {
+        projectCreated: Boolean(await this.getTenant(tenantId)),
+        numberReserved: Boolean(reservation || assignedNumber),
+        billingActive: billingAccount?.status === "active",
+        telephoneReady: telephoneConnection?.status === "connected",
+      },
+    };
+  }
+
+  async getPlatformBillingOverview() {
+    return {
+      billingAccounts: {
+        total: this.billingAccounts.length,
+        active: this.billingAccounts.filter(
+          (account) => account.status === "active",
+        ).length,
+        pastDue: this.billingAccounts.filter(
+          (account) => account.status === "past_due",
+        ).length,
+      },
+      telephoneNumbers: {
+        total: this.telephoneNumbers.length,
+        available: this.telephoneNumbers.filter(
+          (number) => number.status === "available",
+        ).length,
+        reserved: this.telephoneNumbers.filter(
+          (number) => number.status === "reserved",
+        ).length,
+        assigned: this.telephoneNumbers.filter(
+          (number) => number.status === "assigned",
+        ).length,
+      },
+      billableUsageByStatus: this.billableUsageEvents.reduce<
+        Record<string, number>
+      >((totals, event) => {
+        totals[event.status] = (totals[event.status] ?? 0) + 1;
+        return totals;
+      }, {}),
+    };
+  }
+
+  async recordStripeWebhookEvent(input: {
+    stripeEventId: string;
+    eventType: string;
+    tenantId?: string | null;
+    payload: Record<string, unknown>;
+  }) {
+    const existing = this.stripeWebhookEvents.find(
+      (event) => event.stripeEventId === input.stripeEventId,
+    );
+    if (existing) {
+      return { event: existing, duplicate: true };
+    }
+    const event = {
+      id: crypto.randomUUID(),
+      stripeEventId: input.stripeEventId,
+      eventType: input.eventType,
+      tenantId: input.tenantId ?? null,
+      payload: input.payload,
+      status: "received",
+      error: null,
+      processedAt: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    this.stripeWebhookEvents.push(event);
+    return { event, duplicate: false };
+  }
+
+  async markStripeWebhookEventProcessed(eventId: string) {
+    const event = this.stripeWebhookEvents.find((item) => item.id === eventId);
+    if (event) {
+      event.status = "processed";
+      event.error = null;
+      event.processedAt = new Date();
+      event.updatedAt = new Date();
+    }
+  }
+
+  async markStripeWebhookEventFailed(eventId: string, error: string) {
+    const event = this.stripeWebhookEvents.find((item) => item.id === eventId);
+    if (event) {
+      event.status = "failed";
+      event.error = error;
+      event.updatedAt = new Date();
+    }
+  }
+
+  async recordBillableAcceptedCall(input: {
+    tenantId: string;
+    providerCallId: string;
+    quantity?: number | undefined;
+    unitAmountCents?: number | undefined;
+    metadata?: Record<string, unknown> | undefined;
+  }) {
+    const existing = this.billableUsageEvents.find(
+      (event) =>
+        event.tenantId === input.tenantId &&
+        event.providerCallId === input.providerCallId,
+    );
+    if (existing) {
+      return { event: existing, duplicate: true };
+    }
+    const event = {
+      id: crypto.randomUUID(),
+      tenantId: input.tenantId,
+      providerCallId: input.providerCallId,
+      quantity: input.quantity ?? 1,
+      unitAmountCents: input.unitAmountCents ?? 10,
+      status: "pending",
+      stripeMeterEventId: null,
+      metadata: input.metadata ?? {},
+      reportedAt: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    this.billableUsageEvents.push(event);
+    return { event, duplicate: false };
+  }
+
+  async markBillableUsageReported(
+    tenantId: string,
+    eventId: string,
+    stripeMeterEventId: string,
+  ) {
+    const event = this.billableUsageEvents.find(
+      (item) => item.tenantId === tenantId && item.id === eventId,
+    );
+    if (event) {
+      event.status = "reported";
+      event.stripeMeterEventId = stripeMeterEventId;
+      event.reportedAt = new Date();
+      event.updatedAt = new Date();
+    }
+  }
+
+  async markBillableUsageFailed(
+    tenantId: string,
+    eventId: string,
+    detail: string,
+  ) {
+    const event = this.billableUsageEvents.find(
+      (item) => item.tenantId === tenantId && item.id === eventId,
+    );
+    if (event) {
+      event.status = "failed";
+      event.metadata = { ...event.metadata, error: detail };
+      event.updatedAt = new Date();
+    }
+  }
+
   async getTenantByChannelConnection(
     channel: Channel,
     provider: string,
@@ -686,6 +1323,487 @@ class MemoryPlatformStore
     }
   }
 
+  async getTenantBrainSummary(tenantId: string) {
+    return {
+      approvedKnowledge: this.chunks.filter(
+        (chunk) =>
+          chunk.tenantId === tenantId &&
+          (chunk.status ?? "approved") === "approved",
+      ).length,
+      pendingSuggestions: this.knowledgeSuggestions.filter(
+        (suggestion) =>
+          suggestion.tenantId === tenantId && suggestion.status === "pending",
+      ).length,
+      onboardingAnswers: this.brainOnboardingAnswers.filter(
+        (answer) => answer.tenantId === tenantId,
+      ).length,
+      approvedOnboardingAnswers: this.brainOnboardingAnswers.filter(
+        (answer) =>
+          answer.tenantId === tenantId && answer.status === "approved",
+      ).length,
+      ingestionJobs: this.documentIngestionJobs.filter(
+        (job) => job.tenantId === tenantId,
+      ).length,
+      failedIngestionJobs: this.documentIngestionJobs.filter(
+        (job) => job.tenantId === tenantId && job.status === "failed",
+      ).length,
+    };
+  }
+
+  async listBrainOnboardingAnswers(tenantId: string) {
+    return this.brainOnboardingAnswers.filter(
+      (answer) => answer.tenantId === tenantId,
+    );
+  }
+
+  async upsertBrainOnboardingAnswers(
+    tenantId: string,
+    input: Parameters<PlatformStore["upsertBrainOnboardingAnswers"]>[1],
+  ) {
+    const saved = input.answers.map((item) => {
+      const existing = this.brainOnboardingAnswers.find(
+        (answer) =>
+          answer.tenantId === tenantId &&
+          answer.questionKey === item.questionKey,
+      );
+      const status =
+        input.publishApproved || item.status === "approved"
+          ? "approved"
+          : (item.status ?? "draft");
+      if (existing) {
+        existing.question = item.question;
+        existing.answer = item.answer;
+        existing.category = item.category ?? "general";
+        existing.status = status;
+        existing.metadata = item.metadata ?? {};
+        existing.updatedAt = new Date();
+        if (status === "approved") {
+          existing.approvedChunkId =
+            this.publishMemoryOnboardingAnswer(existing);
+        }
+        return existing;
+      }
+      const record: (typeof this.brainOnboardingAnswers)[number] = {
+        id: crypto.randomUUID(),
+        tenantId,
+        questionKey: item.questionKey,
+        question: item.question,
+        answer: item.answer,
+        category: item.category ?? "general",
+        status,
+        approvedChunkId: null,
+        metadata: item.metadata ?? {},
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      if (status === "approved") {
+        record.approvedChunkId = this.publishMemoryOnboardingAnswer(record);
+      }
+      this.brainOnboardingAnswers.push(record);
+      return record;
+    });
+    return saved;
+  }
+
+  private publishMemoryOnboardingAnswer(answer: {
+    id: string;
+    tenantId: string;
+    questionKey: string;
+    question: string;
+    answer: string;
+    category: string;
+    approvedChunkId?: string | null;
+    metadata: Record<string, unknown>;
+  }) {
+    const content = `Question: ${answer.question}\nAnswer: ${answer.answer}`;
+    const metadata = {
+      ...answer.metadata,
+      question: answer.question,
+      answer: answer.answer,
+      questionKey: answer.questionKey,
+      approvedFrom: "brain_onboarding",
+    };
+    if (answer.approvedChunkId) {
+      const existing = this.chunks.find(
+        (chunk) =>
+          chunk.tenantId === answer.tenantId &&
+          chunk.id === answer.approvedChunkId,
+      );
+      if (existing) {
+        existing.title = answer.question;
+        existing.content = content;
+        existing.metadata = metadata;
+        existing.status = "approved";
+        existing.updatedAt = new Date();
+        return existing.id;
+      }
+    }
+    const chunk = {
+      id: crypto.randomUUID(),
+      tenantId: answer.tenantId,
+      documentId: crypto.randomUUID(),
+      sourceId: crypto.randomUUID(),
+      title: answer.question,
+      content,
+      tags: ["onboarding", answer.category],
+      metadata,
+      status: "approved",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    this.chunks.push(chunk);
+    return chunk.id;
+  }
+
+  async listKnowledgeSuggestions(
+    tenantId: string,
+    options: { status?: string; q?: string } = {},
+  ) {
+    const status =
+      options.status && options.status !== "all" ? options.status : "pending";
+    const query = options.q?.toLowerCase();
+    return this.knowledgeSuggestions.filter((suggestion) => {
+      if (suggestion.tenantId !== tenantId) {
+        return false;
+      }
+      if (status && suggestion.status !== status) {
+        return false;
+      }
+      if (!query) {
+        return true;
+      }
+      return [
+        suggestion.suggestedQuestion,
+        suggestion.suggestedAnswer,
+        suggestion.suggestedTitle,
+      ]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(query));
+    });
+  }
+
+  async listDocumentIngestionJobs(
+    tenantId: string,
+    options: { status?: string } = {},
+  ) {
+    const status =
+      options.status && options.status !== "all" ? options.status : undefined;
+    return this.documentIngestionJobs.filter(
+      (job) => job.tenantId === tenantId && (!status || job.status === status),
+    );
+  }
+
+  async recordDocumentIngestionFailure(
+    tenantId: string,
+    input: Parameters<PlatformStore["recordDocumentIngestionFailure"]>[1],
+  ) {
+    const job = {
+      id: crypto.randomUUID(),
+      tenantId,
+      sourceId: null,
+      documentId: null,
+      objectKey: input.objectKey ?? null,
+      fileName: input.fileName,
+      contentType: input.contentType,
+      checksum: input.checksum ?? null,
+      status: "failed",
+      error: input.error,
+      parserMetadata: input.metadata ?? {},
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    this.documentIngestionJobs.push(job);
+    return job;
+  }
+
+  async ingestKnowledgeDocument(
+    tenantId: string,
+    input: Parameters<PlatformStore["ingestKnowledgeDocument"]>[1],
+  ) {
+    const existing = input.checksum
+      ? this.documentIngestionJobs.find(
+          (job) =>
+            job.tenantId === tenantId &&
+            job.checksum === input.checksum &&
+            job.documentId,
+        )
+      : undefined;
+    if (existing) {
+      const duplicateJob = {
+        id: crypto.randomUUID(),
+        tenantId,
+        sourceId: existing.sourceId ?? null,
+        documentId: existing.documentId ?? null,
+        objectKey: input.objectKey ?? null,
+        fileName: input.fileName,
+        contentType: input.contentType,
+        checksum: input.checksum ?? null,
+        status: "archived",
+        error: null,
+        parserMetadata: {
+          ...(input.metadata ?? {}),
+          duplicate: true,
+          duplicateDocumentId: existing.documentId,
+        },
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      this.documentIngestionJobs.push(duplicateJob);
+      return {
+        source: { id: existing.sourceId },
+        document: { id: existing.documentId },
+        job: duplicateJob,
+        suggestions: [],
+        duplicate: true,
+      };
+    }
+
+    const source = {
+      id: crypto.randomUUID(),
+      tenantId,
+      type: "document_upload",
+      name: input.sourceName ?? input.fileName,
+      metadata: input.metadata ?? {},
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const document = {
+      id: crypto.randomUUID(),
+      tenantId,
+      sourceId: source.id,
+      title: input.fileName,
+      content: input.extractedText,
+      status: "pending_review",
+      checksum: input.checksum ?? null,
+      metadata: input.metadata ?? {},
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const job = {
+      id: crypto.randomUUID(),
+      tenantId,
+      sourceId: source.id,
+      documentId: document.id,
+      objectKey: input.objectKey ?? null,
+      fileName: input.fileName,
+      contentType: input.contentType,
+      checksum: input.checksum ?? null,
+      status: "pending_review",
+      error: null,
+      parserMetadata: {
+        ...(input.metadata ?? {}),
+        textCharacters: input.extractedText.length,
+      },
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    this.documentIngestionJobs.push(job);
+    const sections = input.extractedText
+      .split(/\n\s*\n/g)
+      .map((section) => section.trim())
+      .filter((section) => section.length >= 60)
+      .slice(0, input.maxSuggestions ?? 8);
+    const suggestionSections = sections.length
+      ? sections
+      : [input.extractedText];
+    const suggestions = await Promise.all(
+      suggestionSections.map((section, index) =>
+        this.createKnowledgeSuggestion(tenantId, {
+          sourceType: "document_extraction",
+          sourceDocumentId: document.id,
+          suggestedQuestion:
+            section.split("\n").find((line) => line.trim().length >= 8) ??
+            `${input.fileName} section ${index + 1}`,
+          suggestedTitle:
+            section.split("\n").find((line) => line.trim().length >= 8) ??
+            `${input.fileName} section ${index + 1}`,
+          suggestedAnswer: section.slice(0, 4000),
+          suggestedTags: input.suggestedTags ?? ["document", "upload"],
+          suggestedMetadata: {
+            ...(input.metadata ?? {}),
+            documentId: document.id,
+            ingestionJobId: job.id,
+            sectionIndex: index + 1,
+          },
+          confidence: 0.7,
+        }),
+      ),
+    );
+    return { source, document, job, suggestions, duplicate: false };
+  }
+
+  async createKnowledgeSuggestion(
+    tenantId: string,
+    input: Parameters<PlatformStore["createKnowledgeSuggestion"]>[1],
+  ) {
+    const existing = input.sourceMessageId
+      ? this.knowledgeSuggestions.find(
+          (suggestion) =>
+            suggestion.tenantId === tenantId &&
+            suggestion.sourceMessageId === input.sourceMessageId &&
+            suggestion.sourceType === input.sourceType,
+        )
+      : undefined;
+    if (existing) {
+      return existing;
+    }
+    const suggestion: (typeof this.knowledgeSuggestions)[number] = {
+      id: crypto.randomUUID(),
+      tenantId,
+      sourceType: input.sourceType,
+      sourceConversationId: input.sourceConversationId ?? null,
+      sourceMessageId: input.sourceMessageId ?? null,
+      sourceDocumentId: input.sourceDocumentId ?? null,
+      suggestedQuestion: input.suggestedQuestion ?? null,
+      suggestedAnswer: input.suggestedAnswer ?? null,
+      suggestedTitle: input.suggestedTitle ?? null,
+      suggestedTags: input.suggestedTags ?? ["suggested"],
+      suggestedMetadata: input.suggestedMetadata ?? {},
+      confidence: input.confidence ?? 0,
+      status: "pending",
+      reviewedByUserId: null,
+      reviewedAt: null,
+      reviewNote: null,
+      approvedChunkId: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    this.knowledgeSuggestions.push(suggestion);
+    return suggestion;
+  }
+
+  async approveKnowledgeSuggestion(
+    tenantId: string,
+    suggestionId: string,
+    input: Parameters<PlatformStore["approveKnowledgeSuggestion"]>[2] = {},
+  ) {
+    const suggestion = this.knowledgeSuggestions.find(
+      (item) =>
+        item.tenantId === tenantId &&
+        item.id === suggestionId &&
+        item.status === "pending",
+    );
+    if (!suggestion) {
+      throw new Error("Knowledge suggestion not found.");
+    }
+    const question =
+      input.question ??
+      suggestion.suggestedQuestion ??
+      suggestion.suggestedTitle ??
+      "";
+    const answer = input.answer ?? suggestion.suggestedAnswer ?? "";
+    if (!question || !answer) {
+      throw new Error("A question/title and answer are required to approve.");
+    }
+    const chunk = {
+      id: crypto.randomUUID(),
+      tenantId,
+      documentId: crypto.randomUUID(),
+      sourceId: crypto.randomUUID(),
+      title: input.title ?? suggestion.suggestedTitle ?? question,
+      content: `Question: ${question}\nAnswer: ${answer}`,
+      tags: input.tags ?? suggestion.suggestedTags,
+      metadata: {
+        ...suggestion.suggestedMetadata,
+        question,
+        answer,
+        suggestionId,
+        approvedFrom: "knowledge_suggestion",
+      },
+      status: "approved",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    this.chunks.push(chunk);
+    suggestion.status = "approved";
+    suggestion.suggestedQuestion = question;
+    suggestion.suggestedAnswer = answer;
+    suggestion.suggestedTitle = chunk.title;
+    suggestion.suggestedTags = chunk.tags;
+    suggestion.reviewedByUserId = input.reviewedByUserId ?? null;
+    suggestion.reviewedAt = new Date();
+    suggestion.reviewNote = input.reviewNote ?? null;
+    suggestion.approvedChunkId = chunk.id;
+    suggestion.updatedAt = new Date();
+    return { suggestion, chunk };
+  }
+
+  async rejectKnowledgeSuggestion(
+    tenantId: string,
+    suggestionId: string,
+    input: Parameters<PlatformStore["rejectKnowledgeSuggestion"]>[2] = {},
+  ) {
+    const suggestion = this.knowledgeSuggestions.find(
+      (item) =>
+        item.tenantId === tenantId &&
+        item.id === suggestionId &&
+        item.status === "pending",
+    );
+    if (!suggestion) {
+      throw new Error("Pending knowledge suggestion not found.");
+    }
+    suggestion.status = "rejected";
+    suggestion.reviewedByUserId = input.reviewedByUserId ?? null;
+    suggestion.reviewedAt = new Date();
+    suggestion.reviewNote = input.reviewNote ?? null;
+    suggestion.updatedAt = new Date();
+    return suggestion;
+  }
+
+  async scanKnowledgeSuggestions(
+    tenantId: string,
+    input: Parameters<PlatformStore["scanKnowledgeSuggestions"]>[1] = {},
+  ) {
+    const limit = input?.limit ?? 50;
+    const candidates = this.handoffs
+      .filter((handoff) => handoff.tenantId === tenantId)
+      .slice(0, limit);
+    const created: Array<(typeof this.knowledgeSuggestions)[number]> = [];
+    let skipped = 0;
+    for (const handoff of candidates) {
+      const question = String(
+        handoff.requesterMessage ?? handoff.message ?? "",
+      ).trim();
+      if (
+        !question ||
+        question.length < 12 ||
+        handoff.reason === "lead_capture" ||
+        handoff.reason === "readiness_assessment"
+      ) {
+        skipped += 1;
+        continue;
+      }
+      const existing = this.knowledgeSuggestions.find(
+        (suggestion) =>
+          suggestion.tenantId === tenantId &&
+          suggestion.sourceType === "unanswered_question" &&
+          suggestion.sourceConversationId ===
+            (handoff.conversationId ?? null) &&
+          suggestion.suggestedQuestion === question,
+      );
+      if (existing) {
+        skipped += 1;
+        continue;
+      }
+      const suggestion = await this.createKnowledgeSuggestion(tenantId, {
+        sourceType: "unanswered_question",
+        sourceConversationId: handoff.conversationId ?? null,
+        suggestedQuestion: question,
+        suggestedTitle: question,
+        suggestedTags: ["unanswered", handoff.reason, handoff.channel],
+        suggestedMetadata: {
+          handoffId: handoff.id,
+          handoffReason: handoff.reason,
+          channel: handoff.channel,
+          needsHumanAnswer: true,
+        },
+        confidence: 0.45,
+      });
+      created.push(suggestion);
+    }
+    return { created, skipped, scanned: candidates.length };
+  }
+
   async addFaq(
     tenantId: string,
     input: { question: string; answer: string; tags?: string[] },
@@ -707,8 +1825,14 @@ class MemoryPlatformStore
     return { chunk };
   }
 
-  async listKnowledge(tenantId: string) {
-    return this.chunks.filter((chunk) => chunk.tenantId === tenantId);
+  async listKnowledge(tenantId: string, options: { status?: string } = {}) {
+    const status =
+      options.status && options.status !== "all" ? options.status : undefined;
+    return this.chunks.filter(
+      (chunk) =>
+        chunk.tenantId === tenantId &&
+        (!status || (chunk.status ?? "approved") === status),
+    );
   }
 
   async updateFaq(
@@ -759,7 +1883,11 @@ class MemoryPlatformStore
   ): Promise<KnowledgeChunk[]> {
     return rankChunks(
       query,
-      this.chunks.filter((chunk) => chunk.tenantId === tenantId),
+      this.chunks.filter(
+        (chunk) =>
+          chunk.tenantId === tenantId &&
+          (chunk.status ?? "approved") === "approved",
+      ),
     ).slice(0, limit);
   }
 
@@ -1242,12 +2370,28 @@ class MemoryPlatformStore
     return {
       tenant: await this.getTenant(tenantId),
       knowledge: await this.listKnowledge(tenantId),
+      brainOnboardingAnswers: await this.listBrainOnboardingAnswers(tenantId),
+      knowledgeSuggestions: await this.listKnowledgeSuggestions(tenantId, {
+        status: "all",
+      }),
+      documentIngestionJobs: this.documentIngestionJobs.filter(
+        (job) => job.tenantId === tenantId,
+      ),
     };
   }
 
   async deleteTenantData(tenantId: string) {
     this.tenants = this.tenants.filter((tenant) => tenant.id !== tenantId);
     this.chunks = this.chunks.filter((chunk) => chunk.tenantId !== tenantId);
+    this.brainOnboardingAnswers = this.brainOnboardingAnswers.filter(
+      (answer) => answer.tenantId !== tenantId,
+    );
+    this.knowledgeSuggestions = this.knowledgeSuggestions.filter(
+      (suggestion) => suggestion.tenantId !== tenantId,
+    );
+    this.documentIngestionJobs = this.documentIngestionJobs.filter(
+      (job) => job.tenantId !== tenantId,
+    );
   }
 
   private upsertContact(
@@ -1776,6 +2920,230 @@ describe("API", () => {
     await app.close();
   });
 
+  it("runs self-service onboarding through number reservation and Stripe activation", async () => {
+    const store = new MemoryPlatformStore();
+    await store.createTelephoneNumberInventory({
+      provider: "easybell",
+      phoneNumber: "+49301234567",
+      country: "DE",
+      locality: "Berlin",
+      numberType: "local",
+      sipTarget: "sip:asst_test@voice-edge.example.com",
+      metadata: { launchReady: true },
+    });
+    const billingProvider = {
+      createCustomer: vi.fn(async () => ({ id: "cus_self_service" })),
+      createCheckoutSession: vi.fn(async () => ({
+        id: "cs_self_service",
+        url: "https://checkout.stripe.test/cs_self_service",
+      })),
+      createCustomerPortalSession: vi.fn(async () => ({
+        url: "https://billing.stripe.test/session",
+      })),
+      verifyWebhook: vi.fn((input) =>
+        JSON.parse(input.rawBody.toString("utf8")),
+      ),
+      reportMeterEvent: vi.fn(async () => ({ id: "mtr_unused" })),
+    } satisfies BillingProvider;
+    const authUserId = crypto.randomUUID();
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+      supabaseAuth: memberSupabaseAuth(authUserId),
+      billingProvider,
+      billing: {
+        numberPriceId: "price_number_monthly",
+        acceptedCallPriceId: "price_accepted_call",
+        acceptedCallMeterEventName: "accepted_call",
+      },
+    });
+    const memberHeaders = { authorization: `Bearer ${MEMBER_BEARER}` };
+
+    const projectResponse = await app.inject({
+      method: "POST",
+      url: "/onboarding/projects",
+      headers: memberHeaders,
+      payload: {
+        name: "Self Service GmbH",
+        slug: "self-service-gmbh",
+        defaultLocale: "de-DE",
+      },
+    });
+    expect(projectResponse.statusCode).toBe(201);
+    const tenant = projectResponse.json<{ id: string; status: string }>();
+    expect(tenant.status).toBe("setup_pending");
+
+    const numbersResponse = await app.inject({
+      method: "GET",
+      url: `/onboarding/tenants/${tenant.id}/phone-numbers?country=DE&locality=Berlin&numberType=local`,
+      headers: memberHeaders,
+    });
+    expect(numbersResponse.statusCode).toBe(200);
+    const numbers = numbersResponse.json<{
+      numberMonthlyPriceCents: number;
+      acceptedCallPriceCents: number;
+      numbers: Array<{ id: string; phoneNumber: string }>;
+    }>();
+    expect(numbers.numberMonthlyPriceCents).toBe(300);
+    expect(numbers.acceptedCallPriceCents).toBe(10);
+    expect(numbers.numbers).toHaveLength(1);
+
+    const reservationResponse = await app.inject({
+      method: "POST",
+      url: `/onboarding/tenants/${tenant.id}/phone-number-reservations`,
+      headers: memberHeaders,
+      payload: { numberId: numbers.numbers[0]!.id },
+    });
+    expect(reservationResponse.statusCode).toBe(201);
+    const reservation = reservationResponse.json<{ id: string }>();
+
+    const checkoutResponse = await app.inject({
+      method: "POST",
+      url: `/billing/tenants/${tenant.id}/checkout-sessions`,
+      headers: memberHeaders,
+      payload: {},
+    });
+    expect(checkoutResponse.statusCode).toBe(200);
+    expect(checkoutResponse.json<{ url: string }>().url).toContain(
+      "checkout.stripe.test",
+    );
+    expect(billingProvider.createCustomer).toHaveBeenCalledWith(
+      expect.objectContaining({ email: "member@example.com" }),
+    );
+    expect(billingProvider.createCheckoutSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customerId: "cus_self_service",
+        numberPriceId: "price_number_monthly",
+        acceptedCallPriceId: "price_accepted_call",
+      }),
+    );
+
+    const stripeEvent = {
+      id: "evt_checkout_completed",
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          id: "cs_self_service",
+          customer: "cus_self_service",
+          subscription: "sub_self_service",
+          payment_status: "paid",
+          metadata: {
+            tenant_id: tenant.id,
+            reservation_id: reservation.id,
+          },
+        },
+      },
+    };
+    const webhookResponse = await app.inject({
+      method: "POST",
+      url: "/webhooks/stripe",
+      headers: { "stripe-signature": "test" },
+      payload: stripeEvent,
+    });
+    expect(webhookResponse.statusCode).toBe(200);
+    expect((await store.getTenant(tenant.id))?.status).toBe("active");
+    expect(store.telephoneNumbers[0]).toMatchObject({
+      status: "assigned",
+      assignedTenantId: tenant.id,
+    });
+    expect(store.channelConnections[0]).toMatchObject({
+      channel: "telephone",
+      provider: "easybell",
+      status: "connected",
+    });
+    expect(await store.getBillingAccount(tenant.id)).toMatchObject({
+      stripeCustomerId: "cus_self_service",
+      status: "active",
+    });
+
+    const duplicateWebhookResponse = await app.inject({
+      method: "POST",
+      url: "/webhooks/stripe",
+      headers: { "stripe-signature": "test" },
+      payload: stripeEvent,
+    });
+    expect(duplicateWebhookResponse.statusCode).toBe(200);
+    expect(
+      duplicateWebhookResponse.json<{ duplicate: boolean }>().duplicate,
+    ).toBe(true);
+    expect(store.stripeWebhookEvents).toHaveLength(1);
+
+    await app.close();
+  });
+
+  it("records accepted calls once and reports billable usage to Stripe meters", async () => {
+    const store = new MemoryPlatformStore();
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+    await store.getOrCreateBillingAccount(tenant.id, {
+      stripeCustomerId: "cus_usage",
+      status: "active",
+    });
+    const billingProvider = {
+      createCustomer: vi.fn(async () => ({ id: "cus_unused" })),
+      createCheckoutSession: vi.fn(async () => ({
+        id: "cs_unused",
+        url: "https://checkout.stripe.test/cs_unused",
+      })),
+      createCustomerPortalSession: vi.fn(async () => ({
+        url: "https://billing.stripe.test/session",
+      })),
+      verifyWebhook: vi.fn((input) =>
+        JSON.parse(input.rawBody.toString("utf8")),
+      ),
+      reportMeterEvent: vi.fn(async () => ({ id: "mtr_call_1" })),
+    } satisfies BillingProvider;
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+      billingProvider,
+      billing: {
+        numberPriceId: "price_number_monthly",
+        acceptedCallMeterEventName: "accepted_call",
+      },
+    });
+
+    const firstResponse = await app.inject({
+      method: "POST",
+      url: `/admin/tenants/${tenant.id}/billing/accepted-calls`,
+      headers: { "x-admin-token": "test-token" },
+      payload: { providerCallId: "call-123" },
+    });
+    expect(firstResponse.statusCode).toBe(200);
+    expect(store.billableUsageEvents[0]).toMatchObject({
+      providerCallId: "call-123",
+      status: "reported",
+      stripeMeterEventId: "mtr_call_1",
+    });
+    expect(billingProvider.reportMeterEvent).toHaveBeenCalledTimes(1);
+    expect(billingProvider.reportMeterEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventName: "accepted_call",
+        customerId: "cus_usage",
+        value: 1,
+      }),
+    );
+
+    const duplicateResponse = await app.inject({
+      method: "POST",
+      url: `/admin/tenants/${tenant.id}/billing/accepted-calls`,
+      headers: { "x-admin-token": "test-token" },
+      payload: { providerCallId: "call-123" },
+    });
+    expect(duplicateResponse.statusCode).toBe(200);
+    expect(duplicateResponse.json<{ duplicate: boolean }>().duplicate).toBe(
+      true,
+    );
+    expect(store.billableUsageEvents).toHaveLength(1);
+    expect(billingProvider.reportMeterEvent).toHaveBeenCalledTimes(1);
+
+    await app.close();
+  });
+
   it("creates a tenant, adds knowledge, and answers via widget endpoint", async () => {
     const store = new MemoryPlatformStore();
     const app = await buildServer({
@@ -1819,6 +3187,293 @@ describe("API", () => {
     expect(chatResponse.statusCode).toBe(200);
     expect(chatResponse.json<{ reply: string }>().reply).toContain("09:00");
     expect(store.messages).toHaveLength(2);
+
+    await app.close();
+  });
+
+  it("keeps learned suggestions inactive until a tenant admin approves them", async () => {
+    const store = new MemoryPlatformStore();
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+    });
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+
+    const suggestionResponse = await app.inject({
+      method: "POST",
+      url: `/admin/tenants/${tenant.id}/knowledge/suggestions`,
+      headers: { "x-admin-token": "test-token" },
+      payload: {
+        sourceType: "human_reply",
+        suggestedQuestion: "Do you offer emergency appointments?",
+        suggestedAnswer: "Yes, emergency appointments are available by phone.",
+        suggestedTags: ["emergency", "appointments"],
+        confidence: 0.82,
+      },
+    });
+    expect(suggestionResponse.statusCode).toBe(201);
+    const suggestion = suggestionResponse.json<{
+      id: string;
+      status: string;
+    }>();
+    expect(suggestion.status).toBe("pending");
+
+    const pendingChatResponse = await app.inject({
+      method: "POST",
+      url: "/widget/chat",
+      payload: {
+        assistantId: tenant.publicId,
+        message: "Do you offer emergency appointments?",
+      },
+    });
+    expect(pendingChatResponse.statusCode).toBe(200);
+    expect(pendingChatResponse.json<{ status: string }>().status).toBe(
+      "handoff",
+    );
+
+    const approveResponse = await app.inject({
+      method: "POST",
+      url: `/admin/tenants/${tenant.id}/knowledge/suggestions/${suggestion.id}/approve`,
+      headers: { "x-admin-token": "test-token" },
+      payload: {
+        reviewNote: "Confirmed by staff.",
+      },
+    });
+    expect(approveResponse.statusCode).toBe(200);
+    expect(
+      approveResponse.json<{
+        suggestion: { status: string };
+        chunk: unknown;
+      }>(),
+    ).toMatchObject({
+      suggestion: { status: "approved" },
+    });
+
+    const approvedChatResponse = await app.inject({
+      method: "POST",
+      url: "/widget/chat",
+      payload: {
+        assistantId: tenant.publicId,
+        message: "Do you offer emergency appointments?",
+      },
+    });
+    expect(approvedChatResponse.statusCode).toBe(200);
+    expect(approvedChatResponse.json<{ reply: string }>().reply).toContain(
+      "emergency appointments",
+    );
+
+    await app.close();
+  });
+
+  it("publishes approved onboarding answers into the shared knowledge base", async () => {
+    const store = new MemoryPlatformStore();
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+    });
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+
+    const onboardingResponse = await app.inject({
+      method: "PUT",
+      url: `/admin/tenants/${tenant.id}/brain/onboarding`,
+      headers: { "x-admin-token": "test-token" },
+      payload: {
+        publishApproved: true,
+        answers: [
+          {
+            questionKey: "opening_hours",
+            question: "What are your opening hours?",
+            answer: "We are open Monday to Friday from 09:00 to 18:00.",
+            category: "operations",
+          },
+        ],
+      },
+    });
+    expect(onboardingResponse.statusCode).toBe(200);
+
+    const brainResponse = await app.inject({
+      method: "GET",
+      url: `/admin/tenants/${tenant.id}/brain`,
+      headers: { "x-admin-token": "test-token" },
+    });
+    expect(brainResponse.statusCode).toBe(200);
+    expect(brainResponse.json()).toMatchObject({
+      approvedKnowledge: 1,
+      onboardingAnswers: 1,
+      approvedOnboardingAnswers: 1,
+    });
+
+    const chatResponse = await app.inject({
+      method: "POST",
+      url: "/widget/chat",
+      payload: {
+        assistantId: tenant.publicId,
+        message: "When are you open?",
+      },
+    });
+    expect(chatResponse.statusCode).toBe(200);
+    expect(chatResponse.json<{ reply: string }>().reply).toContain("09:00");
+
+    await app.close();
+  });
+
+  it("uploads text documents as pending brain suggestions", async () => {
+    const store = new MemoryPlatformStore();
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+    });
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+    const text = [
+      "Opening hours",
+      "We are open Monday to Friday from 09:00 to 18:00 and Saturdays by appointment.",
+      "",
+      "Services",
+      "We offer onboarding workshops, AI assistant setup, and ongoing support for customer communication.",
+    ].join("\n");
+
+    const uploadResponse = await app.inject({
+      method: "POST",
+      url: `/admin/tenants/${tenant.id}/knowledge/uploads`,
+      headers: { "x-admin-token": "test-token" },
+      payload: {
+        fileName: "company-info.txt",
+        contentType: "text/plain",
+        contentBase64: Buffer.from(text, "utf8").toString("base64"),
+        maxSuggestions: 4,
+      },
+    });
+
+    expect(uploadResponse.statusCode).toBe(201);
+    const upload = uploadResponse.json<{
+      job: { status: string };
+      suggestions: Array<{ sourceType: string; status: string }>;
+    }>();
+    expect(upload.job.status).toBe("pending_review");
+    expect(upload.suggestions.length).toBeGreaterThan(0);
+    expect(upload.suggestions[0]).toMatchObject({
+      sourceType: "document_extraction",
+      status: "pending",
+    });
+
+    const jobsResponse = await app.inject({
+      method: "GET",
+      url: `/admin/tenants/${tenant.id}/knowledge/ingestion-jobs`,
+      headers: { "x-admin-token": "test-token" },
+    });
+    expect(jobsResponse.statusCode).toBe(200);
+    expect(jobsResponse.json<unknown[]>()).toHaveLength(1);
+
+    await app.close();
+  });
+
+  it("records a failed ingestion job when a PDF has no readable text", async () => {
+    const store = new MemoryPlatformStore();
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+    });
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+
+    const uploadResponse = await app.inject({
+      method: "POST",
+      url: `/admin/tenants/${tenant.id}/knowledge/uploads`,
+      headers: { "x-admin-token": "test-token" },
+      payload: {
+        fileName: "scan.pdf",
+        contentType: "application/pdf",
+        contentBase64: Buffer.from("%PDF-1.4\n%%EOF", "latin1").toString(
+          "base64",
+        ),
+      },
+    });
+
+    expect(uploadResponse.statusCode).toBe(400);
+    expect(uploadResponse.json<{ code: string }>().code).toBe(
+      "document_parse_failed",
+    );
+
+    const jobsResponse = await app.inject({
+      method: "GET",
+      url: `/admin/tenants/${tenant.id}/knowledge/ingestion-jobs?status=failed`,
+      headers: { "x-admin-token": "test-token" },
+    });
+    expect(jobsResponse.statusCode).toBe(200);
+    expect(
+      jobsResponse.json<Array<{ status: string; error: string }>>(),
+    ).toEqual([
+      expect.objectContaining({
+        status: "failed",
+        error: expect.stringContaining("readable text"),
+      }),
+    ]);
+
+    await app.close();
+  });
+
+  it("scans handoff gaps into idempotent learning suggestions", async () => {
+    const store = new MemoryPlatformStore();
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+    });
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+    const conversation = await store.findOrCreateConversation({
+      tenantId: tenant.id,
+      channel: "website",
+    });
+    await store.createHandoff({
+      tenantId: tenant.id,
+      conversationId: conversation.id,
+      channel: "website",
+      reason: "knowledge_not_found",
+      message: "Can you support urgent weekend appointments?",
+    });
+
+    const scanResponse = await app.inject({
+      method: "POST",
+      url: `/admin/tenants/${tenant.id}/knowledge/suggestions/scan`,
+      headers: { "x-admin-token": "test-token" },
+      payload: { limit: 20 },
+    });
+    expect(scanResponse.statusCode).toBe(200);
+    expect(
+      scanResponse.json<{ created: unknown[]; scanned: number }>(),
+    ).toMatchObject({
+      created: [expect.objectContaining({ status: "pending" })],
+      scanned: 1,
+    });
+
+    const duplicateScanResponse = await app.inject({
+      method: "POST",
+      url: `/admin/tenants/${tenant.id}/knowledge/suggestions/scan`,
+      headers: { "x-admin-token": "test-token" },
+      payload: { limit: 20 },
+    });
+    expect(duplicateScanResponse.statusCode).toBe(200);
+    expect(
+      duplicateScanResponse.json<{ created: unknown[] }>().created,
+    ).toHaveLength(0);
 
     await app.close();
   });

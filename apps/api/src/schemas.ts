@@ -50,6 +50,10 @@ export const ParamsKnowledgeSchema = ParamsTenantSchema.extend({
   knowledgeId: z.string().uuid(),
 });
 
+export const ParamsKnowledgeSuggestionSchema = ParamsTenantSchema.extend({
+  suggestionId: z.string().uuid(),
+});
+
 export const ParamsConversationSchema = ParamsTenantSchema.extend({
   conversationId: z.string().uuid(),
 });
@@ -135,6 +139,17 @@ export const WidgetThemeSchema = z.object({
   automation: AutomationSettingsSchema.optional(),
 });
 
+export const OnboardingProjectSchema = z.object({
+  name: z.string().min(2).max(120),
+  slug: z
+    .string()
+    .min(2)
+    .max(120)
+    .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+  defaultLocale: z.string().min(2).max(16).default("de-DE"),
+  theme: WidgetThemeSchema.optional(),
+});
+
 export const UpdateTenantSchema = z.object({
   name: z.string().min(2).max(120).optional(),
   slug: z
@@ -155,6 +170,68 @@ export const AddFaqSchema = z.object({
   question: z.string().min(3).max(500),
   answer: z.string().min(3).max(4000),
   tags: z.array(z.string().min(1).max(60)).max(20).optional(),
+});
+
+export const BrainOnboardingAnswerSchema = z.object({
+  questionKey: z
+    .string()
+    .trim()
+    .min(2)
+    .max(80)
+    .regex(/^[a-z][a-z0-9_]*$/),
+  question: z.string().trim().min(3).max(500),
+  answer: z.string().trim().min(1).max(4000),
+  category: z.string().trim().min(1).max(80).optional(),
+  status: z.enum(["draft", "approved", "archived"]).optional(),
+  metadata: z.record(z.unknown()).optional(),
+});
+
+export const UpsertBrainOnboardingSchema = z.object({
+  answers: z.array(BrainOnboardingAnswerSchema).min(1).max(50),
+  publishApproved: z.boolean().optional(),
+});
+
+export const KnowledgeSuggestionSourceTypeSchema = z.enum([
+  "unanswered_question",
+  "human_reply",
+  "document_extraction",
+  "feedback",
+  "manual",
+  "conflict_detection",
+]);
+
+export const CreateKnowledgeSuggestionSchema = z.object({
+  sourceType: KnowledgeSuggestionSourceTypeSchema.default("manual"),
+  sourceConversationId: z.string().uuid().nullable().optional(),
+  sourceMessageId: z.string().uuid().nullable().optional(),
+  sourceDocumentId: z.string().uuid().nullable().optional(),
+  suggestedQuestion: z.string().trim().min(3).max(500).nullable().optional(),
+  suggestedAnswer: z.string().trim().min(3).max(4000).nullable().optional(),
+  suggestedTitle: z.string().trim().min(3).max(500).nullable().optional(),
+  suggestedTags: z.array(z.string().trim().min(1).max(60)).max(20).optional(),
+  suggestedMetadata: z.record(z.unknown()).optional(),
+  confidence: z.number().min(0).max(1).optional(),
+});
+
+export const ReviewKnowledgeSuggestionSchema = z.object({
+  question: z.string().trim().min(3).max(500).optional(),
+  answer: z.string().trim().min(3).max(4000).optional(),
+  title: z.string().trim().min(3).max(500).optional(),
+  tags: z.array(z.string().trim().min(1).max(60)).max(20).optional(),
+  reviewNote: z.string().trim().max(1000).optional(),
+});
+
+export const KnowledgeDocumentUploadSchema = z.object({
+  fileName: z.string().trim().min(1).max(240),
+  contentType: z.string().trim().min(1).max(120),
+  contentBase64: z.string().min(1).max(7_000_000),
+  suggestedTags: z.array(z.string().trim().min(1).max(60)).max(20).optional(),
+  metadata: z.record(z.unknown()).optional(),
+  maxSuggestions: z.number().int().min(1).max(20).optional(),
+});
+
+export const ScanKnowledgeSuggestionsSchema = z.object({
+  limit: z.number().int().min(1).max(200).optional(),
 });
 
 export const UpdateHandoffSchema = z.object({
@@ -272,6 +349,47 @@ export const TwilioNumberSearchQuerySchema = z.object({
   region: z.string().trim().min(1).max(80).optional(),
   postalCode: z.string().trim().min(1).max(24).optional(),
   limit: z.coerce.number().int().min(1).max(50).default(10),
+});
+
+export const OnboardingPhoneNumberQuerySchema = z.object({
+  country: TelephoneCountrySchema,
+  locality: z.string().trim().min(1).max(80).optional(),
+  numberType: TelephoneNumberTypeSchema.default("local"),
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+});
+
+export const ReservePhoneNumberSchema = z.object({
+  numberId: z.string().uuid(),
+});
+
+export const BillingCheckoutSessionSchema = z.object({
+  successUrl: z.string().url().max(500).optional(),
+  cancelUrl: z.string().url().max(500).optional(),
+});
+
+export const TelephoneNumberInventorySchema = z.object({
+  provider: TelephoneProviderSchema.default("easybell"),
+  phoneNumber: E164PhoneNumberSchema,
+  country: TelephoneCountrySchema,
+  locality: z.string().trim().min(1).max(80).nullable().optional(),
+  numberType: TelephoneNumberTypeSchema.default("local"),
+  sipTarget: z.string().trim().min(3).max(240).nullable().optional(),
+  assistantId: z.string().trim().min(8).max(120).nullable().optional(),
+  status: z
+    .enum(["available", "reserved", "assigned", "suspended", "retired"])
+    .default("available"),
+  assignedTenantId: z.string().uuid().nullable().optional(),
+  metadata: z.record(z.unknown()).optional(),
+});
+
+export const TelephoneNumberInventoryUpdateSchema =
+  TelephoneNumberInventorySchema.partial();
+
+export const BillableAcceptedCallSchema = z.object({
+  providerCallId: z.string().trim().min(1).max(160),
+  quantity: z.number().int().min(1).max(1).default(1),
+  unitAmountCents: z.number().int().min(0).max(10_000).default(10),
+  metadata: z.record(z.unknown()).optional(),
 });
 
 export const PurchaseTwilioNumberSchema = z.object({
@@ -461,8 +579,24 @@ export const AcceptTenantInviteSchema = z.object({
 });
 
 export type CreateTenantInput = z.infer<typeof CreateTenantSchema>;
+export type OnboardingProjectInput = z.infer<typeof OnboardingProjectSchema>;
 export type UpdateTenantInput = z.infer<typeof UpdateTenantSchema>;
 export type AddFaqInput = z.infer<typeof AddFaqSchema>;
+export type UpsertBrainOnboardingInput = z.infer<
+  typeof UpsertBrainOnboardingSchema
+>;
+export type CreateKnowledgeSuggestionInput = z.infer<
+  typeof CreateKnowledgeSuggestionSchema
+>;
+export type ReviewKnowledgeSuggestionInput = z.infer<
+  typeof ReviewKnowledgeSuggestionSchema
+>;
+export type KnowledgeDocumentUploadInput = z.infer<
+  typeof KnowledgeDocumentUploadSchema
+>;
+export type ScanKnowledgeSuggestionsInput = z.infer<
+  typeof ScanKnowledgeSuggestionsSchema
+>;
 export type UpdateHandoffInput = z.infer<typeof UpdateHandoffSchema>;
 export type ChannelConnectionInput = z.infer<typeof ChannelConnectionSchema>;
 export type WhatsappTemplateInput = z.infer<typeof WhatsappTemplateSchema>;

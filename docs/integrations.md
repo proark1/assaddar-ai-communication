@@ -77,9 +77,12 @@ Adapter/runtime:
 Current foundation:
 
 - The product treats telephone providers as number/SIP carriers only; Assaddar owns the AI, inbox, summaries, and handoff workflow.
+- Self-service tenants can create a project, reserve a pre-provisioned platform number, pay through Stripe Checkout, and then use the assigned number after the Stripe webhook activates the reservation.
+- Platform owners manage the number pool through `GET/POST/PATCH /admin/telephone/numbers`. Provider-side number purchase still depends on carrier/reseller access; the app stores and allocates numbers once they are available.
 - Admin setup supports three paths: request/connect a new provider number, forward an existing customer number to an AI destination number, or connect a SIP trunk/PBX.
 - Supported provider labels are `easybell`, `sipgate`, `peoplefone`, and `custom_sip`.
 - `apps/voice` exposes `POST /voice/turn` for a SIP/RTP edge such as Asterisk or FreeSWITCH. The edge sends transcribed text plus call metadata and receives the assistant reply, confidence, and handoff state.
+- Accepted phone calls create idempotent billable usage events. The API can report them to Stripe Billing Meters via `STRIPE_ACCEPTED_CALL_METER_EVENT_NAME`.
 - Admin setup also tracks launch checklist, test-call result, voice-edge health, provider setup guides, business hours, handoff rules, GDPR phone settings, voice quality, and recent phone transcripts.
 - The legacy Twilio TwiML route remains available for old tests/deployments, but it is no longer the main product direction.
 - Human handoff summaries, media streams, callback workflows, and deeper call analytics are TODOs behind the same runtime boundary.
@@ -90,6 +93,16 @@ Required env for the Railway voice bridge:
 - `VOICE_SIP_DOMAIN` or `VOICE_EDGE_SIP_DOMAIN` once a SIP edge is deployed
 - `VOICE_EDGE_SECRET` shared only with the SIP/RTP edge
 - `TWILIO_TRANSFER_PHONE_NUMBER` only for the legacy Twilio route
+
+Required env for self-service billing:
+
+- `SELF_SERVICE_ONBOARDING_ENABLED=true`
+- `STRIPE_SECRET_KEY`
+- `STRIPE_WEBHOOK_SECRET`
+- `STRIPE_NUMBER_PRICE_ID` for the recurring phone-number subscription item
+- `STRIPE_ACCEPTED_CALL_PRICE_ID` for the optional metered subscription item
+- `STRIPE_ACCEPTED_CALL_METER_EVENT_NAME` for accepted-call meter events
+- `STRIPE_CUSTOMER_PORTAL_RETURN_URL` when the billing portal should return to a fixed URL
 
 Voice edge contract:
 
