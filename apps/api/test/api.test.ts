@@ -2756,19 +2756,26 @@ describe("API", () => {
 
   it("reprocesses a retried webhook whose prior delivery failed", async () => {
     const store = new MemoryPlatformStore();
-    let sendAttempts = 0;
     globalThis.fetch = vi.fn(async () => {
-      sendAttempts += 1;
-      // The provider's Graph API is down on the first attempt, healthy on the
-      // retry — this is exactly the transient failure webhooks retry for.
-      if (sendAttempts === 1) {
-        throw new Error("network down");
-      }
       return new Response(JSON.stringify({ messages: [{ id: "wamid.ok" }] }), {
         status: 200,
         headers: { "content-type": "application/json" },
       });
     }) as typeof fetch;
+    // A transient infrastructure error mid-processing (here a DB write) makes the
+    // webhook return 5xx, so the provider retries. The retry must be reprocessed,
+    // not dropped as a duplicate.
+    const realRecordDelivery = store.recordMessageDelivery.bind(store);
+    let deliveryAttempts = 0;
+    vi.spyOn(store, "recordMessageDelivery").mockImplementation(
+      async (input) => {
+        deliveryAttempts += 1;
+        if (deliveryAttempts === 1) {
+          throw new Error("delivery store write failed");
+        }
+        return realRecordDelivery(input);
+      },
+    );
     const app = await buildServer({
       store,
       adminToken: "test-token",

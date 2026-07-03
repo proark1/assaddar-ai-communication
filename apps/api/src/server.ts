@@ -3795,6 +3795,10 @@ async function processChannelInboundEvent(input: {
       externalConversationId: input.event.externalConversationId,
       externalUserId: input.event.externalUserId,
       sendPolicy,
+      // Persist retry eligibility and an attempt counter so the delivery-retry
+      // worker can pick up transient failures and re-send them.
+      retryable: delivery.status === "failed" && delivery.retryable === true,
+      attempts: 0,
     },
   });
 

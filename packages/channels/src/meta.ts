@@ -117,30 +117,45 @@ export class WhatsAppCloudAdapter implements ChannelAdapter {
       };
     }
 
-    const response = await fetch(
-      `https://graph.facebook.com/${this.graphApiVersion}/${message.providerAccountId}/messages`,
-      {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${this.accessToken}`,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          messaging_product: "whatsapp",
-          to: message.externalUserId,
-          type: "text",
-          text: {
-            preview_url: false,
-            body: truncateMessage(message.text),
+    let response: Response;
+    try {
+      response = await fetch(
+        `https://graph.facebook.com/${this.graphApiVersion}/${message.providerAccountId}/messages`,
+        {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${this.accessToken}`,
+            "content-type": "application/json",
           },
-        }),
-        signal: AbortSignal.timeout(META_GRAPH_TIMEOUT_MS),
-      },
-    );
+          body: JSON.stringify({
+            messaging_product: "whatsapp",
+            to: message.externalUserId,
+            type: "text",
+            text: {
+              preview_url: false,
+              body: truncateMessage(message.text),
+            },
+          }),
+          signal: AbortSignal.timeout(META_GRAPH_TIMEOUT_MS),
+        },
+      );
+    } catch (error) {
+      // Network error or timeout: a real, transient failure. Report it as
+      // `failed` (retryable) instead of throwing, so the caller records a
+      // truthful delivery outcome and the retry worker can re-attempt it.
+      return {
+        status: "failed",
+        retryable: true,
+        detail: `WhatsApp send errored: ${
+          error instanceof Error ? error.message : String(error)
+        }.`,
+      };
+    }
 
     if (!response.ok) {
       return {
-        status: "skipped",
+        status: "failed",
+        retryable: isRetryableHttpStatus(response.status),
         detail: `WhatsApp send failed with ${response.status}.`,
       };
     }
@@ -253,29 +268,41 @@ export class MetaMessengerAdapter implements ChannelAdapter {
       };
     }
 
-    const response = await fetch(
-      `https://graph.facebook.com/${this.graphApiVersion}/me/messages`,
-      {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${this.pageAccessToken}`,
-          "content-type": "application/json",
+    let response: Response;
+    try {
+      response = await fetch(
+        `https://graph.facebook.com/${this.graphApiVersion}/me/messages`,
+        {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${this.pageAccessToken}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            recipient: {
+              id: message.externalUserId,
+            },
+            message: {
+              text: truncateMessage(message.text),
+            },
+          }),
+          signal: AbortSignal.timeout(META_GRAPH_TIMEOUT_MS),
         },
-        body: JSON.stringify({
-          recipient: {
-            id: message.externalUserId,
-          },
-          message: {
-            text: truncateMessage(message.text),
-          },
-        }),
-        signal: AbortSignal.timeout(META_GRAPH_TIMEOUT_MS),
-      },
-    );
+      );
+    } catch (error) {
+      return {
+        status: "failed",
+        retryable: true,
+        detail: `Meta ${message.channel} send errored: ${
+          error instanceof Error ? error.message : String(error)
+        }.`,
+      };
+    }
 
     if (!response.ok) {
       return {
-        status: "skipped",
+        status: "failed",
+        retryable: isRetryableHttpStatus(response.status),
         detail: `Meta ${message.channel} send failed with ${response.status}.`,
       };
     }
@@ -303,6 +330,16 @@ export const meta24HourMessagingWindow: MessagingWindowPolicy = {
   reason:
     "Meta Messenger and Instagram messaging require awareness of the standard response window.",
 };
+
+/**
+ * A Graph API rejection is worth retrying only when it is transient: rate
+ * limiting (429) or a server-side error (5xx). Other 4xx responses (bad
+ * recipient, invalid token, policy violation) are permanent — retrying would
+ * just fail again — so they are marked non-retryable.
+ */
+export function isRetryableHttpStatus(status: number): boolean {
+  return status === 429 || status >= 500;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

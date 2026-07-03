@@ -327,6 +327,17 @@ export type TenantAnalyticsResult = {
     total: number;
     credits: number;
   }>;
+  // Outbound delivery health so tenants/operators can see when replies are not
+  // actually reaching customers. `failed` counts real send failures (distinct
+  // from `skipped`, which are intentional non-sends).
+  deliveries: {
+    total: number;
+    sent: number;
+    failed: number;
+    skipped: number;
+    other: number;
+    failureRate: number;
+  };
 };
 
 export type WhatsappComplianceResult = {
@@ -2896,6 +2907,7 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       [totalHandoffStats],
       [contactStats],
       usageByStatus,
+      deliveryStatusRows,
     ] = await Promise.all([
       this.db
         .select({
@@ -2954,7 +2966,31 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
         .from(usageEvents)
         .where(eq(usageEvents.tenantId, tenantId))
         .groupBy(usageEvents.eventType),
+      this.db
+        .select({
+          status: messageDeliveries.status,
+          total: sql<number>`count(*)::int`,
+        })
+        .from(messageDeliveries)
+        .where(eq(messageDeliveries.tenantId, tenantId))
+        .groupBy(messageDeliveries.status),
     ]);
+
+    const deliveryByStatus = deliveryStatusRows.reduce(
+      (acc, row) => {
+        acc[row.status] = (acc[row.status] ?? 0) + row.total;
+        return acc;
+      },
+      {} as Record<string, number>,
+    );
+    const deliveriesTotal = Object.values(deliveryByStatus).reduce(
+      (sum, value) => sum + value,
+      0,
+    );
+    const deliveriesSent =
+      (deliveryByStatus.sent ?? 0) + (deliveryByStatus.queued ?? 0);
+    const deliveriesFailed = deliveryByStatus.failed ?? 0;
+    const deliveriesSkipped = deliveryByStatus.skipped ?? 0;
 
     return {
       conversations: conversationStats?.total ?? 0,
@@ -2966,6 +3002,25 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       lastConversationAt: conversationStats?.lastAt ?? null,
       lastMessageAt: messageStats?.lastAt ?? null,
       usageByStatus,
+      deliveries: {
+        total: deliveriesTotal,
+        sent: deliveriesSent,
+        failed: deliveriesFailed,
+        skipped: deliveriesSkipped,
+        other:
+          deliveriesTotal -
+          deliveriesSent -
+          deliveriesFailed -
+          deliveriesSkipped,
+        // Failure rate over deliveries we actually attempted (exclude
+        // intentional skips) so a channel with only skips reads as 0%, not NaN.
+        failureRate: (() => {
+          const attempted = deliveriesSent + deliveriesFailed;
+          return attempted === 0
+            ? 0
+            : Math.round((deliveriesFailed / attempted) * 1000) / 1000;
+        })(),
+      },
     };
   }
 
