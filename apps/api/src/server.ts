@@ -12,6 +12,7 @@ import {
   InboundMessageSchema,
   type AnswerDataStore,
   type Channel,
+  type GroundedAnswerGenerator,
   type HandoffStore,
 } from "@assaddar/core";
 import cors from "@fastify/cors";
@@ -386,6 +387,11 @@ export type BuildServerOptions = {
    * keyword + semantic retrieval. Omitted in keyword-only mode.
    */
   embedder?: (text: string) => Promise<number[] | null>;
+  /**
+   * Optional grounded answer writer. It only receives approved retrieved
+   * knowledge; omitted keeps the deterministic extractive answer path.
+   */
+  groundedGenerator?: GroundedAnswerGenerator;
   supabaseAuth?: SupabaseAuthProvider;
 };
 
@@ -566,6 +572,9 @@ export async function buildServer(
     dataStore: options.store,
     handoffStore: options.store,
     ...(options.embedder ? { embedder: options.embedder } : {}),
+    ...(options.groundedGenerator
+      ? { groundedGenerator: options.groundedGenerator }
+      : {}),
   });
   const websiteAdapter = new WebsiteAdapter();
   const metaAdapters: Record<

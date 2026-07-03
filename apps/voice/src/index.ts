@@ -7,7 +7,11 @@ import {
   TwilioVoiceAdapter,
   verifyTwilioSignature,
 } from "@assaddar/channels";
-import { createAnswerEngine, InboundMessageSchema } from "@assaddar/core";
+import {
+  createAnswerEngine,
+  createGeminiGroundedAnswerGenerator,
+  InboundMessageSchema,
+} from "@assaddar/core";
 import {
   createDbClient,
   createEnvChannelCredentialCipher,
@@ -208,9 +212,11 @@ const store = new TenantRepository(
   undefined,
   createEnvChannelCredentialCipher(process.env),
 );
+const groundedGenerator = createGeminiGroundedAnswerGenerator(process.env);
 const engine = createAnswerEngine({
   dataStore: store,
   handoffStore: store,
+  ...(groundedGenerator ? { groundedGenerator } : {}),
 });
 const adapter = new TwilioVoiceAdapter();
 const app = Fastify({ logger: true });

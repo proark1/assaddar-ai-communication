@@ -105,6 +105,18 @@ export type AnswerResult = {
   trace: AnswerTraceStep[];
 };
 
+export type GroundedAnswerInput = {
+  question: string;
+  locale?: string;
+  intent: string;
+  fallbackAnswer: string;
+  chunks: RetrievedChunk[];
+};
+
+export type GroundedAnswerGenerator = (
+  input: GroundedAnswerInput,
+) => Promise<string | null>;
+
 export type AnswerDataStore = {
   getTenantPolicy(tenantId: string): Promise<TenantPolicy>;
   searchKnowledge(

@@ -14,6 +14,7 @@ import type {
   AnswerDataStore,
   AnswerResult,
   AnswerTraceStep,
+  GroundedAnswerGenerator,
   HandoffStore,
   InboundMessage,
   KnowledgeChunk,
@@ -23,6 +24,8 @@ import type {
 
 const DEFAULT_REFUSAL =
   "I don't have that information in the approved business knowledge. I can take a message or connect you with the team.";
+const MAX_GENERATED_ANSWER_LENGTH = 900;
+const NO_GROUNDED_ANSWER = "__NO_GROUNDED_ANSWER__";
 
 /**
  * Process-wide tally of semantic-search failures. Previously these errors were
@@ -59,6 +62,16 @@ export type AnswerEngineOptions = {
    * and falls back to keyword-only retrieval regardless of this callback.
    */
   onSemanticSearchError?: (error: unknown, tenantId: string) => void;
+  /**
+   * Optional answer writer. It only runs after approved knowledge has already
+   * matched the user question, and receives only those approved chunks.
+   */
+  groundedGenerator?: GroundedAnswerGenerator;
+  /**
+   * Optional hook invoked when grounded generation fails. The engine falls back
+   * to the exact approved answer so customer calls never depend on model prose.
+   */
+  onGroundedGenerationError?: (error: unknown, tenantId: string) => void;
 };
 
 export class AnswerEngine {
@@ -67,6 +80,8 @@ export class AnswerEngine {
   private readonly retrievalLimit: number;
   private readonly embedder: AnswerEngineOptions["embedder"];
   private readonly onSemanticSearchError: AnswerEngineOptions["onSemanticSearchError"];
+  private readonly groundedGenerator: AnswerEngineOptions["groundedGenerator"];
+  private readonly onGroundedGenerationError: AnswerEngineOptions["onGroundedGenerationError"];
 
   constructor(options: AnswerEngineOptions) {
     this.dataStore = options.dataStore;
@@ -74,6 +89,8 @@ export class AnswerEngine {
     this.retrievalLimit = options.retrievalLimit ?? 8;
     this.embedder = options.embedder;
     this.onSemanticSearchError = options.onSemanticSearchError;
+    this.groundedGenerator = options.groundedGenerator;
+    this.onGroundedGenerationError = options.onGroundedGenerationError;
   }
 
   async answer(input: InboundMessage): Promise<AnswerResult> {
@@ -174,8 +191,8 @@ export class AnswerEngine {
       detail: String(bestChunk.score),
     });
 
-    const answer = extractGroundedAnswer(bestChunk);
-    if (!answer) {
+    const fallbackAnswer = extractGroundedAnswer(bestChunk);
+    if (!fallbackAnswer) {
       trace.push({
         step: "validate_answer",
         outcome: "failed",
@@ -189,6 +206,18 @@ export class AnswerEngine {
         DEFAULT_REFUSAL,
       );
     }
+
+    const supportingChunks = rankedChunks
+      .filter((chunk) => chunk.score >= policy.confidenceThreshold)
+      .slice(0, 3);
+    const answer = await this.generateGroundedAnswer({
+      input,
+      policy,
+      trace,
+      intent: intent.name,
+      fallbackAnswer,
+      chunks: supportingChunks.length > 0 ? supportingChunks : [bestChunk],
+    });
 
     trace.push({ step: "generate_grounded_answer", outcome: "passed" });
     trace.push({ step: "validate_answer", outcome: "passed" });
@@ -214,6 +243,71 @@ export class AnswerEngine {
       usage: estimateUsage(normalized, answer),
       trace,
     };
+  }
+
+  private async generateGroundedAnswer({
+    input,
+    policy,
+    trace,
+    intent,
+    fallbackAnswer,
+    chunks,
+  }: {
+    input: InboundMessage;
+    policy: TenantPolicy;
+    trace: AnswerTraceStep[];
+    intent: string;
+    fallbackAnswer: string;
+    chunks: RetrievedChunk[];
+  }): Promise<string> {
+    if (!this.groundedGenerator) {
+      trace.push({
+        step: "grounded_generation",
+        outcome: "skipped",
+        detail: "not_configured",
+      });
+      return fallbackAnswer;
+    }
+
+    try {
+      const generated = await this.groundedGenerator({
+        question: input.text,
+        ...((input.locale ?? policy.defaultLocale)
+          ? { locale: input.locale ?? policy.defaultLocale }
+          : {}),
+        intent,
+        fallbackAnswer,
+        chunks,
+      });
+      const safe = sanitizeGroundedAnswer(generated);
+      if (!safe) {
+        trace.push({
+          step: "grounded_generation",
+          outcome: "skipped",
+          detail: "empty_or_unsafe",
+        });
+        return fallbackAnswer;
+      }
+      trace.push({
+        step: "grounded_generation",
+        outcome: "passed",
+        detail: "model",
+      });
+      return safe;
+    } catch (error) {
+      console.warn(
+        `[answer-engine] grounded answer generation failed for tenant ${input.tenantId}; ` +
+          "falling back to approved answer",
+        error,
+      );
+      this.onGroundedGenerationError?.(error, input.tenantId);
+      trace.push({
+        step: "grounded_generation",
+        outcome: "skipped",
+        detail: "error",
+      });
+      return fallbackAnswer;
+    }
   }
 
   private async semanticSearch(
@@ -394,6 +488,21 @@ export function extractGroundedAnswer(chunk: KnowledgeChunk): string {
   }
 
   return chunk.content.trim();
+}
+
+export function sanitizeGroundedAnswer(answer: string | null | undefined) {
+  const text =
+    answer
+      ?.trim()
+      .replace(/^["']|["']$/g, "")
+      .trim() ?? "";
+  if (!text || text.includes(NO_GROUNDED_ANSWER)) {
+    return null;
+  }
+  if (text.length > MAX_GENERATED_ANSWER_LENGTH) {
+    return null;
+  }
+  return text;
 }
 
 function findBlockedTopic(

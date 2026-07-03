@@ -104,6 +104,7 @@ describe("AnswerEngine", () => {
   });
 
   it("refuses unknown business questions", async () => {
+    let generated = false;
     const engine = createAnswerEngine({
       dataStore: new MemoryAnswerStore(
         {
@@ -117,6 +118,10 @@ describe("AnswerEngine", () => {
           ),
         ],
       ),
+      groundedGenerator: async () => {
+        generated = true;
+        return "This should not be used.";
+      },
     });
 
     const result = await engine.answer({
@@ -129,6 +134,7 @@ describe("AnswerEngine", () => {
     expect(result.status).toBe("handoff");
     expect(result.text).toContain("I don't have that information");
     expect(result.citations).toHaveLength(0);
+    expect(generated).toBe(false);
   });
 
   it("blocks general random questions before retrieval", async () => {
@@ -190,5 +196,76 @@ describe("AnswerEngine", () => {
     expect(result.status).toBe("answered");
     expect(result.text).toContain("100 EUR");
     expect(result.text).not.toContain("900 EUR");
+  });
+
+  it("uses a grounded generator after approved knowledge is retrieved", async () => {
+    const engine = createAnswerEngine({
+      dataStore: new MemoryAnswerStore(
+        {
+          [tenantA]: createDefaultTenantPolicy(tenantA),
+        },
+        [
+          faqChunk(
+            tenantA,
+            "What are your prices?",
+            "Tenant A pricing starts at 100 EUR.",
+          ),
+        ],
+      ),
+      groundedGenerator: async (input) => {
+        expect(input.question).toBe("What are your prices?");
+        expect(input.fallbackAnswer).toContain("100 EUR");
+        expect(input.chunks).toHaveLength(1);
+        return "For phone callers: pricing starts at 100 EUR.";
+      },
+    });
+
+    const result = await engine.answer({
+      tenantId: tenantA,
+      channel: "telephone",
+      text: "What are your prices?",
+      metadata: {},
+    });
+
+    expect(result.status).toBe("answered");
+    expect(result.text).toBe("For phone callers: pricing starts at 100 EUR.");
+    expect(result.trace).toContainEqual({
+      step: "grounded_generation",
+      outcome: "passed",
+      detail: "model",
+    });
+  });
+
+  it("falls back to the approved answer when grounded generation refuses", async () => {
+    const engine = createAnswerEngine({
+      dataStore: new MemoryAnswerStore(
+        {
+          [tenantA]: createDefaultTenantPolicy(tenantA),
+        },
+        [
+          faqChunk(
+            tenantA,
+            "What are your prices?",
+            "Tenant A pricing starts at 100 EUR.",
+          ),
+        ],
+      ),
+      groundedGenerator: async () => "__NO_GROUNDED_ANSWER__",
+    });
+
+    const result = await engine.answer({
+      tenantId: tenantA,
+      channel: "telephone",
+      text: "What are your prices?",
+      metadata: {},
+    });
+
+    expect(result.status).toBe("answered");
+    expect(result.text).toContain("100 EUR");
+    expect(result.trace).toContainEqual({
+      step: "grounded_generation",
+      outcome: "skipped",
+      detail: "empty_or_unsafe",
+    });
   });
 });

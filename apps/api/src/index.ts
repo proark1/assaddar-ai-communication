@@ -1,6 +1,9 @@
 import { config } from "dotenv";
 import * as Sentry from "@sentry/node";
-import { createEmbeddingProvider } from "@assaddar/core";
+import {
+  createEmbeddingProvider,
+  createGeminiGroundedAnswerGenerator,
+} from "@assaddar/core";
 import {
   createDbClient,
   createEnvChannelCredentialCipher,
@@ -40,6 +43,7 @@ async function main() {
     createEnvChannelCredentialCipher(process.env),
   );
   const embeddingProvider = createEmbeddingProvider(process.env);
+  const groundedGenerator = createGeminiGroundedAnswerGenerator(process.env);
   const serverOptions: BuildServerOptions = {
     store,
     adminToken: env.ADMIN_API_TOKEN,
@@ -111,6 +115,9 @@ async function main() {
       const [vector] = await embeddingProvider.embed([text]);
       return vector ?? null;
     };
+  }
+  if (groundedGenerator) {
+    serverOptions.groundedGenerator = groundedGenerator;
   }
 
   const app = await buildServer(serverOptions);
