@@ -363,7 +363,14 @@ export type UnansweredQuestion = {
 };
 
 export type ChannelConnection = {
-  channel: "website" | "whatsapp" | "messenger" | "instagram" | "telephone";
+  channel:
+    | "website"
+    | "whatsapp"
+    | "messenger"
+    | "instagram"
+    | "telephone"
+    | "telegram"
+    | "email";
   provider: string;
   label: string;
   status: "pending" | "connected" | "disabled";

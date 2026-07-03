@@ -77,6 +77,8 @@ export const ParamsChannelSchema = ParamsTenantSchema.extend({
     "messenger",
     "instagram",
     "telephone",
+    "telegram",
+    "email",
   ]),
 });
 
@@ -228,6 +230,8 @@ export const ChannelConnectionSchema = z.object({
     "messenger",
     "instagram",
     "telephone",
+    "telegram",
+    "email",
   ]),
   provider: z.string().min(1).max(80),
   externalAccountId: z.string().max(256).nullable().optional(),
