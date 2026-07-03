@@ -3549,14 +3549,50 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     targetType: string,
     targetId: string,
     metadata: Record<string, unknown>,
+    actor: { actorType?: string; actorId?: string | null } = {},
   ) {
     await this.db.insert(auditLogs).values({
       tenantId,
-      actorType: "system",
+      actorType: actor.actorType ?? "system",
+      actorId: actor.actorId ?? null,
       action,
       targetType,
       targetId,
       metadata,
     });
+  }
+
+  /**
+   * Public, actor-attributed audit writer. Used by the API layer to record who
+   * accessed or exported tenant personal data (GDPR Art. 5(2)/30
+   * accountability). Unlike the internal {@link audit} helper — whose callers
+   * are system/state-change paths — this records the authenticated principal
+   * (a real user id, or the platform admin token) so PII access is traceable.
+   */
+  async recordAuditEvent(
+    tenantId: string,
+    entry: {
+      action: string;
+      targetType: string;
+      targetId: string;
+      actorType: string;
+      actorId?: string | null;
+      metadata?: Record<string, unknown>;
+    },
+  ): Promise<void> {
+    assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<void>(tenantId, (repo) =>
+        repo.recordAuditEvent(tenantId, entry),
+      );
+    }
+    await this.audit(
+      tenantId,
+      entry.action,
+      entry.targetType,
+      entry.targetId,
+      entry.metadata ?? {},
+      { actorType: entry.actorType, actorId: entry.actorId ?? null },
+    );
   }
 }
