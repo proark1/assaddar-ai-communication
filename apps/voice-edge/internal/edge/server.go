@@ -728,6 +728,10 @@ func (server *Server) sendTextStream(ctx context.Context, session *CallSession, 
 	synthesisStartedAt := time.Now()
 	chunks := 0
 	samples := 0
+	frames := 0
+	telephonySamples := 0
+	telephonyRate := telephonyRateForSession(session)
+	pacer := newRTPFramePacer(rtpFrameDuration)
 	err := streamer.SynthesizeStream(ctx, text, options, func(pcm speech.PCMBuffer) error {
 		if len(pcm.Samples) == 0 {
 			return nil
@@ -743,7 +747,14 @@ func (server *Server) sendTextStream(ctx context.Context, session *CallSession, 
 				"samples", len(pcm.Samples),
 			)
 		}
-		return server.sendPCM(ctx, session, pcm)
+		conditioned := conditionPCMForSession(session, pcm)
+		if len(conditioned) == 0 {
+			return nil
+		}
+		sentFrames, err := server.sendPCMFramesWithPacer(ctx, session, conditioned, telephonyRate, pacer)
+		frames += sentFrames
+		telephonySamples += len(conditioned)
+		return err
 	})
 	if err != nil {
 		if chunks == 0 {
@@ -766,6 +777,8 @@ func (server *Server) sendTextStream(ctx context.Context, session *CallSession, 
 		"durationMs", time.Since(synthesisStartedAt).Milliseconds(),
 		"chunks", chunks,
 		"samples", samples,
+		"frames", frames,
+		"audioDurationMs", durationMillis(telephonySamples, telephonyRate),
 	)
 	return nil
 }
@@ -809,15 +822,8 @@ func (server *Server) sendPCM(ctx context.Context, session *CallSession, pcm spe
 	if len(pcm.Samples) == 0 {
 		return nil
 	}
-	telephonyRate := session.Codec.ClockRate
-	if telephonyRate <= 0 {
-		telephonyRate = 8000
-	}
-	sourceRate := pcm.SampleRate
-	if sourceRate <= 0 {
-		sourceRate = telephonyRate
-	}
-	samples := audio.ConditionForTelephony(pcm.Samples, sourceRate, telephonyRate)
+	telephonyRate := telephonyRateForSession(session)
+	samples := conditionPCMForSession(session, pcm)
 	frames, err := server.sendPCMFrames(ctx, session, samples, telephonyRate)
 	if err != nil {
 		return err
@@ -832,18 +838,21 @@ func (server *Server) sendPCM(ctx context.Context, session *CallSession, pcm spe
 }
 
 func (server *Server) sendPCMFrames(ctx context.Context, session *CallSession, samples []int16, telephonyRate int) (int, error) {
+	return server.sendPCMFramesWithPacer(ctx, session, samples, telephonyRate, newRTPFramePacer(rtpFrameDuration))
+}
+
+func (server *Server) sendPCMFramesWithPacer(ctx context.Context, session *CallSession, samples []int16, telephonyRate int, pacer *rtpFramePacer) (int, error) {
 	frameSize := telephonyRate / int(time.Second/rtpFrameDuration)
 	if frameSize <= 0 {
 		frameSize = 160
 	}
+	if pacer == nil {
+		pacer = newRTPFramePacer(rtpFrameDuration)
+	}
 	frames := audio.FramePCM(samples, frameSize)
-	for index, frame := range frames {
-		if index > 0 {
-			select {
-			case <-ctx.Done():
-				return 0, ctx.Err()
-			case <-time.After(rtpFrameDuration):
-			}
+	for _, frame := range frames {
+		if err := pacer.wait(ctx); err != nil {
+			return 0, err
 		}
 		payload, err := audio.EncodeTelephonyPayload(session.Codec, frame)
 		if err != nil {
@@ -852,8 +861,59 @@ func (server *Server) sendPCMFrames(ctx context.Context, session *CallSession, s
 		if err := session.RTP.SendPayload(payload); err != nil {
 			return 0, err
 		}
+		pacer.markSent()
 	}
 	return len(frames), nil
+}
+
+func telephonyRateForSession(session *CallSession) int {
+	if session != nil && session.Codec.ClockRate > 0 {
+		return session.Codec.ClockRate
+	}
+	return 8000
+}
+
+func conditionPCMForSession(session *CallSession, pcm speech.PCMBuffer) []int16 {
+	telephonyRate := telephonyRateForSession(session)
+	sourceRate := pcm.SampleRate
+	if sourceRate <= 0 {
+		sourceRate = telephonyRate
+	}
+	return audio.ConditionForTelephony(pcm.Samples, sourceRate, telephonyRate)
+}
+
+type rtpFramePacer struct {
+	interval time.Duration
+	next     time.Time
+}
+
+func newRTPFramePacer(interval time.Duration) *rtpFramePacer {
+	return &rtpFramePacer{interval: interval}
+}
+
+func (pacer *rtpFramePacer) wait(ctx context.Context) error {
+	if pacer == nil || pacer.interval <= 0 {
+		return nil
+	}
+	now := time.Now()
+	if pacer.next.IsZero() || now.Sub(pacer.next) > pacer.interval {
+		pacer.next = now
+		return nil
+	}
+	if delay := time.Until(pacer.next); delay > 0 {
+		return waitForDuration(ctx, delay)
+	}
+	return nil
+}
+
+func (pacer *rtpFramePacer) markSent() {
+	if pacer == nil || pacer.interval <= 0 {
+		return
+	}
+	if pacer.next.IsZero() {
+		pacer.next = time.Now()
+	}
+	pacer.next = pacer.next.Add(pacer.interval)
 }
 
 func waitForDuration(ctx context.Context, duration time.Duration) error {

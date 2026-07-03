@@ -269,6 +269,39 @@ func TestProcessUtteranceSendsThinkingPromptAndTurnReply(t *testing.T) {
 	}
 }
 
+func TestStreamingSpeechKeepsRTPPacingAcrossChunks(t *testing.T) {
+	cfg := testConfig()
+	cfg.AnswerDelay = 0
+	cfg.GreetingText = ""
+	server, session, rtpReceiver := setupProcessSession(t, cfg, "call-stream-paced")
+	server.speechProvider = &streamingSpeechProvider{
+		chunks: []speech.PCMBuffer{
+			{SampleRate: 8000, Samples: testSamples(4000, 320)},
+			{SampleRate: 8000, Samples: testSamples(4000, 320)},
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	errs := make(chan error, 1)
+	go func() {
+		errs <- server.sendText(ctx, session, "Eine kurze Antwort.")
+	}()
+
+	receivedAt := make([]time.Time, 0, 4)
+	for i := 0; i < 4; i++ {
+		_, at := readRTPPacketAt(t, rtpReceiver, time.Second)
+		receivedAt = append(receivedAt, at)
+	}
+	if err := <-errs; err != nil {
+		t.Fatalf("sendText returned error: %v", err)
+	}
+
+	if gap := receivedAt[2].Sub(receivedAt[1]); gap < 10*time.Millisecond {
+		t.Fatalf("chunk boundary RTP gap = %s, want paced packets", gap)
+	}
+}
+
 func TestProcessUtteranceSendsAudibleFallbackOnTurnError(t *testing.T) {
 	cfg := testConfig()
 	cfg.AnswerDelay = 0
@@ -409,6 +442,35 @@ func (provider *countingSpeechProvider) Synthesize(ctx context.Context, _ string
 	return clonePCM(provider.synthesis), nil
 }
 
+type streamingSpeechProvider struct {
+	chunks []speech.PCMBuffer
+}
+
+func (provider *streamingSpeechProvider) Transcribe(context.Context, speech.PCMBuffer) (speech.Transcript, error) {
+	return speech.Transcript{}, nil
+}
+
+func (provider *streamingSpeechProvider) Synthesize(context.Context, string, speech.SynthesisOptions) (speech.PCMBuffer, error) {
+	if len(provider.chunks) == 0 {
+		return speech.PCMBuffer{}, nil
+	}
+	return clonePCM(provider.chunks[0]), nil
+}
+
+func (provider *streamingSpeechProvider) SynthesizeStream(ctx context.Context, _ string, _ speech.SynthesisOptions, onChunk speech.PCMChunkHandler) error {
+	for _, chunk := range provider.chunks {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		if err := onChunk(clonePCM(chunk)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 type fakeTurnSender struct {
 	calls    atomic.Int32
 	response turn.Response
@@ -528,16 +590,31 @@ func readRTPPacket(t *testing.T, conn *net.UDPConn, timeout time.Duration) rtp.P
 	return packet
 }
 
+func readRTPPacketAt(t *testing.T, conn *net.UDPConn, timeout time.Duration) (rtp.Packet, time.Time) {
+	t.Helper()
+	packet, ok, receivedAt := readOptionalRTPPacketAt(t, conn, timeout)
+	if !ok {
+		t.Fatalf("expected RTP packet within %s", timeout)
+	}
+	return packet, receivedAt
+}
+
 func readOptionalRTPPacket(t *testing.T, conn *net.UDPConn, timeout time.Duration) (rtp.Packet, bool) {
+	packet, ok, _ := readOptionalRTPPacketAt(t, conn, timeout)
+	return packet, ok
+}
+
+func readOptionalRTPPacketAt(t *testing.T, conn *net.UDPConn, timeout time.Duration) (rtp.Packet, bool, time.Time) {
 	t.Helper()
 	buffer := make([]byte, 1500)
 	if err := conn.SetReadDeadline(time.Now().Add(timeout)); err != nil {
 		t.Fatalf("SetReadDeadline returned error: %v", err)
 	}
 	n, _, err := conn.ReadFromUDP(buffer)
+	receivedAt := time.Now()
 	if err != nil {
 		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-			return rtp.Packet{}, false
+			return rtp.Packet{}, false, time.Time{}
 		}
 		t.Fatalf("ReadFromUDP returned error: %v", err)
 	}
@@ -545,7 +622,7 @@ func readOptionalRTPPacket(t *testing.T, conn *net.UDPConn, timeout time.Duratio
 	if err != nil {
 		t.Fatalf("ParsePacket returned error: %v", err)
 	}
-	return packet, true
+	return packet, true, receivedAt
 }
 
 func mustParseSIP(t *testing.T, raw string) sip.Message {
