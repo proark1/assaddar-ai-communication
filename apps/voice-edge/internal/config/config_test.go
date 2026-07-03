@@ -19,8 +19,11 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Easybell.Registrar != "voip.easybell.de" {
 		t.Fatalf("registrar = %q", cfg.Easybell.Registrar)
 	}
-	if cfg.AnswerDelay != 5*time.Second {
+	if cfg.AnswerDelay != 2*time.Second {
 		t.Fatalf("AnswerDelay = %s", cfg.AnswerDelay)
+	}
+	if cfg.GreetingDelay != time.Second {
+		t.Fatalf("GreetingDelay = %s", cfg.GreetingDelay)
 	}
 	if cfg.GreetingText == "" {
 		t.Fatal("GreetingText should have a default")
@@ -55,8 +58,9 @@ func TestReadinessErrorPassesWithRequiredConfig(t *testing.T) {
 
 func TestLoadGreetingConfig(t *testing.T) {
 	env := map[string]string{
-		"VOICE_EDGE_ANSWER_DELAY_MS": "1250",
-		"VOICE_EDGE_GREETING_TEXT":   "Guten Tag.",
+		"VOICE_EDGE_ANSWER_DELAY_MS":   "1250",
+		"VOICE_EDGE_GREETING_DELAY_MS": "750",
+		"VOICE_EDGE_GREETING_TEXT":     "Guten Tag.",
 	}
 	cfg, err := Load(func(key string) string { return env[key] })
 	if err != nil {
@@ -64,6 +68,9 @@ func TestLoadGreetingConfig(t *testing.T) {
 	}
 	if cfg.AnswerDelay != 1250*time.Millisecond {
 		t.Fatalf("AnswerDelay = %s", cfg.AnswerDelay)
+	}
+	if cfg.GreetingDelay != 750*time.Millisecond {
+		t.Fatalf("GreetingDelay = %s", cfg.GreetingDelay)
 	}
 	if cfg.GreetingText != "Guten Tag." {
 		t.Fatalf("GreetingText = %q", cfg.GreetingText)

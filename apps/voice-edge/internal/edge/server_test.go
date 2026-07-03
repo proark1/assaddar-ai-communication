@@ -62,7 +62,7 @@ func TestHandleInviteRejectsUnsupportedCodec(t *testing.T) {
 
 func TestHandleInviteAnswersAfterDelay(t *testing.T) {
 	cfg := testConfig()
-	cfg.AnswerDelay = 200 * time.Millisecond
+	cfg.AnswerDelay = 300 * time.Millisecond
 	server, err := New(cfg, nil)
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
@@ -80,16 +80,39 @@ func TestHandleInviteAnswersAfterDelay(t *testing.T) {
 	}
 	defer client.Close()
 
-	request := mustParseSIP(t, inviteRaw("call-delay", 40000, "8 PCMA/8000"))
+	rtpReceiver, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatalf("rtp ListenUDP returned error: %v", err)
+	}
+	defer rtpReceiver.Close()
+	rtpPort := rtpReceiver.LocalAddr().(*net.UDPAddr).Port
+
+	request := mustParseSIP(t, inviteRaw("call-delay", rtpPort, "8 PCMA/8000"))
 	server.handleInvite(testContext(t), request, client.LocalAddr().(*net.UDPAddr))
 	t.Cleanup(func() { server.endSession("call-delay") })
 
-	immediate := strings.Join(readSIPResponses(t, client, 2), "\n")
-	if !strings.Contains(immediate, "SIP/2.0 100 Trying") || !strings.Contains(immediate, "SIP/2.0 180 Ringing") {
-		t.Fatalf("expected Trying and Ringing before delayed answer, got:\n%s", immediate)
+	immediate := strings.Join(readSIPResponses(t, client, 3), "\n")
+	if !strings.Contains(immediate, "SIP/2.0 100 Trying") ||
+		!strings.Contains(immediate, "SIP/2.0 180 Ringing") ||
+		!strings.Contains(immediate, "SIP/2.0 183 Session Progress") {
+		t.Fatalf("expected Trying, Ringing, and Session Progress before delayed answer, got:\n%s", immediate)
+	}
+	if !strings.Contains(immediate, "Content-Type: application/sdp") {
+		t.Fatalf("expected early media SDP, got:\n%s", immediate)
 	}
 	if response, ok := readOptionalSIPResponse(t, client, 50*time.Millisecond); ok {
 		t.Fatalf("received answer before delay elapsed:\n%s", response)
+	}
+	ringback := readRTPPacket(t, rtpReceiver, time.Second)
+	if ringback.PayloadType != uint8(sdp.CodecPCMA.PayloadType) {
+		t.Fatalf("ringback payload type = %d", ringback.PayloadType)
+	}
+	ringbackSamples, err := edgeaudio.DecodeTelephonyPayload(sdp.CodecPCMA, ringback.Payload)
+	if err != nil {
+		t.Fatalf("DecodeTelephonyPayload returned error: %v", err)
+	}
+	if !hasNonZeroSample(ringbackSamples) {
+		t.Fatal("ringback RTP payload is silent")
 	}
 	delayed := strings.Join(readSIPResponses(t, client, 1), "\n")
 	if !strings.Contains(delayed, "SIP/2.0 200 OK") {
@@ -100,6 +123,7 @@ func TestHandleInviteAnswersAfterDelay(t *testing.T) {
 func TestGreetingIsSentAfterACKWithoutInboundRTP(t *testing.T) {
 	cfg := testConfig()
 	cfg.AnswerDelay = 0
+	cfg.GreetingDelay = 100 * time.Millisecond
 	cfg.GreetingText = "Hallo."
 	server, err := New(cfg, nil)
 	if err != nil {
@@ -142,18 +166,10 @@ func TestGreetingIsSentAfterACKWithoutInboundRTP(t *testing.T) {
 	ack := mustParseSIP(t, "ACK sip:asst_123@voice-edge.assaddar.de SIP/2.0\r\nVia: SIP/2.0/UDP client;branch=z9hG4bK-ack\r\nFrom: <sip:+491701234567@example.com>;tag=caller\r\nTo: <sip:asst_123@voice-edge.assaddar.de>;tag=edge\r\nCall-ID: call-greeting\r\nCSeq: 1 ACK\r\nContent-Length: 0\r\n\r\n")
 	server.handleMessage(testContext(t), ack, client.LocalAddr().(*net.UDPAddr))
 
-	buffer := make([]byte, 1500)
-	if err := rtpReceiver.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
-		t.Fatalf("SetReadDeadline returned error: %v", err)
+	if packet, ok := readOptionalRTPPacket(t, rtpReceiver, 30*time.Millisecond); ok {
+		t.Fatalf("received greeting RTP before greeting delay elapsed: %+v", packet)
 	}
-	n, _, err := rtpReceiver.ReadFromUDP(buffer)
-	if err != nil {
-		t.Fatalf("expected greeting RTP after ACK: %v", err)
-	}
-	packet, err := rtp.ParsePacket(buffer[:n])
-	if err != nil {
-		t.Fatalf("ParsePacket returned error: %v", err)
-	}
+	packet := readRTPPacket(t, rtpReceiver, 2*time.Second)
 	if packet.PayloadType != uint8(sdp.CodecPCMA.PayloadType) {
 		t.Fatalf("payload type = %d", packet.PayloadType)
 	}
@@ -252,6 +268,15 @@ func testSamples(value int16, count int) []int16 {
 	return samples
 }
 
+func hasNonZeroSample(samples []int16) bool {
+	for _, sample := range samples {
+		if sample != 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func testContext(t *testing.T) context.Context {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -290,6 +315,35 @@ func readOptionalSIPResponse(t *testing.T, conn *net.UDPConn, timeout time.Durat
 		t.Fatalf("ReadFromUDP returned error: %v", err)
 	}
 	return string(buffer[:n]), true
+}
+
+func readRTPPacket(t *testing.T, conn *net.UDPConn, timeout time.Duration) rtp.Packet {
+	t.Helper()
+	packet, ok := readOptionalRTPPacket(t, conn, timeout)
+	if !ok {
+		t.Fatalf("expected RTP packet within %s", timeout)
+	}
+	return packet
+}
+
+func readOptionalRTPPacket(t *testing.T, conn *net.UDPConn, timeout time.Duration) (rtp.Packet, bool) {
+	t.Helper()
+	buffer := make([]byte, 1500)
+	if err := conn.SetReadDeadline(time.Now().Add(timeout)); err != nil {
+		t.Fatalf("SetReadDeadline returned error: %v", err)
+	}
+	n, _, err := conn.ReadFromUDP(buffer)
+	if err != nil {
+		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			return rtp.Packet{}, false
+		}
+		t.Fatalf("ReadFromUDP returned error: %v", err)
+	}
+	packet, err := rtp.ParsePacket(buffer[:n])
+	if err != nil {
+		t.Fatalf("ParsePacket returned error: %v", err)
+	}
+	return packet, true
 }
 
 func mustParseSIP(t *testing.T, raw string) sip.Message {

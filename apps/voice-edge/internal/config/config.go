@@ -19,6 +19,7 @@ type Config struct {
 	RTPPortMin    int
 	RTPPortMax    int
 	AnswerDelay   time.Duration
+	GreetingDelay time.Duration
 	GreetingText  string
 	Easybell      EasybellConfig
 	VoiceTurnURL  string
@@ -50,16 +51,17 @@ func LoadFromEnv() (Config, error) {
 func Load(getenv func(string) string) (Config, error) {
 	httpPort := envDefault(getenv, "VOICE_EDGE_HTTP_PORT", "4200")
 	cfg := Config{
-		HTTPAddr:     ":" + httpPort,
-		PublicIP:     strings.TrimSpace(getenv("VOICE_EDGE_PUBLIC_IP")),
-		SIPBind:      envDefault(getenv, "VOICE_EDGE_SIP_BIND", "0.0.0.0:5060"),
-		RTPPortMin:   envIntDefault(getenv, "VOICE_EDGE_RTP_PORT_MIN", 30000),
-		RTPPortMax:   envIntDefault(getenv, "VOICE_EDGE_RTP_PORT_MAX", 30100),
-		AnswerDelay:  time.Duration(envIntDefault(getenv, "VOICE_EDGE_ANSWER_DELAY_MS", 5000)) * time.Millisecond,
-		GreetingText: envDefault(getenv, "VOICE_EDGE_GREETING_TEXT", "Hallo, hier ist der KI-Assistent von Assad Dar. Wie kann ich Ihnen helfen?"),
-		VoiceTurnURL: strings.TrimSpace(getenv("VOICE_TURN_URL")),
-		VoiceSecret:  strings.TrimSpace(getenv("VOICE_EDGE_SECRET")),
-		AssistantID:  strings.TrimSpace(getenv("VOICE_EDGE_ASSISTANT_ID")),
+		HTTPAddr:      ":" + httpPort,
+		PublicIP:      strings.TrimSpace(getenv("VOICE_EDGE_PUBLIC_IP")),
+		SIPBind:       envDefault(getenv, "VOICE_EDGE_SIP_BIND", "0.0.0.0:5060"),
+		RTPPortMin:    envIntDefault(getenv, "VOICE_EDGE_RTP_PORT_MIN", 30000),
+		RTPPortMax:    envIntDefault(getenv, "VOICE_EDGE_RTP_PORT_MAX", 30100),
+		AnswerDelay:   time.Duration(envIntDefault(getenv, "VOICE_EDGE_ANSWER_DELAY_MS", 2000)) * time.Millisecond,
+		GreetingDelay: time.Duration(envIntDefault(getenv, "VOICE_EDGE_GREETING_DELAY_MS", 1000)) * time.Millisecond,
+		GreetingText:  envDefault(getenv, "VOICE_EDGE_GREETING_TEXT", "Hallo, hier ist der KI-Assistent von Assad Dar. Wie kann ich Ihnen helfen?"),
+		VoiceTurnURL:  strings.TrimSpace(getenv("VOICE_TURN_URL")),
+		VoiceSecret:   strings.TrimSpace(getenv("VOICE_EDGE_SECRET")),
+		AssistantID:   strings.TrimSpace(getenv("VOICE_EDGE_ASSISTANT_ID")),
 		Easybell: EasybellConfig{
 			Registrar:    envDefault(getenv, "EASYBELL_SIP_REGISTRAR", "voip.easybell.de"),
 			Username:     strings.TrimSpace(getenv("EASYBELL_SIP_USERNAME")),
@@ -96,6 +98,9 @@ func (cfg Config) Validate() error {
 	}
 	if cfg.AnswerDelay < 0 {
 		return errors.New("VOICE_EDGE_ANSWER_DELAY_MS must be zero or positive")
+	}
+	if cfg.GreetingDelay < 0 {
+		return errors.New("VOICE_EDGE_GREETING_DELAY_MS must be zero or positive")
 	}
 	if cfg.VoiceTurnURL != "" {
 		parsed, err := url.Parse(cfg.VoiceTurnURL)

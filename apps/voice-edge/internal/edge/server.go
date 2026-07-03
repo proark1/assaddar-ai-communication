@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"net/http"
 	"strconv"
@@ -31,6 +32,8 @@ const (
 	sipReadTimeout         = 500 * time.Millisecond
 	rtpFrameDuration       = 20 * time.Millisecond
 	voiceTurnProvider      = "easybell_voice_edge"
+	ringbackFrequencyHz    = 425.0
+	ringbackAmplitude      = 9000.0
 )
 
 type Server struct {
@@ -176,8 +179,9 @@ func (server *Server) handleInvite(ctx context.Context, request sip.Message, rem
 	}
 	if existing := server.getSession(callID); existing != nil {
 		switch existing.Phase {
-		case "ringing":
-			server.sendMessage(sip.ResponseFor(request, 180, "Ringing", ""), remote)
+		case "ringing", "early-media":
+			server.sendMessage(sip.ResponseFor(request, 180, "Ringing", existing.ToTag), remote)
+			server.sendProgress(request, remote, existing)
 		case "answered", "active", "greeting":
 			server.sendAnswer(request, remote, existing)
 		}
@@ -254,6 +258,7 @@ func (server *Server) handleInvite(ctx context.Context, request sip.Message, rem
 		"codec", codec.Name,
 		"rtpPort", rtpSession.Port,
 		"answerDelayMs", server.cfg.AnswerDelay.Milliseconds(),
+		"greetingDelayMs", server.cfg.GreetingDelay.Milliseconds(),
 	)
 }
 
@@ -262,12 +267,13 @@ func (server *Server) answerAfterDelay(ctx context.Context, session *CallSession
 		return
 	}
 	if server.cfg.AnswerDelay > 0 {
-		timer := time.NewTimer(server.cfg.AnswerDelay)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return
-		case <-timer.C:
+		server.markSessionPhase(session.CallID, "early-media")
+		server.sendProgress(request, remote, session)
+		if err := server.playRingback(ctx, session, server.cfg.AnswerDelay); err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return
+			}
+			server.logger.Warn("failed to play early media ringback", "callId", session.CallID, "error", err)
 		}
 	}
 	select {
@@ -278,6 +284,17 @@ func (server *Server) answerAfterDelay(ctx context.Context, session *CallSession
 	server.markSessionPhase(session.CallID, "answered")
 	server.sendAnswer(request, remote, session)
 	server.logger.Info("answered inbound invite", "callId", session.CallID)
+}
+
+func (server *Server) sendProgress(request sip.Message, remote *net.UDPAddr, session *CallSession) {
+	if session == nil {
+		return
+	}
+	progress := sip.ResponseFor(request, 183, "Session Progress", session.ToTag)
+	progress.SetHeader("Contact", server.contactHeader(session.AssistantID))
+	progress.SetHeader("Content-Type", "application/sdp")
+	progress.Body = sdp.Answer(server.cfg.PublicIP, session.RTP.Port, session.Codec)
+	server.sendMessage(progress, remote)
 }
 
 func (server *Server) sendAnswer(request sip.Message, remote *net.UDPAddr, session *CallSession) {
@@ -298,6 +315,49 @@ func (server *Server) handleACK(callID string) {
 	}
 	server.markSessionPhase(callID, "active")
 	go server.playGreeting(session.Context, session)
+}
+
+func (server *Server) playRingback(ctx context.Context, session *CallSession, duration time.Duration) error {
+	if session == nil || duration <= 0 {
+		return nil
+	}
+	if !session.processing.CompareAndSwap(false, true) {
+		return waitForDuration(ctx, duration)
+	}
+	defer session.processing.Store(false)
+
+	telephonyRate := session.Codec.ClockRate
+	if telephonyRate <= 0 {
+		telephonyRate = 8000
+	}
+	frameSize := telephonyRate / int(time.Second/rtpFrameDuration)
+	if frameSize <= 0 {
+		frameSize = 160
+	}
+	totalFrames := int((duration + rtpFrameDuration - 1) / rtpFrameDuration)
+	var sendErr error
+	for frameIndex := 0; frameIndex < totalFrames; frameIndex++ {
+		if frameIndex > 0 {
+			if err := waitForDuration(ctx, rtpFrameDuration); err != nil {
+				return err
+			}
+		}
+		frame := ringbackFrame(frameIndex*frameSize, frameSize, telephonyRate)
+		payload, err := audio.EncodeTelephonyPayload(session.Codec, frame)
+		if err != nil {
+			return err
+		}
+		if err := session.RTP.SendPayload(payload); err != nil && sendErr == nil {
+			sendErr = err
+		}
+	}
+	server.logger.Info(
+		"early media ringback sent",
+		"callId", session.CallID,
+		"frames", totalFrames,
+		"durationMs", duration.Milliseconds(),
+	)
+	return sendErr
 }
 
 func (server *Server) handleRTPPacket(ctx context.Context, session *CallSession, packet rtp.Packet) {
@@ -366,6 +426,9 @@ func (server *Server) playGreeting(ctx context.Context, session *CallSession) {
 		session.processing.Store(false)
 		server.markSessionPhase(session.CallID, "active")
 	}()
+	if err := waitForDuration(ctx, server.cfg.GreetingDelay); err != nil {
+		return
+	}
 	pcm, err := server.greetingPCMFor(ctx)
 	if err != nil {
 		server.logger.Warn("failed to synthesize greeting", "callId", session.CallID, "error", err)
@@ -426,6 +489,24 @@ func clonePCM(pcm speech.PCMBuffer) speech.PCMBuffer {
 		out.Samples = append([]int16(nil), pcm.Samples...)
 	}
 	return out
+}
+
+func ringbackFrame(startSample int, frameSize int, sampleRate int) []int16 {
+	frame := make([]int16, frameSize)
+	if sampleRate <= 0 {
+		return frame
+	}
+	toneSamples := sampleRate
+	cycleSamples := sampleRate * 5
+	for index := range frame {
+		sampleIndex := startSample + index
+		if sampleIndex%cycleSamples >= toneSamples {
+			continue
+		}
+		angle := 2 * math.Pi * ringbackFrequencyHz * float64(sampleIndex) / float64(sampleRate)
+		frame[index] = int16(ringbackAmplitude * math.Sin(angle))
+	}
+	return frame
 }
 
 func (server *Server) processUtterance(ctx context.Context, session *CallSession, utterance []int16) error {
@@ -516,6 +597,20 @@ func (server *Server) sendPCM(ctx context.Context, session *CallSession, pcm spe
 		sourceRate = telephonyRate
 	}
 	samples := audio.ConditionForTelephony(pcm.Samples, sourceRate, telephonyRate)
+	frames, err := server.sendPCMFrames(ctx, session, samples, telephonyRate)
+	if err != nil {
+		return err
+	}
+	server.logger.Info(
+		"assistant speech sent",
+		"callId", session.CallID,
+		"frames", frames,
+		"durationMs", durationMillis(len(samples), telephonyRate),
+	)
+	return nil
+}
+
+func (server *Server) sendPCMFrames(ctx context.Context, session *CallSession, samples []int16, telephonyRate int) (int, error) {
 	frameSize := telephonyRate / int(time.Second/rtpFrameDuration)
 	if frameSize <= 0 {
 		frameSize = 160
@@ -525,25 +620,33 @@ func (server *Server) sendPCM(ctx context.Context, session *CallSession, pcm spe
 		if index > 0 {
 			select {
 			case <-ctx.Done():
-				return ctx.Err()
+				return 0, ctx.Err()
 			case <-time.After(rtpFrameDuration):
 			}
 		}
 		payload, err := audio.EncodeTelephonyPayload(session.Codec, frame)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		if err := session.RTP.SendPayload(payload); err != nil {
-			return err
+			return 0, err
 		}
 	}
-	server.logger.Info(
-		"assistant speech sent",
-		"callId", session.CallID,
-		"frames", len(frames),
-		"durationMs", durationMillis(len(samples), telephonyRate),
-	)
-	return nil
+	return len(frames), nil
+}
+
+func waitForDuration(ctx context.Context, duration time.Duration) error {
+	if duration <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func durationMillis(samples int, sampleRate int) int {
