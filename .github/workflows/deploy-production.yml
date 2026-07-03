@@ -1,0 +1,201 @@
+name: Deploy Production
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy-railway:
+    name: Deploy Railway services
+    if: ${{ (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      RAILWAY_ENVIRONMENT: production
+      RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
+      RAILWAY_SERVICES: ${{ vars.RAILWAY_SERVICES || 'assaddar-api assaddar-voice' }}
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Validate Railway configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in RAILWAY_TOKEN RAILWAY_PROJECT_ID RAILWAY_SERVICES; do
+            if [ -z "${!name:-}" ]; then
+              missing+=("$name")
+            fi
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            printf 'Missing Railway deployment configuration: %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+
+      - name: Install Railway CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash <(curl -fsSL https://railway.com/install.sh) -y
+          "$HOME/.railway/bin/railway" --version
+
+      - name: Deploy services
+        shell: bash
+        run: |
+          set -euo pipefail
+          read -r -a services <<< "$RAILWAY_SERVICES"
+          for service in "${services[@]}"; do
+            echo "Deploying Railway service: $service"
+            "$HOME/.railway/bin/railway" up \
+              --project "$RAILWAY_PROJECT_ID" \
+              --environment "$RAILWAY_ENVIRONMENT" \
+              --service "$service" \
+              --ci
+          done
+
+  deploy-voice-edge:
+    name: Deploy Hetzner voice edge
+    if: ${{ (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main') }}
+    needs: deploy-railway
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      HETZNER_HOST: ${{ secrets.HETZNER_HOST }}
+      HETZNER_SSH_KEY: ${{ secrets.HETZNER_SSH_KEY }}
+      HETZNER_SSH_PORT: ${{ secrets.HETZNER_SSH_PORT || '22' }}
+      HETZNER_USER: ${{ secrets.HETZNER_USER }}
+      HETZNER_REPO_PATH: ${{ vars.HETZNER_REPO_PATH || '/opt/assaddar-ai-communication' }}
+
+    steps:
+      - name: Validate Hetzner configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in HETZNER_HOST HETZNER_USER HETZNER_SSH_KEY HETZNER_SSH_PORT HETZNER_REPO_PATH; do
+            if [ -z "${!name:-}" ]; then
+              missing+=("$name")
+            fi
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            printf 'Missing Hetzner deployment configuration: %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+
+      - name: Install SSH key
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$HETZNER_SSH_KEY" > "$HOME/.ssh/hetzner_deploy_key"
+          chmod 600 "$HOME/.ssh/hetzner_deploy_key"
+          ssh-keyscan -p "$HETZNER_SSH_PORT" -H "$HETZNER_HOST" >> "$HOME/.ssh/known_hosts"
+
+      - name: Deploy voice edge
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo_arg="$(printf '%q' "$HETZNER_REPO_PATH")"
+          ssh -i "$HOME/.ssh/hetzner_deploy_key" \
+            -p "$HETZNER_SSH_PORT" \
+            "$HETZNER_USER@$HETZNER_HOST" \
+            "bash -s -- $repo_arg" <<'REMOTE'
+          set -euo pipefail
+          repo_path="$1"
+          cd "$repo_path"
+          if [ "$(git rev-parse --abbrev-ref HEAD)" != "main" ]; then
+            echo "Hetzner repository is not on main" >&2
+            git status --short --branch
+            exit 1
+          fi
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "Hetzner repository has local changes; refusing deployment" >&2
+            git status --short
+            exit 1
+          fi
+          git fetch --prune origin main
+          git pull --ff-only origin main
+          cd apps/voice-edge
+          go test ./...
+          go build -o /tmp/assaddar-voice-edge-new ./cmd/voice-edge
+          install -m 0755 /tmp/assaddar-voice-edge-new /usr/local/bin/assaddar-voice-edge
+          systemctl restart assaddar-voice-edge
+          systemctl is-active --quiet assaddar-voice-edge
+          for attempt in $(seq 1 10); do
+            if journalctl -u assaddar-voice-edge --since "2 minutes ago" --no-pager | grep -q "sip registration succeeded"; then
+              exit 0
+            fi
+            sleep 2
+          done
+          journalctl -u assaddar-voice-edge -n 80 --no-pager
+          echo "SIP registration was not observed after restart" >&2
+          exit 1
+          REMOTE
+
+  verify-production:
+    name: Verify production health
+    if: ${{ (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main') }}
+    runs-on: ubuntu-latest
+    needs:
+      - deploy-railway
+      - deploy-voice-edge
+    timeout-minutes: 10
+    env:
+      API_HEALTH_URL: ${{ secrets.API_HEALTH_URL }}
+      VOICE_EDGE_READY_URL: ${{ secrets.VOICE_EDGE_READY_URL }}
+      VOICE_HEALTH_URL: ${{ secrets.VOICE_HEALTH_URL }}
+
+    steps:
+      - name: Validate health check URLs
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in API_HEALTH_URL VOICE_HEALTH_URL VOICE_EDGE_READY_URL; do
+            if [ -z "${!name:-}" ]; then
+              missing+=("$name")
+            fi
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            printf 'Missing production health check URLs: %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+
+      - name: Check production endpoints
+        shell: bash
+        run: |
+          set -euo pipefail
+          check_url() {
+            local name="$1"
+            local url="$2"
+            for attempt in $(seq 1 30); do
+              if curl -fsS "$url" > /tmp/health-response.txt; then
+                echo "$name is healthy"
+                cat /tmp/health-response.txt
+                return 0
+              fi
+              echo "$name not healthy yet (attempt $attempt/30)"
+              sleep 5
+            done
+            echo "$name health check failed: $url" >&2
+            return 1
+          }
+
+          check_url "API" "$API_HEALTH_URL"
+          check_url "Voice webhook" "$VOICE_HEALTH_URL"
+          check_url "Voice edge" "$VOICE_EDGE_READY_URL"

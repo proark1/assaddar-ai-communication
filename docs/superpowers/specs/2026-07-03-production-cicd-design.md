@@ -39,12 +39,9 @@ Jobs:
    - Check out the repository.
    - Install Railway CLI.
    - Use `RAILWAY_TOKEN`.
-   - Run `railway up --service <service> --environment production --ci` for:
-     - `assaddar-api`
-     - `assaddar-admin`
-     - `assaddar-widget`
-     - `assaddar-voice`
-     - `assaddar-workers`
+   - Use `RAILWAY_PROJECT_ID` so CI does not depend on local Railway linking.
+   - Run `railway up --project <project> --service <service> --environment production --ci` for each service in `RAILWAY_SERVICES`.
+   - Default `RAILWAY_SERVICES` to the currently known production services: `assaddar-api assaddar-voice`.
 
 2. `deploy-voice-edge`
    - Use a dedicated GitHub Actions SSH private key.
@@ -69,6 +66,7 @@ Jobs:
 ## Required GitHub Secrets
 
 - `RAILWAY_TOKEN`
+- `RAILWAY_PROJECT_ID`
 - `HETZNER_HOST`
 - `HETZNER_USER`
 - `HETZNER_SSH_KEY`
@@ -76,6 +74,11 @@ Jobs:
 - `VOICE_EDGE_READY_URL`
 - `API_HEALTH_URL`
 - `VOICE_HEALTH_URL`
+
+## Optional GitHub Variables
+
+- `RAILWAY_SERVICES`: space-separated Railway service names to deploy. Defaults to `assaddar-api assaddar-voice`.
+- `HETZNER_REPO_PATH`: repository path on the Hetzner server. Defaults to `/opt/assaddar-ai-communication`.
 
 ## Server Requirements
 
