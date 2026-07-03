@@ -292,6 +292,19 @@ func TestProcessUtteranceSendsAudibleFallbackOnTurnError(t *testing.T) {
 	}
 }
 
+func TestTurnReplyTextLocalizesHandoff(t *testing.T) {
+	got := turnReplyText(turn.Response{
+		Status: "handoff",
+		Reply:  "I don't have that information in the approved business knowledge.",
+	}, "de-DE")
+	if strings.Contains(got, "approved business knowledge") {
+		t.Fatalf("handoff reply was not localized: %q", got)
+	}
+	if !strings.Contains(got, "freigegebene Information") {
+		t.Fatalf("handoff reply = %q, want approved-information fallback", got)
+	}
+}
+
 func TestHandleRTPPacketIgnoresInputWhileProcessing(t *testing.T) {
 	server, err := New(testConfig(), nil)
 	if err != nil {

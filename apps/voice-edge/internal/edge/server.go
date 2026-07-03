@@ -650,11 +650,7 @@ func (server *Server) processUtterance(ctx context.Context, session *CallSession
 		"status", response.Status,
 		"durationMs", time.Since(turnStartedAt).Milliseconds(),
 	)
-	reply := strings.TrimSpace(response.Reply)
-	if reply == "" {
-		return server.sendText(ctx, session, localizedPrompt(server.cfg.DefaultLocale, "no_answer"))
-	}
-	return server.sendText(ctx, session, reply)
+	return server.sendText(ctx, session, turnReplyText(response, server.cfg.DefaultLocale))
 }
 
 func (server *Server) sendText(ctx context.Context, session *CallSession, text string) error {
@@ -678,6 +674,17 @@ func (server *Server) sendText(ctx context.Context, session *CallSession, text s
 		"samples", len(pcm.Samples),
 	)
 	return server.sendPCM(ctx, session, pcm)
+}
+
+func turnReplyText(response turn.Response, locale string) string {
+	if strings.EqualFold(strings.TrimSpace(response.Status), "handoff") {
+		return localizedPrompt(locale, "no_answer")
+	}
+	reply := strings.TrimSpace(response.Reply)
+	if reply == "" {
+		return localizedPrompt(locale, "no_answer")
+	}
+	return reply
 }
 
 func localizedPrompt(locale string, key string) string {
