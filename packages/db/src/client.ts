@@ -34,8 +34,21 @@ function resolvePoolMax(raw = process.env.DATABASE_POOL_MAX): number {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : DEFAULT_POOL_MAX;
 }
 
+/**
+ * Resolve the connection string for the RUNTIME (API, workers, voice). Prefer a
+ * dedicated non-owner application role via APP_DATABASE_URL so Postgres RLS is
+ * actually enforced (the table owner bypasses RLS unless FORCE is set). Falls
+ * back to DATABASE_URL for backward compatibility and local dev. Migrations run
+ * separately and always use the owner DATABASE_URL.
+ */
+export function resolveAppConnectionString(
+  env = process.env,
+): string | undefined {
+  return env.APP_DATABASE_URL ?? env.DATABASE_URL;
+}
+
 export function createDbClient(
-  connectionString = process.env.DATABASE_URL,
+  connectionString = resolveAppConnectionString(),
 ): DatabaseClient {
   if (!connectionString) {
     throw new Error("DATABASE_URL is required.");

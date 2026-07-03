@@ -6,6 +6,7 @@ import { createEmbeddingProvider } from "@assaddar/core";
 import {
   createDbClient,
   createEnvChannelCredentialCipher,
+  resolveAppConnectionString,
   TenantRepository,
 } from "@assaddar/db";
 import { backfillMissingEmbeddings } from "./backfill-embeddings";
@@ -35,7 +36,13 @@ initSentry();
 
 const QUEUE_NAME = "assaddar-platform";
 
-const dbClient = createDbClient();
+// The workers service is a TRUSTED maintenance process that sweeps across all
+// tenants (retention cleanup, delivery retries), so it connects as the owner
+// role via DATABASE_URL rather than the RLS-restricted APP_DATABASE_URL that
+// the API uses. Falls back to the app URL when DATABASE_URL is unset (dev).
+const dbClient = createDbClient(
+  process.env.DATABASE_URL ?? resolveAppConnectionString(),
+);
 const repository = new TenantRepository(
   dbClient.db,
   dbClient.db,

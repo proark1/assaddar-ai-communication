@@ -5,9 +5,19 @@
 - All tenant data tables include `tenant_id`.
 - Repository methods require tenant scope for tenant data access.
 - Public assistant IDs do not expose internal tenant UUIDs.
-- Migration SQL enables row-level security on tenant-scoped tables.
+- Migration SQL enables row-level security on tenant-scoped tables, and the repository sets `app.current_tenant_id` per transaction for every tenant-scoped read/write.
 - The tenant-scoped RLS list includes memberships, tenant invites, subscriptions, API keys, channel connections, webhook events, audit logs, knowledge, conversations, messages, calls, handoffs, deliveries, and WhatsApp templates.
-- Production deployments should use a non-owner Postgres application role and set `app.current_tenant_id` per request/transaction when RLS is enabled. Database RLS is defense in depth; the API must still enforce tenant scope before querying.
+- **RLS is defense in depth; the repository's explicit `tenant_id` predicates are the primary boundary and the API always enforces tenant scope before querying.**
+
+### Enforcing the RLS backstop (recommended for production)
+
+Postgres exempts a table's **owner** from its own RLS policies unless `FORCE ROW LEVEL SECURITY` is set. Because the app historically connects as the owner, the policies do nothing by default. To make the backstop real:
+
+1. **Provision a non-owner application role** with `scripts/create-app-role.sql` (login, `NOSUPERUSER`, `NOBYPASSRLS`, DML-only grants). Point `APP_DATABASE_URL` at it. The API uses `APP_DATABASE_URL`; migrations and the trusted workers service keep using the owner `DATABASE_URL` (the workers sweep across all tenants).
+2. **Force RLS** with `scripts/enable-force-rls.sql` (run as the owner).
+3. **Verify** with `pnpm db:check`, which reports whether RLS is actually enforced for the app role and, when `REQUIRE_DB_RLS=true`, fails if it is not — so a misconfigured deploy is caught before it serves traffic.
+
+The admin **privacy boundary** is enforced at the API layer independently of RLS: the platform admin token and any `platform_owner` without a real tenant membership are denied (`403`) on all end-user personal-data routes (messages, transcripts, inbox, contacts, per-tenant export). They may only reach aggregate/health/analytics routes. Genuine member access to content is written to the audit log.
 
 ## Secrets
 
@@ -69,8 +79,9 @@
 ## Audit
 
 - Tenant creation and FAQ creation write audit logs.
+- Access to tenant end-user personal data (conversation messages, per-tenant export) is written to the audit log with the authenticated actor (`recordAuditEvent` records `actorType`/`actorId`), so PII access is traceable (GDPR Art. 5(2)/30 accountability).
 - Admin impersonation is not implemented in the MVP and should remain avoided or heavily audited.
-- Production should add actor IDs from real auth and include before/after metadata for sensitive settings changes.
+- Production should continue to expand before/after metadata for sensitive settings changes.
 
 ## Deployment
 
