@@ -14,6 +14,7 @@ import {
   and,
   desc,
   eq,
+  gte,
   inArray,
   isNotNull,
   isNull,
@@ -27,6 +28,7 @@ import {
   allowedIntents,
   auditLogs,
   blockedTopics,
+  calls,
   channelConnections,
   channelWebhookEvents,
   conversationContacts,
@@ -55,6 +57,7 @@ import {
   createPublicAssistantId,
   createPublicConversationId,
   deriveConversationNextAction,
+  deriveQualityMetrics,
   extractTemplateVariables,
   hasSharedIdentifier,
   isPhoneIdentityChannel,
@@ -76,6 +79,7 @@ import type { ChannelCredentialCipher } from "./secrets";
 export {
   createPublicAssistantId,
   createPublicConversationId,
+  deriveQualityMetrics,
   retentionCutoff,
   setTenantSession,
 } from "./repository-helpers";
@@ -370,6 +374,39 @@ export type TenantAnalyticsResult = {
     skipped: number;
     other: number;
     failureRate: number;
+  };
+  // Answer-quality rates: how often the assistant resolved a request itself
+  // (containment) versus refused or escalated to a human.
+  quality: {
+    answered: number;
+    refused: number;
+    handoff: number;
+    total: number;
+    containmentRate: number;
+    refusalRate: number;
+    handoffRate: number;
+  };
+  // Per-channel message volume so a tenant can see which channels are active.
+  byChannel: Array<{
+    channel: string;
+    inbound: number;
+    outbound: number;
+    total: number;
+  }>;
+  // Telephone voice metrics.
+  voice: {
+    calls: number;
+    completed: number;
+    avgDurationSeconds: number | null;
+    lastCallAt: Date | null;
+  };
+  // Activity within a recent rolling window (default 30 days) so dashboards can
+  // show "recent" alongside all-time.
+  window: {
+    days: number;
+    conversations: number;
+    messages: number;
+    handoffs: number;
   };
 };
 
@@ -3040,13 +3077,21 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     });
   }
 
-  async getTenantAnalytics(tenantId: string): Promise<TenantAnalyticsResult> {
+  async getTenantAnalytics(
+    tenantId: string,
+    options: { windowDays?: number } = {},
+  ): Promise<TenantAnalyticsResult> {
     assertTenantId(tenantId);
     if (this.needsTenantScope(tenantId)) {
       return this.withTenantScope<TenantAnalyticsResult>(tenantId, (repo) =>
-        repo.getTenantAnalytics(tenantId),
+        repo.getTenantAnalytics(tenantId, options),
       );
     }
+    const windowDays =
+      Number.isInteger(options.windowDays) && (options.windowDays ?? 0) > 0
+        ? (options.windowDays as number)
+        : 30;
+    const windowStart = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
     const [
       [conversationStats],
       [messageStats],
@@ -3056,6 +3101,11 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       [contactStats],
       usageByStatus,
       deliveryStatusRows,
+      channelRows,
+      [voiceStats],
+      [windowConversationStats],
+      [windowMessageStats],
+      [windowHandoffStats],
     ] = await Promise.all([
       this.db
         .select({
@@ -3122,6 +3172,57 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
         .from(messageDeliveries)
         .where(eq(messageDeliveries.tenantId, tenantId))
         .groupBy(messageDeliveries.status),
+      // Per-channel message volume, split by direction.
+      this.db
+        .select({
+          channel: messages.channel,
+          direction: messages.direction,
+          total: sql<number>`count(*)::int`,
+        })
+        .from(messages)
+        .where(eq(messages.tenantId, tenantId))
+        .groupBy(messages.channel, messages.direction),
+      // Telephone voice metrics.
+      this.db
+        .select({
+          calls: sql<number>`count(*)::int`,
+          completed: sql<number>`count(*) filter (where ${calls.status} = 'completed' or ${calls.endedAt} is not null)::int`,
+          avgDurationSeconds: sql<
+            number | null
+          >`avg(extract(epoch from (${calls.endedAt} - ${calls.startedAt})))::float`,
+          lastCallAt: sql<Date | null>`max(${calls.startedAt})`,
+        })
+        .from(calls)
+        .where(eq(calls.tenantId, tenantId)),
+      // Recent-window activity: conversations, messages, and handoffs created
+      // within the rolling window.
+      this.db
+        .select({ total: sql<number>`count(*)::int` })
+        .from(conversations)
+        .where(
+          and(
+            eq(conversations.tenantId, tenantId),
+            gte(conversations.createdAt, windowStart),
+          ),
+        ),
+      this.db
+        .select({ total: sql<number>`count(*)::int` })
+        .from(messages)
+        .where(
+          and(
+            eq(messages.tenantId, tenantId),
+            gte(messages.createdAt, windowStart),
+          ),
+        ),
+      this.db
+        .select({ total: sql<number>`count(*)::int` })
+        .from(handoffRequests)
+        .where(
+          and(
+            eq(handoffRequests.tenantId, tenantId),
+            gte(handoffRequests.createdAt, windowStart),
+          ),
+        ),
     ]);
 
     const deliveryByStatus = deliveryStatusRows.reduce(
@@ -3139,6 +3240,33 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       (deliveryByStatus.sent ?? 0) + (deliveryByStatus.queued ?? 0);
     const deliveriesFailed = deliveryByStatus.failed ?? 0;
     const deliveriesSkipped = deliveryByStatus.skipped ?? 0;
+
+    const channelTotals = new Map<
+      string,
+      { inbound: number; outbound: number }
+    >();
+    for (const row of channelRows) {
+      const entry = channelTotals.get(row.channel) ?? {
+        inbound: 0,
+        outbound: 0,
+      };
+      if (row.direction === "inbound") {
+        entry.inbound += row.total;
+      } else if (row.direction === "outbound") {
+        entry.outbound += row.total;
+      }
+      channelTotals.set(row.channel, entry);
+    }
+    const byChannel = Array.from(channelTotals.entries())
+      .map(([channel, counts]) => ({
+        channel,
+        inbound: counts.inbound,
+        outbound: counts.outbound,
+        total: counts.inbound + counts.outbound,
+      }))
+      .sort((a, b) => b.total - a.total);
+
+    const quality = deriveQualityMetrics(usageByStatus);
 
     return {
       conversations: conversationStats?.total ?? 0,
@@ -3168,6 +3296,23 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
             ? 0
             : Math.round((deliveriesFailed / attempted) * 1000) / 1000;
         })(),
+      },
+      quality,
+      byChannel,
+      voice: {
+        calls: voiceStats?.calls ?? 0,
+        completed: voiceStats?.completed ?? 0,
+        avgDurationSeconds:
+          voiceStats?.avgDurationSeconds != null
+            ? Math.round(voiceStats.avgDurationSeconds)
+            : null,
+        lastCallAt: voiceStats?.lastCallAt ?? null,
+      },
+      window: {
+        days: windowDays,
+        conversations: windowConversationStats?.total ?? 0,
+        messages: windowMessageStats?.total ?? 0,
+        handoffs: windowHandoffStats?.total ?? 0,
       },
     };
   }

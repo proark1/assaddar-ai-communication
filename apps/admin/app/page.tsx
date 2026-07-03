@@ -52,6 +52,7 @@ import { getSupabaseClient } from "./supabase-client";
 import { AdminSidebar } from "./AdminSidebar";
 import { DeleteKnowledgeModal } from "./DeleteKnowledgeModal";
 import { DashboardMetrics } from "./DashboardMetrics";
+import { AnalyticsPanel } from "./AnalyticsPanel";
 import { useDialogA11y, useToasts } from "./dashboard-hooks";
 import {
   buildFollowUpIcs,
@@ -3010,18 +3011,21 @@ export default function DashboardPage() {
 
   function renderMetrics() {
     return (
-      <DashboardMetrics
-        loading={
-          (busy || workspaceLoading) && !analytics && knowledge.length === 0
-        }
-        conversations={analytics?.conversations ?? 0}
-        messages={analytics?.messages ?? 0}
-        contacts={knownContactCount}
-        leads={leadHandoffs.length}
-        knowledge={analytics?.approvedKnowledge ?? knowledge.length}
-        openHandoffs={analytics?.openHandoffs ?? openHandoffs.length}
-        unanswered={unansweredCount}
-      />
+      <>
+        <DashboardMetrics
+          loading={
+            (busy || workspaceLoading) && !analytics && knowledge.length === 0
+          }
+          conversations={analytics?.conversations ?? 0}
+          messages={analytics?.messages ?? 0}
+          contacts={knownContactCount}
+          leads={leadHandoffs.length}
+          knowledge={analytics?.approvedKnowledge ?? knowledge.length}
+          openHandoffs={analytics?.openHandoffs ?? openHandoffs.length}
+          unanswered={unansweredCount}
+        />
+        <AnalyticsPanel analytics={analytics} />
+      </>
     );
   }
 

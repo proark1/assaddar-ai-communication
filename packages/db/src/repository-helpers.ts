@@ -220,6 +220,53 @@ export function retentionCutoff(
   return new Date(now.getTime() - retentionDays * millisPerDay);
 }
 
+export type QualityMetrics = {
+  answered: number;
+  refused: number;
+  handoff: number;
+  total: number;
+  /** Share of answer attempts the assistant resolved itself (answered / total). */
+  containmentRate: number;
+  refusalRate: number;
+  handoffRate: number;
+};
+
+/**
+ * Derive answer-quality rates from usage events grouped by answer status.
+ * The answer engine emits one usage event per reply with eventType set to the
+ * AnswerStatus ("answered" | "refused" | "handoff"); other event types are
+ * ignored here. Pure so the rate arithmetic is unit-tested without a database.
+ * Rates are rounded to 3 decimals and are 0 when there were no answer events.
+ */
+export function deriveQualityMetrics(
+  usageByStatus: Array<{ eventType: string; total: number }>,
+): QualityMetrics {
+  let answered = 0;
+  let refused = 0;
+  let handoff = 0;
+  for (const row of usageByStatus) {
+    if (row.eventType === "answered") {
+      answered += row.total;
+    } else if (row.eventType === "refused") {
+      refused += row.total;
+    } else if (row.eventType === "handoff") {
+      handoff += row.total;
+    }
+  }
+  const total = answered + refused + handoff;
+  const rate = (value: number) =>
+    total === 0 ? 0 : Math.round((value / total) * 1000) / 1000;
+  return {
+    answered,
+    refused,
+    handoff,
+    total,
+    containmentRate: rate(answered),
+    refusalRate: rate(refused),
+    handoffRate: rate(handoff),
+  };
+}
+
 export async function setTenantSession(db: DbExecutor, tenantId: string) {
   assertTenantId(tenantId);
   await db.execute(
