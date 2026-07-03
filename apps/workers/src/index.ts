@@ -1,13 +1,16 @@
 import { config } from "dotenv";
 import * as Sentry from "@sentry/node";
 import { Queue, Worker, type JobsOptions } from "bullmq";
+import { createChannelAdapterRegistry } from "@assaddar/channels";
 import { createEmbeddingProvider } from "@assaddar/core";
 import {
   createDbClient,
   createEnvChannelCredentialCipher,
+  resolveAppConnectionString,
   TenantRepository,
 } from "@assaddar/db";
 import { backfillMissingEmbeddings } from "./backfill-embeddings";
+import { retryFailedDeliveries } from "./retry-deliveries";
 import { jobSchemas, type WorkerJobName } from "./jobs";
 
 config({ path: new URL("../../../.env", import.meta.url) });
@@ -33,7 +36,13 @@ initSentry();
 
 const QUEUE_NAME = "assaddar-platform";
 
-const dbClient = createDbClient();
+// The workers service is a TRUSTED maintenance process that sweeps across all
+// tenants (retention cleanup, delivery retries), so it connects as the owner
+// role via DATABASE_URL rather than the RLS-restricted APP_DATABASE_URL that
+// the API uses. Falls back to the app URL when DATABASE_URL is unset (dev).
+const dbClient = createDbClient(
+  process.env.DATABASE_URL ?? resolveAppConnectionString(),
+);
 const repository = new TenantRepository(
   dbClient.db,
   dbClient.db,
@@ -41,6 +50,7 @@ const repository = new TenantRepository(
   createEnvChannelCredentialCipher(process.env),
 );
 const embeddingProvider = createEmbeddingProvider(process.env);
+const channelAdapters = createChannelAdapterRegistry(process.env);
 
 const redisUrl = process.env.REDIS_URL ?? "redis://localhost:6379";
 const parsedRedisUrl = new URL(redisUrl);
@@ -115,6 +125,12 @@ const EMBEDDING_BACKFILL_INTERVAL_MS = parsePositiveIntEnv(
 const RETENTION_CLEANUP_INTERVAL_MS = parsePositiveIntEnv(
   process.env.RETENTION_CLEANUP_INTERVAL_MS,
   60 * 60 * 1000,
+);
+
+// Default: re-attempt transiently-failed outbound deliveries every minute.
+const DELIVERY_RETRY_INTERVAL_MS = parsePositiveIntEnv(
+  process.env.DELIVERY_RETRY_INTERVAL_MS,
+  60 * 1000,
 );
 
 // Retention deletion is DESTRUCTIVE, so it is gated behind an explicit flag and
@@ -243,8 +259,10 @@ const worker = new Worker(
         const tenants = await repository.listTenants();
         // (a) Prune globally-expired user sessions.
         const removedSessions = await repository.deleteExpiredSessions(now);
-        // (b) Per-tenant: delete conversation history older than retention_days.
+        // (b) Per-tenant: delete conversation + call history older than
+        // retention_days (calls carry voice transcripts / personal data).
         let deletedConversations = 0;
+        let deletedCalls = 0;
         for (const tenant of tenants) {
           try {
             const result = await repository.deleteTenantDataOlderThanRetention(
@@ -252,10 +270,12 @@ const worker = new Worker(
               { now },
             );
             deletedConversations += result.deletedConversations;
-            if (result.deletedConversations > 0) {
+            deletedCalls += result.deletedCalls;
+            if (result.deletedConversations > 0 || result.deletedCalls > 0) {
               console.log(
                 `[retention.cleanup] tenant ${tenant.id}: pruned ` +
-                  `${result.deletedConversations} conversation(s) older than ` +
+                  `${result.deletedConversations} conversation(s) and ` +
+                  `${result.deletedCalls} call(s) older than ` +
                   `${tenant.retentionDays} day(s)`,
               );
             }
@@ -271,8 +291,25 @@ const worker = new Worker(
           status: "ok",
           removedSessions,
           deletedConversations,
+          deletedCalls,
           tenants: tenants.length,
         };
+      }
+      case "deliveries.retry": {
+        try {
+          const result = await retryFailedDeliveries(
+            repository,
+            channelAdapters,
+            {
+              now: new Date(),
+              log: (message) => console.log(`[deliveries.retry] ${message}`),
+            },
+          );
+          return { status: "ok", ...result };
+        } catch (error) {
+          console.error(`[deliveries.retry] run failed (job ${job.id})`, error);
+          throw error;
+        }
       }
     }
   },
@@ -315,6 +352,15 @@ async function scheduleMaintenanceJobs() {
   );
   console.log(
     `Scheduled embeddings.backfill every ${EMBEDDING_BACKFILL_INTERVAL_MS}ms`,
+  );
+
+  await queue.upsertJobScheduler(
+    "deliveries-retry",
+    { every: DELIVERY_RETRY_INTERVAL_MS },
+    { name: "deliveries.retry", data: {} },
+  );
+  console.log(
+    `Scheduled deliveries.retry every ${DELIVERY_RETRY_INTERVAL_MS}ms`,
   );
 
   if (RETENTION_CLEANUP_ENABLED) {

@@ -16,6 +16,7 @@ describe("jobSchemas", () => {
   it("exposes a schema for every worker job name", () => {
     expect(Object.keys(jobSchemas).sort()).toEqual(
       [
+        "deliveries.retry",
         "embeddings.backfill",
         "embeddings.generate",
         "file.parse",

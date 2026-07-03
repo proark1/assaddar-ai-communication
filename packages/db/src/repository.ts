@@ -14,6 +14,7 @@ import {
   and,
   desc,
   eq,
+  gte,
   inArray,
   isNotNull,
   isNull,
@@ -27,6 +28,7 @@ import {
   allowedIntents,
   auditLogs,
   blockedTopics,
+  calls,
   channelConnections,
   channelWebhookEvents,
   conversationContacts,
@@ -55,6 +57,7 @@ import {
   createPublicAssistantId,
   createPublicConversationId,
   deriveConversationNextAction,
+  deriveQualityMetrics,
   extractTemplateVariables,
   hasSharedIdentifier,
   isPhoneIdentityChannel,
@@ -76,6 +79,7 @@ import type { ChannelCredentialCipher } from "./secrets";
 export {
   createPublicAssistantId,
   createPublicConversationId,
+  deriveQualityMetrics,
   retentionCutoff,
   setTenantSession,
 } from "./repository-helpers";
@@ -206,6 +210,21 @@ function resolvePagination(options?: PaginationOptions): {
   return { limit, offset };
 }
 
+function readStringOrNull(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function readAttempts(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.max(0, Math.trunc(value));
+  }
+  if (typeof value === "string") {
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+  }
+  return 0;
+}
+
 function normalizeFullTextQuery(
   options?: PaginationOptions,
 ): string | undefined {
@@ -238,6 +257,24 @@ export type KnowledgeDocumentRecord = typeof knowledgeDocuments.$inferSelect;
 export type KnowledgeChunkRecord = typeof knowledgeChunks.$inferSelect;
 
 export type MessageDeliveryRecord = typeof messageDeliveries.$inferSelect;
+
+/**
+ * A failed outbound delivery that is eligible for an automatic re-send, joined
+ * with the reply text and recipient routing needed to reconstruct the outbound
+ * message. Produced by {@link TenantRepository.listRetryableDeliveries} for the
+ * delivery-retry worker.
+ */
+export type RetryableDelivery = {
+  id: string;
+  tenantId: string;
+  channel: Channel;
+  provider: string;
+  text: string;
+  providerAccountId: string | null;
+  externalConversationId: string | null;
+  externalUserId: string | null;
+  attempts: number;
+};
 
 export type RecordChannelWebhookEventResult = {
   event: ChannelWebhookEventRecord;
@@ -327,6 +364,68 @@ export type TenantAnalyticsResult = {
     total: number;
     credits: number;
   }>;
+  // Outbound delivery health so tenants/operators can see when replies are not
+  // actually reaching customers. `failed` counts real send failures (distinct
+  // from `skipped`, which are intentional non-sends).
+  deliveries: {
+    total: number;
+    sent: number;
+    failed: number;
+    skipped: number;
+    other: number;
+    failureRate: number;
+  };
+  // Answer-quality rates: how often the assistant resolved a request itself
+  // (containment) versus refused or escalated to a human.
+  quality: {
+    answered: number;
+    refused: number;
+    handoff: number;
+    total: number;
+    containmentRate: number;
+    refusalRate: number;
+    handoffRate: number;
+  };
+  // Per-channel message volume so a tenant can see which channels are active.
+  byChannel: Array<{
+    channel: string;
+    inbound: number;
+    outbound: number;
+    total: number;
+  }>;
+  // Telephone voice metrics.
+  voice: {
+    calls: number;
+    completed: number;
+    avgDurationSeconds: number | null;
+    lastCallAt: Date | null;
+  };
+  // Activity within a recent rolling window (default 30 days) so dashboards can
+  // show "recent" alongside all-time.
+  window: {
+    days: number;
+    conversations: number;
+    messages: number;
+    handoffs: number;
+  };
+};
+
+/**
+ * Cross-tenant, NON-PERSONAL aggregate for the platform operator console. Counts
+ * and health signals only — never message content or contact identities — so
+ * the platform admin can spot faults and load without seeing tenant PII (the R4
+ * privacy boundary).
+ */
+export type PlatformOverviewResult = {
+  tenants: { total: number; active: number };
+  totals: {
+    conversations: number;
+    messages: number;
+    contacts: number;
+    calls: number;
+  };
+  deliveries: { total: number; failed: number; failureRate: number };
+  openHandoffs: number;
 };
 
 export type WhatsappComplianceResult = {
@@ -2274,6 +2373,121 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     return delivery;
   }
 
+  /**
+   * System-wide (cross-tenant) sweep used by the delivery-retry worker: find
+   * failed, retry-eligible outbound deliveries whose last attempt is older than
+   * `before` and that have not yet exhausted `maxAttempts`. Not tenant-scoped
+   * because the worker runs as a trusted maintenance job across all tenants
+   * (like retention cleanup); the re-send is still routed per-tenant.
+   */
+  async listRetryableDeliveries(options: {
+    before: Date;
+    maxAttempts: number;
+    limit: number;
+  }): Promise<RetryableDelivery[]> {
+    const rows = await this.db
+      .select({
+        id: messageDeliveries.id,
+        tenantId: messageDeliveries.tenantId,
+        channel: messageDeliveries.channel,
+        provider: messageDeliveries.provider,
+        text: messages.content,
+        metadata: messageDeliveries.metadata,
+      })
+      .from(messageDeliveries)
+      .innerJoin(messages, eq(messageDeliveries.messageId, messages.id))
+      .where(
+        and(
+          eq(messageDeliveries.status, "failed"),
+          sql`(${messageDeliveries.metadata} ->> 'retryable') = 'true'`,
+          sql`coalesce((${messageDeliveries.metadata} ->> 'attempts')::int, 0) < ${options.maxAttempts}`,
+          lt(messageDeliveries.updatedAt, options.before),
+        ),
+      )
+      .orderBy(messageDeliveries.updatedAt)
+      .limit(options.limit);
+
+    return rows.map((row) => {
+      const metadata = (row.metadata ?? {}) as Record<string, unknown>;
+      return {
+        id: row.id,
+        tenantId: row.tenantId,
+        channel: row.channel as Channel,
+        provider: row.provider,
+        text: row.text ?? "",
+        providerAccountId: readStringOrNull(metadata.providerAccountId),
+        externalConversationId: readStringOrNull(
+          metadata.externalConversationId,
+        ),
+        externalUserId: readStringOrNull(metadata.externalUserId),
+        attempts: readAttempts(metadata.attempts),
+      };
+    });
+  }
+
+  /**
+   * Record the outcome of a delivery-retry attempt. On success the delivery is
+   * marked sent with the new provider message id; on failure the attempt
+   * counter is incremented (and `retryable` cleared once exhausted, so the row
+   * is not swept again). Always bumps `updatedAt` so the backoff window advances.
+   */
+  async applyDeliveryRetryOutcome(
+    tenantId: string,
+    deliveryId: string,
+    outcome: {
+      succeeded: boolean;
+      attempts: number;
+      exhausted?: boolean;
+      providerMessageId?: string | null;
+      detail?: string | null;
+    },
+  ): Promise<void> {
+    assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<void>(tenantId, (repo) =>
+        repo.applyDeliveryRetryOutcome(tenantId, deliveryId, outcome),
+      );
+    }
+    const [existing] = await this.db
+      .select({ metadata: messageDeliveries.metadata })
+      .from(messageDeliveries)
+      .where(
+        and(
+          eq(messageDeliveries.tenantId, tenantId),
+          eq(messageDeliveries.id, deliveryId),
+        ),
+      )
+      .limit(1);
+    const metadata = {
+      ...((existing?.metadata ?? {}) as Record<string, unknown>),
+    };
+    metadata.attempts = outcome.attempts;
+    if (outcome.succeeded) {
+      metadata.retryable = false;
+    } else if (outcome.exhausted) {
+      // Stop sweeping a permanently-failed delivery, but keep it "failed" so it
+      // still counts against the failure rate in analytics.
+      metadata.retryable = false;
+    }
+    await this.db
+      .update(messageDeliveries)
+      .set({
+        status: outcome.succeeded ? "sent" : "failed",
+        providerMessageId: outcome.succeeded
+          ? (outcome.providerMessageId ?? null)
+          : undefined,
+        detail: outcome.detail ?? null,
+        metadata,
+        updatedAt: sql`now()`,
+      })
+      .where(
+        and(
+          eq(messageDeliveries.tenantId, tenantId),
+          eq(messageDeliveries.id, deliveryId),
+        ),
+      );
+  }
+
   async listConversationMessages(
     tenantId: string,
     conversationId: string,
@@ -2881,13 +3095,21 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     });
   }
 
-  async getTenantAnalytics(tenantId: string): Promise<TenantAnalyticsResult> {
+  async getTenantAnalytics(
+    tenantId: string,
+    options: { windowDays?: number } = {},
+  ): Promise<TenantAnalyticsResult> {
     assertTenantId(tenantId);
     if (this.needsTenantScope(tenantId)) {
       return this.withTenantScope<TenantAnalyticsResult>(tenantId, (repo) =>
-        repo.getTenantAnalytics(tenantId),
+        repo.getTenantAnalytics(tenantId, options),
       );
     }
+    const windowDays =
+      Number.isInteger(options.windowDays) && (options.windowDays ?? 0) > 0
+        ? (options.windowDays as number)
+        : 30;
+    const windowStart = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
     const [
       [conversationStats],
       [messageStats],
@@ -2896,6 +3118,12 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       [totalHandoffStats],
       [contactStats],
       usageByStatus,
+      deliveryStatusRows,
+      channelRows,
+      [voiceStats],
+      [windowConversationStats],
+      [windowMessageStats],
+      [windowHandoffStats],
     ] = await Promise.all([
       this.db
         .select({
@@ -2954,7 +3182,109 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
         .from(usageEvents)
         .where(eq(usageEvents.tenantId, tenantId))
         .groupBy(usageEvents.eventType),
+      this.db
+        .select({
+          status: messageDeliveries.status,
+          total: sql<number>`count(*)::int`,
+        })
+        .from(messageDeliveries)
+        .where(eq(messageDeliveries.tenantId, tenantId))
+        .groupBy(messageDeliveries.status),
+      // Per-channel message volume, split by direction.
+      this.db
+        .select({
+          channel: messages.channel,
+          direction: messages.direction,
+          total: sql<number>`count(*)::int`,
+        })
+        .from(messages)
+        .where(eq(messages.tenantId, tenantId))
+        .groupBy(messages.channel, messages.direction),
+      // Telephone voice metrics.
+      this.db
+        .select({
+          calls: sql<number>`count(*)::int`,
+          completed: sql<number>`count(*) filter (where ${calls.status} = 'completed' or ${calls.endedAt} is not null)::int`,
+          avgDurationSeconds: sql<
+            number | null
+          >`avg(extract(epoch from (${calls.endedAt} - ${calls.startedAt})))::float`,
+          lastCallAt: sql<Date | null>`max(${calls.startedAt})`,
+        })
+        .from(calls)
+        .where(eq(calls.tenantId, tenantId)),
+      // Recent-window activity: conversations, messages, and handoffs created
+      // within the rolling window.
+      this.db
+        .select({ total: sql<number>`count(*)::int` })
+        .from(conversations)
+        .where(
+          and(
+            eq(conversations.tenantId, tenantId),
+            gte(conversations.createdAt, windowStart),
+          ),
+        ),
+      this.db
+        .select({ total: sql<number>`count(*)::int` })
+        .from(messages)
+        .where(
+          and(
+            eq(messages.tenantId, tenantId),
+            gte(messages.createdAt, windowStart),
+          ),
+        ),
+      this.db
+        .select({ total: sql<number>`count(*)::int` })
+        .from(handoffRequests)
+        .where(
+          and(
+            eq(handoffRequests.tenantId, tenantId),
+            gte(handoffRequests.createdAt, windowStart),
+          ),
+        ),
     ]);
+
+    const deliveryByStatus = deliveryStatusRows.reduce(
+      (acc, row) => {
+        acc[row.status] = (acc[row.status] ?? 0) + row.total;
+        return acc;
+      },
+      {} as Record<string, number>,
+    );
+    const deliveriesTotal = Object.values(deliveryByStatus).reduce(
+      (sum, value) => sum + value,
+      0,
+    );
+    const deliveriesSent =
+      (deliveryByStatus.sent ?? 0) + (deliveryByStatus.queued ?? 0);
+    const deliveriesFailed = deliveryByStatus.failed ?? 0;
+    const deliveriesSkipped = deliveryByStatus.skipped ?? 0;
+
+    const channelTotals = new Map<
+      string,
+      { inbound: number; outbound: number }
+    >();
+    for (const row of channelRows) {
+      const entry = channelTotals.get(row.channel) ?? {
+        inbound: 0,
+        outbound: 0,
+      };
+      if (row.direction === "inbound") {
+        entry.inbound += row.total;
+      } else if (row.direction === "outbound") {
+        entry.outbound += row.total;
+      }
+      channelTotals.set(row.channel, entry);
+    }
+    const byChannel = Array.from(channelTotals.entries())
+      .map(([channel, counts]) => ({
+        channel,
+        inbound: counts.inbound,
+        outbound: counts.outbound,
+        total: counts.inbound + counts.outbound,
+      }))
+      .sort((a, b) => b.total - a.total);
+
+    const quality = deriveQualityMetrics(usageByStatus);
 
     return {
       conversations: conversationStats?.total ?? 0,
@@ -2966,6 +3296,121 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       lastConversationAt: conversationStats?.lastAt ?? null,
       lastMessageAt: messageStats?.lastAt ?? null,
       usageByStatus,
+      deliveries: {
+        total: deliveriesTotal,
+        sent: deliveriesSent,
+        failed: deliveriesFailed,
+        skipped: deliveriesSkipped,
+        other:
+          deliveriesTotal -
+          deliveriesSent -
+          deliveriesFailed -
+          deliveriesSkipped,
+        // Failure rate over deliveries we actually attempted (exclude
+        // intentional skips) so a channel with only skips reads as 0%, not NaN.
+        failureRate: (() => {
+          const attempted = deliveriesSent + deliveriesFailed;
+          return attempted === 0
+            ? 0
+            : Math.round((deliveriesFailed / attempted) * 1000) / 1000;
+        })(),
+      },
+      quality,
+      byChannel,
+      voice: {
+        calls: voiceStats?.calls ?? 0,
+        completed: voiceStats?.completed ?? 0,
+        avgDurationSeconds:
+          voiceStats?.avgDurationSeconds != null
+            ? Math.round(voiceStats.avgDurationSeconds)
+            : null,
+        lastCallAt: voiceStats?.lastCallAt ?? null,
+      },
+      window: {
+        days: windowDays,
+        conversations: windowConversationStats?.total ?? 0,
+        messages: windowMessageStats?.total ?? 0,
+        handoffs: windowHandoffStats?.total ?? 0,
+      },
+    };
+  }
+
+  /**
+   * Platform-operator overview: cross-tenant aggregate counts and delivery
+   * health with NO personal data. Intended for the platform admin console so an
+   * operator can watch load and failures across all tenants without being able
+   * to read any tenant's messages or contacts (the R4 boundary). Not
+   * tenant-scoped — it is a system-level aggregate like {@link listTenants}.
+   */
+  async getPlatformOverview(): Promise<PlatformOverviewResult> {
+    const [
+      [tenantStats],
+      [conversationStats],
+      [messageStats],
+      [contactStats],
+      [callStats],
+      [openHandoffStats],
+      deliveryStatusRows,
+    ] = await Promise.all([
+      this.db
+        .select({
+          total: sql<number>`count(*)::int`,
+          active: sql<number>`count(*) filter (where ${tenants.status} = 'active')::int`,
+        })
+        .from(tenants),
+      this.db.select({ total: sql<number>`count(*)::int` }).from(conversations),
+      this.db.select({ total: sql<number>`count(*)::int` }).from(messages),
+      this.db.select({ total: sql<number>`count(*)::int` }).from(contacts),
+      this.db.select({ total: sql<number>`count(*)::int` }).from(calls),
+      this.db
+        .select({ total: sql<number>`count(*)::int` })
+        .from(handoffRequests)
+        .where(eq(handoffRequests.status, "open")),
+      this.db
+        .select({
+          status: messageDeliveries.status,
+          total: sql<number>`count(*)::int`,
+        })
+        .from(messageDeliveries)
+        .groupBy(messageDeliveries.status),
+    ]);
+
+    const deliveryByStatus = deliveryStatusRows.reduce(
+      (acc, row) => {
+        acc[row.status] = (acc[row.status] ?? 0) + row.total;
+        return acc;
+      },
+      {} as Record<string, number>,
+    );
+    const deliveriesTotal = Object.values(deliveryByStatus).reduce(
+      (sum, value) => sum + value,
+      0,
+    );
+    const deliveriesFailed = deliveryByStatus.failed ?? 0;
+    const deliveriesSent =
+      (deliveryByStatus.sent ?? 0) + (deliveryByStatus.queued ?? 0);
+    const attempted = deliveriesSent + deliveriesFailed;
+
+    return {
+      tenants: {
+        total: tenantStats?.total ?? 0,
+        active: tenantStats?.active ?? 0,
+      },
+      totals: {
+        conversations: conversationStats?.total ?? 0,
+        messages: messageStats?.total ?? 0,
+        contacts: contactStats?.total ?? 0,
+        calls: callStats?.total ?? 0,
+      },
+      deliveries: {
+        total: deliveriesTotal,
+        failed: deliveriesFailed,
+        failureRate:
+          attempted === 0
+            ? 0
+            : Math.round((deliveriesFailed / attempted) * 1000) / 1000,
+      },
+      openHandoffs: openHandoffStats?.total ?? 0,
     };
   }
 
@@ -3189,6 +3634,89 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
   }
 
   /**
+   * GDPR Art. 17 erasure of a single data subject (contact). Deletes the contact
+   * row (its conversation links cascade away) and, unless
+   * `deleteConversations` is false, the conversations that contact took part in
+   * — including their messages/feedback (ON DELETE CASCADE) and any linked calls
+   * and transcripts (calls only SET NULL their conversation ref, so they are
+   * deleted explicitly). Tenant-scoped and transactional so a partial erasure
+   * rolls back. Returns what was removed and writes an audit entry.
+   */
+  async deleteContact(
+    tenantId: string,
+    contactId: string,
+    options: { deleteConversations?: boolean } = {},
+  ): Promise<{
+    deletedContact: boolean;
+    deletedConversations: number;
+    deletedCalls: number;
+  }> {
+    assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope(tenantId, (repo) =>
+        repo.deleteContact(tenantId, contactId, options),
+      );
+    }
+    return this.withTransaction(async (repo) => {
+      // Capture linked conversations BEFORE deleting the contact — the link
+      // rows cascade away together with the contact.
+      const links = await repo.db
+        .select({ conversationId: conversationContacts.conversationId })
+        .from(conversationContacts)
+        .where(
+          and(
+            eq(conversationContacts.tenantId, tenantId),
+            eq(conversationContacts.contactId, contactId),
+          ),
+        );
+      const conversationIds = Array.from(
+        new Set(links.map((link) => link.conversationId)),
+      );
+
+      const deletedContactRows = await repo.db
+        .delete(contacts)
+        .where(and(eq(contacts.tenantId, tenantId), eq(contacts.id, contactId)))
+        .returning({ id: contacts.id });
+      const deletedContact = deletedContactRows.length > 0;
+
+      let deletedConversations = 0;
+      let deletedCalls = 0;
+      const eraseConversations = options.deleteConversations ?? true;
+      if (deletedContact && eraseConversations && conversationIds.length > 0) {
+        const removedCalls = await repo.db
+          .delete(calls)
+          .where(
+            and(
+              eq(calls.tenantId, tenantId),
+              inArray(calls.conversationId, conversationIds),
+            ),
+          )
+          .returning({ id: calls.id });
+        deletedCalls = removedCalls.length;
+        const removedConversations = await repo.db
+          .delete(conversations)
+          .where(
+            and(
+              eq(conversations.tenantId, tenantId),
+              inArray(conversations.id, conversationIds),
+            ),
+          )
+          .returning({ id: conversations.id });
+        deletedConversations = removedConversations.length;
+      }
+
+      if (deletedContact) {
+        await repo.audit(tenantId, "contact.erased", "contact", contactId, {
+          deletedConversations,
+          deletedCalls,
+          erasedConversations: eraseConversations,
+        });
+      }
+      return { deletedContact, deletedConversations, deletedCalls };
+    });
+  }
+
+  /**
    * Retention enforcement: delete conversation history for a single tenant that
    * is older than the tenant's retention window. DESTRUCTIVE — handled with
    * deliberate caution:
@@ -3214,7 +3742,11 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
   async deleteTenantDataOlderThanRetention(
     tenantId: string,
     options: { now?: Date; retentionDays?: number } = {},
-  ): Promise<{ cutoff: Date | null; deletedConversations: number }> {
+  ): Promise<{
+    cutoff: Date | null;
+    deletedConversations: number;
+    deletedCalls: number;
+  }> {
     assertTenantId(tenantId);
     if (this.needsTenantScope(tenantId)) {
       return this.withTenantScope(tenantId, (repo) =>
@@ -3230,7 +3762,7 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     const cutoff = retentionCutoff(retentionDays, options.now ?? new Date());
     // No valid retention window configured: do not delete anything.
     if (!cutoff) {
-      return { cutoff: null, deletedConversations: 0 };
+      return { cutoff: null, deletedConversations: 0, deletedCalls: 0 };
     }
 
     const removed = await this.db
@@ -3243,7 +3775,16 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       )
       .returning({ id: conversations.id });
 
-    if (removed.length > 0) {
+    // Calls only SET NULL their conversation reference, so they (and their
+    // transcripts, via ON DELETE CASCADE) survive conversation pruning. Prune
+    // them independently by their own start time so voice recordings/transcripts
+    // — which contain personal data — are also subject to retention.
+    const removedCalls = await this.db
+      .delete(calls)
+      .where(and(eq(calls.tenantId, tenantId), lt(calls.startedAt, cutoff)))
+      .returning({ id: calls.id });
+
+    if (removed.length > 0 || removedCalls.length > 0) {
       await this.audit(
         tenantId,
         "retention.conversations.pruned",
@@ -3253,11 +3794,16 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
           retentionDays,
           cutoff: cutoff.toISOString(),
           deletedConversations: removed.length,
+          deletedCalls: removedCalls.length,
         },
       );
     }
 
-    return { cutoff, deletedConversations: removed.length };
+    return {
+      cutoff,
+      deletedConversations: removed.length,
+      deletedCalls: removedCalls.length,
+    };
   }
 
   private async resolveContactForConversation(input: {
@@ -3549,14 +4095,50 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     targetType: string,
     targetId: string,
     metadata: Record<string, unknown>,
+    actor: { actorType?: string; actorId?: string | null } = {},
   ) {
     await this.db.insert(auditLogs).values({
       tenantId,
-      actorType: "system",
+      actorType: actor.actorType ?? "system",
+      actorId: actor.actorId ?? null,
       action,
       targetType,
       targetId,
       metadata,
     });
+  }
+
+  /**
+   * Public, actor-attributed audit writer. Used by the API layer to record who
+   * accessed or exported tenant personal data (GDPR Art. 5(2)/30
+   * accountability). Unlike the internal {@link audit} helper — whose callers
+   * are system/state-change paths — this records the authenticated principal
+   * (a real user id, or the platform admin token) so PII access is traceable.
+   */
+  async recordAuditEvent(
+    tenantId: string,
+    entry: {
+      action: string;
+      targetType: string;
+      targetId: string;
+      actorType: string;
+      actorId?: string | null;
+      metadata?: Record<string, unknown>;
+    },
+  ): Promise<void> {
+    assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<void>(tenantId, (repo) =>
+        repo.recordAuditEvent(tenantId, entry),
+      );
+    }
+    await this.audit(
+      tenantId,
+      entry.action,
+      entry.targetType,
+      entry.targetId,
+      entry.metadata ?? {},
+      { actorType: entry.actorType, actorId: entry.actorId ?? null },
+    );
   }
 }

@@ -5,9 +5,21 @@
 - All tenant data tables include `tenant_id`.
 - Repository methods require tenant scope for tenant data access.
 - Public assistant IDs do not expose internal tenant UUIDs.
-- Migration SQL enables row-level security on tenant-scoped tables.
+- Migration SQL enables row-level security on tenant-scoped tables, and the repository sets `app.current_tenant_id` per transaction for every tenant-scoped read/write.
 - The tenant-scoped RLS list includes memberships, tenant invites, subscriptions, API keys, channel connections, webhook events, audit logs, knowledge, conversations, messages, calls, handoffs, deliveries, and WhatsApp templates.
-- Production deployments should use a non-owner Postgres application role and set `app.current_tenant_id` per request/transaction when RLS is enabled. Database RLS is defense in depth; the API must still enforce tenant scope before querying.
+- **RLS is defense in depth; the repository's explicit `tenant_id` predicates are the primary boundary and the API always enforces tenant scope before querying.**
+
+### Enforcing the RLS backstop (recommended for production)
+
+Postgres exempts a table's **owner** from its own RLS policies unless `FORCE ROW LEVEL SECURITY` is set. Because the app historically connects as the owner, the policies do nothing by default. To make the backstop real:
+
+1. **Provision a non-owner application role** with `scripts/create-app-role.sql` (login, `NOSUPERUSER`, `NOBYPASSRLS`, DML-only grants). Point `APP_DATABASE_URL` at it. The API uses `APP_DATABASE_URL`; migrations and the trusted workers service keep using the owner `DATABASE_URL` (the workers sweep across all tenants).
+2. **Force RLS** with `scripts/enable-force-rls.sql` (run as the owner).
+3. **Verify** with `pnpm db:check`, which reports whether RLS is actually enforced for the app role and, when `REQUIRE_DB_RLS=true`, fails if it is not — so a misconfigured deploy is caught before it serves traffic.
+
+The admin **privacy boundary** is enforced at the API layer independently of RLS: the platform admin token and any `platform_owner` without a real tenant membership are denied (`403`) on all end-user personal-data routes (messages, transcripts, inbox, contacts, per-tenant export). They may only reach aggregate/health/analytics routes. Genuine member access to content is written to the audit log.
+
+For platform operations, `GET /admin/platform/overview` (platform-owner only) returns **cross-tenant aggregate counts and delivery/handoff health with no personal data** — tenant/conversation/message/contact/call counts and the platform delivery-failure rate — so the operator can watch load and spot faults without reading any tenant's content.
 
 ## Secrets
 
@@ -62,19 +74,51 @@
 ## Retention And Subject Rights
 
 - Tenants have `retention_days`.
-- `exportTenantData` supports data export foundations.
-- `deleteTenantData` deletes tenant-owned data through cascading foreign keys.
-- Production should add scheduled retention cleanup, legal hold handling, and verified requester workflows.
+- Scheduled retention cleanup runs in the workers service (`retention.cleanup`, gated behind `RETENTION_CLEANUP_ENABLED`). It prunes conversation history **and calls/voice transcripts** older than the tenant's window — calls are pruned independently by their own start time because they only `SET NULL` their conversation reference, and their transcripts cascade.
+- **Right to erasure (Art. 17)** for a single data subject: `DELETE /admin/tenants/:tenantId/contacts/:contactId` (repository `deleteContact`) removes the contact and, by default, the conversations they took part in — including messages, feedback, and any linked calls/transcripts — in one transaction. It requires a real `tenant_admin`+ membership (the platform admin token cannot erase a tenant's data) and writes a `contact.erased` audit entry.
+- `exportTenantData` provides the Art. 15/20 data export (all tenant-scoped records including messages, deliveries, contacts, and templates).
+- `deleteTenantData` deletes all tenant-owned data through cascading foreign keys (account closure).
+- Production should still add legal-hold handling and a verified data-subject requester workflow (identity confirmation) in front of the erasure endpoint.
 
 ## Audit
 
 - Tenant creation and FAQ creation write audit logs.
+- Access to tenant end-user personal data (conversation messages, per-tenant export) is written to the audit log with the authenticated actor (`recordAuditEvent` records `actorType`/`actorId`), so PII access is traceable (GDPR Art. 5(2)/30 accountability).
 - Admin impersonation is not implemented in the MVP and should remain avoided or heavily audited.
-- Production should add actor IDs from real auth and include before/after metadata for sensitive settings changes.
+- Production should continue to expand before/after metadata for sensitive settings changes.
+
+## Encryption
+
+- **In transit:** TLS everywhere — the database connection requires `sslmode=require`, provider webhooks and API calls are HTTPS, and the SIP/RTP voice edge should use TLS/SRTP where the carrier supports it.
+- **At rest (managed):** Supabase Postgres encrypts data and backups at rest (AES-256) at the storage layer; Railway-managed Redis/volumes are likewise encrypted by the platform. Keep this a deployment requirement when substituting providers.
+- **Application-level:** channel access tokens are sealed with an AES-256-GCM cipher (`CHANNEL_CREDENTIAL_MASTER_KEY`), bound to tenant/channel/provider/credential-type so a copied ciphertext cannot be decrypted in another context. A KMS/envelope-encryption provider can replace the env-key implementation behind the same interface.
+- **Keys/secrets:** live in a secret manager, never in Git. Rotate `CHANNEL_CREDENTIAL_MASTER_KEY`, `ADMIN_API_TOKEN`, `META_APP_SECRET`, and DB credentials on a schedule and on suspected exposure.
+
+## Sub-Processors
+
+Maintain a public sub-processor register and a Data Processing Agreement with each. Current/expected processors:
+
+| Processor                           | Purpose                                | Data                                                   | Region target                       |
+| ----------------------------------- | -------------------------------------- | ------------------------------------------------------ | ----------------------------------- |
+| Supabase                            | Primary Postgres database + Auth       | All tenant data, auth identities                       | EU (eu-central)                     |
+| Railway                             | Hosting for API, admin, workers, Redis | Runtime data, queue jobs, logs                         | EU where offered                    |
+| Meta (WhatsApp/Messenger/Instagram) | Messaging channel delivery             | Message content, recipient IDs                         | Per Meta terms                      |
+| easybell / SIP carrier              | Inbound telephone (voice edge)         | Call audio, caller number                              | Germany/EU                          |
+| Speech provider (Gemini/OpenAI)     | Voice STT/TTS, optional embeddings     | Transcribed/synthesised call text, embedded chunk text | Pin to EU endpoints where available |
+| Twilio (legacy voice route only)    | Legacy telephone                       | Call metadata                                          | Per Twilio region                   |
+
+- Only the retrieved tenant context required for an answer is sent to an AI provider; customer data is not used to train shared models.
+- When a provider cannot guarantee EU processing, document the transfer mechanism (SCCs) and the data categories involved.
+
+## Voice And Call Recording
+
+- Telephone calls are transcribed and may be summarised. Announce recording/AI handling at the **start of every call** (a spoken notice in the greeting) and provide an opt-out path (e.g. transfer to a human) to meet consent and telecommunications-secrecy requirements (esp. Germany/EU, two-party-consent contexts).
+- Call transcripts are personal data: they are tenant-scoped, subject to `retention_days` cleanup, included in export, and removed by contact erasure.
+- Store only what is needed; avoid retaining raw call audio longer than necessary for the stated purpose.
 
 ## Deployment
 
-- Prefer EU-hosted PostgreSQL, Redis, object storage, and provider regions where available.
+- Prefer EU-hosted PostgreSQL, Redis, object storage, and provider regions where available; pin managed services to an EU region (e.g. Supabase `eu-central`) and choose EU endpoints for AI/speech providers where offered.
 - Use TLS everywhere.
 - Use separate environments and credentials for development, staging, and production.
-- Enable database backups with tenant-level restore procedures.
+- Enable database backups with tenant-level restore procedures, and confirm backups inherit at-rest encryption.

@@ -7,6 +7,9 @@ export const EnvSchema = z.object({
   WIDGET_ALLOWED_ORIGINS: z
     .string()
     .default("http://localhost:5174,http://localhost:3000"),
+  // Number of trusted proxy hops (or a CIDR allowlist) so per-IP rate limiting
+  // sees the real client behind a reverse proxy. Parsed by parseTrustProxy().
+  TRUST_PROXY: z.string().optional(),
   META_VERIFY_TOKEN: z.string().default("change-me-meta-verify-token"),
   META_APP_SECRET: z.string().optional(),
   META_GRAPH_API_VERSION: z.string().default("v25.0"),

@@ -141,6 +141,41 @@ export type TenantAnalytics = {
     total: number;
     credits: number;
   }>;
+  deliveries?: {
+    total: number;
+    sent: number;
+    failed: number;
+    skipped: number;
+    other: number;
+    failureRate: number;
+  };
+  quality?: {
+    answered: number;
+    refused: number;
+    handoff: number;
+    total: number;
+    containmentRate: number;
+    refusalRate: number;
+    handoffRate: number;
+  };
+  byChannel?: Array<{
+    channel: string;
+    inbound: number;
+    outbound: number;
+    total: number;
+  }>;
+  voice?: {
+    calls: number;
+    completed: number;
+    avgDurationSeconds: number | null;
+    lastCallAt?: string | null;
+  };
+  window?: {
+    days: number;
+    conversations: number;
+    messages: number;
+    handoffs: number;
+  };
 };
 
 export type WhatsappTemplate = {

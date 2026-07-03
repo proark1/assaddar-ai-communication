@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { ToastStack } from "../app/ToastStack";
 import { DeleteKnowledgeModal } from "../app/DeleteKnowledgeModal";
 import ErrorBoundary from "../app/error";
+import { AnalyticsPanel } from "../app/AnalyticsPanel";
 import type { KnowledgeItem, Toast } from "../app/page-types";
 
 describe("ToastStack", () => {
@@ -77,5 +78,78 @@ describe("error boundary", () => {
 
     await user.click(screen.getByRole("button", { name: /try again/i }));
     expect(reset).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("AnalyticsPanel", () => {
+  it("renders nothing without analytics", () => {
+    const { container } = render(<AnalyticsPanel analytics={null} />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("shows quality, delivery and voice metrics as percentages", () => {
+    render(
+      <AnalyticsPanel
+        analytics={{
+          conversations: 10,
+          messages: 40,
+          approvedKnowledge: 5,
+          openHandoffs: 1,
+          totalHandoffs: 3,
+          usageByStatus: [],
+          quality: {
+            answered: 70,
+            refused: 20,
+            handoff: 10,
+            total: 100,
+            containmentRate: 0.7,
+            refusalRate: 0.2,
+            handoffRate: 0.1,
+          },
+          deliveries: {
+            total: 12,
+            sent: 10,
+            failed: 2,
+            skipped: 0,
+            other: 0,
+            failureRate: 0.167,
+          },
+          voice: {
+            calls: 3,
+            completed: 3,
+            avgDurationSeconds: 95,
+            lastCallAt: null,
+          },
+          window: { days: 30, conversations: 4, messages: 12, handoffs: 1 },
+        }}
+      />,
+    );
+
+    expect(screen.getByText("70%")).toBeInTheDocument();
+    expect(screen.getByText("16.7%")).toBeInTheDocument();
+    expect(screen.getByText("Voice calls")).toBeInTheDocument();
+    expect(screen.getByText(/Last 30 days/)).toBeInTheDocument();
+  });
+
+  it("hides the voice stat when there are no calls", () => {
+    render(
+      <AnalyticsPanel
+        analytics={{
+          conversations: 1,
+          messages: 1,
+          approvedKnowledge: 0,
+          openHandoffs: 0,
+          totalHandoffs: 0,
+          usageByStatus: [],
+          voice: {
+            calls: 0,
+            completed: 0,
+            avgDurationSeconds: null,
+            lastCallAt: null,
+          },
+        }}
+      />,
+    );
+    expect(screen.queryByText("Voice calls")).not.toBeInTheDocument();
   });
 });

@@ -1,4 +1,5 @@
 export * from "./meta";
+export * from "./registry";
 export * from "./security";
 export * from "./telephone";
 export * from "./tiktok";

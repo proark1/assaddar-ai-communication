@@ -38,6 +38,7 @@ import type { SupabaseAuthProvider } from "./supabase-auth";
 import {
   ParamsTenantSchema,
   ParamsKnowledgeSchema,
+  ParamsContactSchema,
   ParamsConversationSchema,
   ParamsHandoffSchema,
   ParamsAssistantSchema,
@@ -158,6 +159,7 @@ export type PlatformStore = AnswerDataStore &
     updateTenant(tenantId: string, input: UpdateTenantInput): Promise<unknown>;
     listTenants(): Promise<unknown[]>;
     listTenantsForUser(userId: string): Promise<unknown[]>;
+    getPlatformOverview(): Promise<unknown>;
     getTenant(tenantId: string): Promise<StoreTenant | null>;
     getTenantByPublicId(publicId: string): Promise<StoreTenant | null>;
     getWidgetConfig(publicId: string): Promise<unknown | null>;
@@ -236,6 +238,15 @@ export type PlatformStore = AnswerDataStore &
       tenantId: string,
       options?: PaginationOptions,
     ): Promise<unknown[]>;
+    deleteContact(
+      tenantId: string,
+      contactId: string,
+      options?: { deleteConversations?: boolean },
+    ): Promise<{
+      deletedContact: boolean;
+      deletedConversations: number;
+      deletedCalls: number;
+    }>;
     listChannelConnections(tenantId: string): Promise<unknown[]>;
     upsertChannelConnection(
       tenantId: string,
@@ -346,6 +357,17 @@ export type PlatformStore = AnswerDataStore &
     getWhatsappCompliance(tenantId: string): Promise<unknown>;
     exportTenantData(tenantId: string): Promise<unknown>;
     deleteTenantData(tenantId: string): Promise<void>;
+    recordAuditEvent(
+      tenantId: string,
+      entry: {
+        action: string;
+        targetType: string;
+        targetId: string;
+        actorType: string;
+        actorId?: string | null;
+        metadata?: Record<string, unknown>;
+      },
+    ): Promise<void>;
   };
 
 export type BuildServerOptions = {
@@ -464,6 +486,30 @@ const defaultAdminPublicUrl =
 // signature can be verified over the exact bytes Meta signed.
 type RequestWithRawBody = FastifyRequest & { rawBody?: Buffer };
 
+/**
+ * Interpret the TRUST_PROXY env var into a Fastify `trustProxy` value.
+ *
+ * - unset / "" / "false" → `false` (trust nobody; use the socket peer IP)
+ * - "true"               → trust every hop (only safe if all hops are trusted)
+ * - an integer "n"       → trust `n` proxy hops closest to the server
+ * - anything else        → treated as a comma-separated IP/CIDR allowlist
+ */
+export function parseTrustProxy(
+  value: string | undefined,
+): boolean | number | string {
+  if (value === undefined || value.trim() === "" || value === "false") {
+    return false;
+  }
+  if (value === "true") {
+    return true;
+  }
+  const hops = Number(value);
+  if (Number.isInteger(hops) && hops >= 0) {
+    return hops;
+  }
+  return value;
+}
+
 export async function buildServer(
   options: BuildServerOptions,
 ): Promise<FastifyInstance> {
@@ -471,6 +517,14 @@ export async function buildServer(
     // Honour an inbound correlation id (e.g. from a gateway/load balancer) so
     // logs can be traced across services; otherwise Fastify generates one.
     requestIdHeader: "x-request-id",
+    // Behind Railway's (or any) reverse proxy, the socket peer is the proxy, so
+    // `request.ip` would be the proxy address for everyone — collapsing per-IP
+    // rate limiting and mis-logging session IPs. TRUST_PROXY tells Fastify how
+    // many forwarded hops to trust so it derives the real client IP. Default is
+    // OFF (dev-safe): trusting X-Forwarded-For when there is no proxy would let
+    // any client spoof its IP. In production set TRUST_PROXY=1 (one known proxy)
+    // or a CIDR allowlist — never `true` unless every hop is trusted.
+    trustProxy: parseTrustProxy(process.env.TRUST_PROXY),
     logger: {
       level: process.env.LOG_LEVEL ?? "info",
       // Never write credentials into logs.
@@ -758,6 +812,15 @@ export async function buildServer(
       const tenant = await options.store.createTenant(body);
       return reply.code(201).send(tenant);
     },
+  );
+
+  // Platform-operator console: cross-tenant aggregate counts and delivery
+  // health only — NO personal data — so the platform admin can watch load and
+  // faults without seeing any tenant's messages or contacts (R4 boundary).
+  app.get(
+    "/admin/platform/overview",
+    { preHandler: requirePlatformOwner(options) },
+    async () => options.store.getPlatformOverview(),
   );
 
   app.patch(
@@ -1443,7 +1506,11 @@ export async function buildServer(
 
   app.get(
     "/admin/tenants/:tenantId/dashboard",
-    { preHandler: requireTenantAccess(options, "viewer") },
+    {
+      preHandler: requireTenantAccess(options, "viewer", {
+        allowPlatformBypass: false,
+      }),
+    },
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       return buildDashboardBootstrap(options, request, tenantId);
@@ -1469,7 +1536,11 @@ export async function buildServer(
 
   app.get(
     "/admin/tenants/:tenantId/workspace-summary",
-    { preHandler: requireTenantAccess(options, "viewer") },
+    {
+      preHandler: requireTenantAccess(options, "viewer", {
+        allowPlatformBypass: false,
+      }),
+    },
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       return buildWorkspaceSummary(options.store, tenantId);
@@ -1478,7 +1549,11 @@ export async function buildServer(
 
   app.get(
     "/admin/tenants/:tenantId/conversations",
-    { preHandler: requireTenantAccess(options, "viewer") },
+    {
+      preHandler: requireTenantAccess(options, "viewer", {
+        allowPlatformBypass: false,
+      }),
+    },
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const pagination = PaginationQuerySchema.parse(request.query);
@@ -1488,7 +1563,11 @@ export async function buildServer(
 
   app.get(
     "/admin/tenants/:tenantId/inbox",
-    { preHandler: requireTenantAccess(options, "viewer") },
+    {
+      preHandler: requireTenantAccess(options, "viewer", {
+        allowPlatformBypass: false,
+      }),
+    },
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const pagination = PaginationQuerySchema.parse(request.query);
@@ -1498,7 +1577,11 @@ export async function buildServer(
 
   app.get(
     "/admin/tenants/:tenantId/contacts",
-    { preHandler: requireTenantAccess(options, "viewer") },
+    {
+      preHandler: requireTenantAccess(options, "viewer", {
+        allowPlatformBypass: false,
+      }),
+    },
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const pagination = PaginationQuerySchema.parse(request.query);
@@ -1506,20 +1589,74 @@ export async function buildServer(
     },
   );
 
+  // GDPR Art. 17 erasure of a single data subject. Destructive and
+  // personal-data scoped: requires a real tenant_admin membership (no platform
+  // bypass — the admin token cannot erase a tenant's contact), and the erasure
+  // is written to the audit log with the acting principal.
+  app.delete(
+    "/admin/tenants/:tenantId/contacts/:contactId",
+    {
+      preHandler: requireTenantAccess(options, "tenant_admin", {
+        allowPlatformBypass: false,
+      }),
+    },
+    async (request, reply) => {
+      const { tenantId, contactId } = ParamsContactSchema.parse(request.params);
+      const result = await options.store.deleteContact(tenantId, contactId);
+      if (!result.deletedContact) {
+        return reply.code(404).send({ error: "Contact not found." });
+      }
+      await recordPiiAccess(
+        options,
+        request,
+        tenantId,
+        "contact.erased",
+        "contact",
+        contactId,
+        {
+          deletedConversations: result.deletedConversations,
+          deletedCalls: result.deletedCalls,
+        },
+      );
+      return reply.code(200).send({ erased: true, ...result });
+    },
+  );
+
   app.get(
     "/admin/tenants/:tenantId/conversations/:conversationId/messages",
-    { preHandler: requireTenantAccess(options, "viewer") },
+    {
+      preHandler: requireTenantAccess(options, "viewer", {
+        allowPlatformBypass: false,
+      }),
+    },
     async (request) => {
       const { tenantId, conversationId } = ParamsConversationSchema.parse(
         request.params,
       );
-      return options.store.listConversationMessages(tenantId, conversationId);
+      const messages = await options.store.listConversationMessages(
+        tenantId,
+        conversationId,
+      );
+      await recordPiiAccess(
+        options,
+        request,
+        tenantId,
+        "conversation.messages.viewed",
+        "conversation",
+        conversationId,
+        { messageCount: messages.length },
+      );
+      return messages;
     },
   );
 
   app.get(
     "/admin/tenants/:tenantId/handoffs",
-    { preHandler: requireTenantAccess(options, "viewer") },
+    {
+      preHandler: requireTenantAccess(options, "viewer", {
+        allowPlatformBypass: false,
+      }),
+    },
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const pagination = PaginationQuerySchema.parse(request.query);
@@ -1529,7 +1666,11 @@ export async function buildServer(
 
   app.get(
     "/admin/tenants/:tenantId/unanswered",
-    { preHandler: requireTenantAccess(options, "viewer") },
+    {
+      preHandler: requireTenantAccess(options, "viewer", {
+        allowPlatformBypass: false,
+      }),
+    },
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const handoffs = await options.store.listHandoffs(tenantId);
@@ -1539,7 +1680,11 @@ export async function buildServer(
 
   app.get(
     "/admin/tenants/:tenantId/workflows/suggestions",
-    { preHandler: requireTenantAccess(options, "viewer") },
+    {
+      preHandler: requireTenantAccess(options, "viewer", {
+        allowPlatformBypass: false,
+      }),
+    },
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const [analytics, handoffs, contacts, templates, compliance] =
@@ -1642,7 +1787,11 @@ export async function buildServer(
 
   app.patch(
     "/admin/tenants/:tenantId/handoffs/:handoffId",
-    { preHandler: requireTenantAccess(options, "operator") },
+    {
+      preHandler: requireTenantAccess(options, "operator", {
+        allowPlatformBypass: false,
+      }),
+    },
     async (request) => {
       const { tenantId, handoffId } = ParamsHandoffSchema.parse(request.params);
       const body = UpdateHandoffSchema.parse(request.body);
@@ -1652,7 +1801,11 @@ export async function buildServer(
 
   app.post(
     "/admin/tenants/:tenantId/test-assistant",
-    { preHandler: requireTenantAccess(options, "operator") },
+    {
+      preHandler: requireTenantAccess(options, "operator", {
+        allowPlatformBypass: false,
+      }),
+    },
     async (request, reply) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const body = TestAssistantSchema.parse(request.body);
@@ -1714,9 +1867,21 @@ export async function buildServer(
 
   app.get(
     "/admin/tenants/:tenantId/export",
-    { preHandler: requireTenantAccess(options, "tenant_owner") },
+    {
+      preHandler: requireTenantAccess(options, "tenant_owner", {
+        allowPlatformBypass: false,
+      }),
+    },
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
+      await recordPiiAccess(
+        options,
+        request,
+        tenantId,
+        "tenant.data.exported",
+        "tenant",
+        tenantId,
+      );
       return options.store.exportTenantData(tenantId);
     },
   );
@@ -1726,6 +1891,18 @@ export async function buildServer(
     { preHandler: requireTenantAccess(options, "tenant_owner") },
     async (request, reply) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
+      // Record the erasure before the cascade removes the tenant's own
+      // audit_logs rows; this entry is written to the deleted tenant's scope
+      // only as an intent marker — production should also mirror destructive
+      // platform actions to an append-only platform audit sink.
+      await recordPiiAccess(
+        options,
+        request,
+        tenantId,
+        "tenant.data.deleted",
+        "tenant",
+        tenantId,
+      );
       await options.store.deleteTenantData(tenantId);
       return reply.code(204).send();
     },
@@ -2262,7 +2439,17 @@ export async function buildServer(
           },
         });
 
-        if (webhookEvent.duplicate) {
+        // Idempotency must distinguish a genuine replay from a provider retry.
+        // A duplicate we already processed successfully is a true replay:
+        // acknowledge it without re-answering. But a duplicate still in
+        // "received"/"failed" state means the prior delivery never completed
+        // (we returned 5xx and the provider is retrying), so it MUST be
+        // reprocessed rather than silently dropped — otherwise a transient
+        // downstream error permanently loses the customer's message.
+        if (
+          webhookEvent.duplicate &&
+          webhookEvent.event.status === "processed"
+        ) {
           results.push({
             status: "duplicate",
             webhookEventId: webhookEvent.event.id,
@@ -2284,6 +2471,9 @@ export async function buildServer(
           );
           results.push({
             ...result,
+            // Surface that this was a retried delivery so callers/telemetry can
+            // tell a first-time processing from a recovered one.
+            ...(webhookEvent.duplicate ? { retried: true } : {}),
             webhookEventId: webhookEvent.event.id,
             providerEventId: event.providerEventId,
           });
@@ -2387,10 +2577,28 @@ function requirePlatformOwner(options: BuildServerOptions) {
   };
 }
 
+type TenantAccessOptions = {
+  /**
+   * When `false`, platform-wide principals (the ADMIN_API_TOKEN and any
+   * `platform_owner`) do NOT receive an automatic bypass — they must hold a
+   * real membership in the target tenant to pass, exactly like a normal user.
+   *
+   * Use this on every route that returns tenant end-user PERSONAL DATA (message
+   * content, contacts, transcripts, per-tenant exports, the workspace bootstrap)
+   * so the platform admin cannot read a tenant's end-user data without being an
+   * actual member of that tenant. The admin token holds no membership, so it is
+   * denied here by design; it may only reach non-personal ops/health/aggregate
+   * routes. See docs/security-gdpr.md — "Admin privacy boundary".
+   */
+  allowPlatformBypass?: boolean;
+};
+
 function requireTenantAccess(
   options: BuildServerOptions,
   minimumRole: RoleName,
+  accessOptions: TenantAccessOptions = {},
 ) {
+  const allowPlatformBypass = accessOptions.allowPlatformBypass ?? true;
   return async (request: FastifyRequest, reply: FastifyReply) => {
     const auth = await authenticateRequest(request, options);
     if (!auth) {
@@ -2399,12 +2607,24 @@ function requireTenantAccess(
     if (!authorizeCredentialedStateChange(request, reply, options, auth)) {
       return;
     }
-    if (auth.kind === "admin" || isPlatformOwner(auth)) {
+    if (
+      allowPlatformBypass &&
+      (auth.kind === "admin" || isPlatformOwner(auth))
+    ) {
       requestAuthContext.set(request, auth);
       return;
     }
 
+    // Personal-data routes require a real tenant membership even for a
+    // platform_owner or the admin token. The admin token has no membership, so
+    // it cannot reach these routes at all — that is the intended privacy
+    // boundary (it may only operate non-personal routes).
     const { tenantId } = ParamsTenantSchema.parse(request.params);
+    if (auth.kind !== "user") {
+      // The admin token / platform_owner has no tenant membership and therefore
+      // cannot reach personal-data routes — this is the R4 privacy boundary.
+      return reply.code(403).send({ error: "Forbidden." });
+    }
     const membership =
       auth.memberships.find((item) => item.tenantId === tenantId) ??
       (await options.store.getTenantMembership(auth.user.id, tenantId));
@@ -2541,6 +2761,60 @@ function safeCompareSecret(provided: string, expected: string) {
     providedBuffer.length === expectedBuffer.length &&
     timingSafeEqual(providedBuffer, expectedBuffer)
   );
+}
+
+/**
+ * Resolve the authenticated principal for an audit record. Distinguishes the
+ * platform admin token and a platform_owner from an ordinary tenant user so
+ * that PII access via a platform-wide identity is clearly attributable.
+ */
+function auditActorFromRequest(request: FastifyRequest): {
+  actorType: string;
+  actorId: string | null;
+} {
+  const auth = requestAuthContext.get(request);
+  if (!auth) {
+    return { actorType: "system", actorId: null };
+  }
+  if (auth.kind === "admin") {
+    return { actorType: "platform_admin", actorId: auth.user.id };
+  }
+  return {
+    actorType: isPlatformOwner(auth) ? "platform_owner" : "user",
+    actorId: auth.user.id,
+  };
+}
+
+/**
+ * Write an accountability audit entry for access to (or export/erasure of)
+ * tenant personal data. Logging failures must never block a legitimate read,
+ * so this fails open with a warning rather than throwing.
+ */
+async function recordPiiAccess(
+  options: BuildServerOptions,
+  request: FastifyRequest,
+  tenantId: string,
+  action: string,
+  targetType: string,
+  targetId: string,
+  metadata: Record<string, unknown> = {},
+) {
+  const actor = auditActorFromRequest(request);
+  try {
+    await options.store.recordAuditEvent(tenantId, {
+      action,
+      targetType,
+      targetId,
+      actorType: actor.actorType,
+      actorId: actor.actorId,
+      metadata,
+    });
+  } catch (error) {
+    request.log.warn(
+      { err: error, tenantId, action },
+      "Failed to write PII access audit log",
+    );
+  }
 }
 
 function getRequestAuth(request: FastifyRequest) {
@@ -3583,6 +3857,10 @@ async function processChannelInboundEvent(input: {
       externalConversationId: input.event.externalConversationId,
       externalUserId: input.event.externalUserId,
       sendPolicy,
+      // Persist retry eligibility and an attempt counter so the delivery-retry
+      // worker can pick up transient failures and re-send them.
+      retryable: delivery.status === "failed" && delivery.retryable === true,
+      attempts: 0,
     },
   });
 

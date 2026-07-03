@@ -11,7 +11,11 @@ import {
 } from "@assaddar/core";
 import { createHmac } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildServer, type PlatformStore } from "../src/server";
+import {
+  buildServer,
+  parseTrustProxy,
+  type PlatformStore,
+} from "../src/server";
 
 const originalFetch = globalThis.fetch;
 
@@ -203,6 +207,41 @@ class MemoryPlatformStore
 
   async listTenants() {
     return this.tenants;
+  }
+
+  async getPlatformOverview() {
+    const deliveriesFailed = this.deliveries.filter(
+      (delivery) => delivery.status === "failed",
+    ).length;
+    const deliveriesSent = this.deliveries.filter(
+      (delivery) => delivery.status === "sent" || delivery.status === "queued",
+    ).length;
+    const attempted = deliveriesFailed + deliveriesSent;
+    return {
+      tenants: {
+        total: this.tenants.length,
+        active: this.tenants.filter(
+          (tenant) =>
+            ((tenant as { status?: string }).status ?? "active") === "active",
+        ).length,
+      },
+      totals: {
+        conversations: this.conversations.length,
+        messages: this.messages.length,
+        contacts: this.contacts.length,
+        calls: 0,
+      },
+      deliveries: {
+        total: this.deliveries.length,
+        failed: deliveriesFailed,
+        failureRate:
+          attempted === 0
+            ? 0
+            : Math.round((deliveriesFailed / attempted) * 1000) / 1000,
+      },
+      openHandoffs: this.handoffs.filter((handoff) => handoff.status === "open")
+        .length,
+    };
   }
 
   async getTenant(tenantId: string) {
@@ -856,12 +895,73 @@ class MemoryPlatformStore
     return this.contacts.filter((contact) => contact.tenantId === tenantId);
   }
 
+  async deleteContact(
+    tenantId: string,
+    contactId: string,
+    options: { deleteConversations?: boolean } = {},
+  ) {
+    const index = this.contacts.findIndex(
+      (contact) => contact.tenantId === tenantId && contact.id === contactId,
+    );
+    if (index === -1) {
+      return {
+        deletedContact: false,
+        deletedConversations: 0,
+        deletedCalls: 0,
+      };
+    }
+    this.contacts.splice(index, 1);
+    let deletedConversations = 0;
+    if (options.deleteConversations ?? true) {
+      const linked = this.conversations.filter(
+        (conversation) =>
+          conversation.tenantId === tenantId &&
+          conversation.contactId === contactId,
+      );
+      deletedConversations = linked.length;
+      const linkedIds = new Set(linked.map((conversation) => conversation.id));
+      this.conversations = this.conversations.filter(
+        (conversation) => !linkedIds.has(conversation.id),
+      );
+      this.messages = this.messages.filter(
+        (message) => !linkedIds.has(message.conversationId as string),
+      );
+    }
+    return { deletedContact: true, deletedConversations, deletedCalls: 0 };
+  }
+
   async listConversationMessages(tenantId: string, conversationId: string) {
     return this.messages.filter(
       (message) =>
         message.tenantId === tenantId &&
         message.conversationId === conversationId,
     );
+  }
+
+  auditEvents: Array<{
+    tenantId: string;
+    action: string;
+    actorType: string;
+    actorId: string | null;
+  }> = [];
+
+  async recordAuditEvent(
+    tenantId: string,
+    entry: {
+      action: string;
+      targetType: string;
+      targetId: string;
+      actorType: string;
+      actorId?: string | null;
+      metadata?: Record<string, unknown>;
+    },
+  ) {
+    this.auditEvents.push({
+      tenantId,
+      action: entry.action,
+      actorType: entry.actorType,
+      actorId: entry.actorId ?? null,
+    });
   }
 
   async logUsage(input: {
@@ -1218,6 +1318,85 @@ class MemoryPlatformStore
     return contact;
   }
 }
+
+/**
+ * Bearer token recognised by {@link memberSupabaseAuth}. Content/PII routes
+ * disable the platform bypass, so tests that read tenant personal data must
+ * authenticate as a real tenant member rather than with the admin token.
+ */
+const MEMBER_BEARER = "member-bearer-token";
+
+function memberSupabaseAuth(authUserId: string) {
+  return {
+    async verifyAccessToken(token: string) {
+      return token === MEMBER_BEARER
+        ? {
+            authUserId,
+            email: "member@example.com",
+            name: "Member User",
+            expiresAt: new Date(Date.now() + 60_000),
+          }
+        : null;
+    },
+    async createUser() {
+      throw new Error("not used");
+    },
+    async createInviteLink() {
+      throw new Error("not used");
+    },
+  };
+}
+
+/**
+ * Build a server plus a genuine tenant-member identity for the given tenant.
+ * Returns headers that authenticate as that member via the Supabase bearer
+ * path, which carries a real membership and therefore passes the personal-data
+ * route guards.
+ */
+async function buildServerWithMember(
+  store: MemoryPlatformStore,
+  tenantId: string,
+  role:
+    | "viewer"
+    | "operator"
+    | "tenant_admin"
+    | "tenant_owner" = "tenant_owner",
+) {
+  const authUserId = crypto.randomUUID();
+  const app = await buildServer({
+    store,
+    adminToken: "test-token",
+    allowedOrigins: ["*"],
+    supabaseAuth: memberSupabaseAuth(authUserId),
+  });
+  await store.upsertTenantUser(tenantId, {
+    email: "member@example.com",
+    name: "Member User",
+    role,
+    authUserId,
+  });
+  return {
+    app,
+    authUserId,
+    memberHeaders: { authorization: `Bearer ${MEMBER_BEARER}` },
+  };
+}
+
+describe("parseTrustProxy", () => {
+  it("defaults to trusting nobody when unset or falsy", () => {
+    expect(parseTrustProxy(undefined)).toBe(false);
+    expect(parseTrustProxy("")).toBe(false);
+    expect(parseTrustProxy("  ")).toBe(false);
+    expect(parseTrustProxy("false")).toBe(false);
+  });
+
+  it("parses a hop count and passes CIDR allowlists through", () => {
+    expect(parseTrustProxy("1")).toBe(1);
+    expect(parseTrustProxy("2")).toBe(2);
+    expect(parseTrustProxy("true")).toBe(true);
+    expect(parseTrustProxy("10.0.0.0/8")).toBe("10.0.0.0/8");
+  });
+});
 
 describe("API", () => {
   afterEach(() => {
@@ -1783,15 +1962,14 @@ describe("API", () => {
 
   it("captures widget leads as conversations and handoffs", async () => {
     const store = new MemoryPlatformStore();
-    const app = await buildServer({
-      store,
-      adminToken: "test-token",
-      allowedOrigins: ["*"],
-    });
     const tenant = await store.createTenant({
       name: "Tenant One",
       slug: "tenant-one",
     });
+    const { app, memberHeaders } = await buildServerWithMember(
+      store,
+      tenant.id,
+    );
 
     const response = await app.inject({
       method: "POST",
@@ -1828,7 +2006,7 @@ describe("API", () => {
     const updateResponse = await app.inject({
       method: "PATCH",
       url: `/admin/tenants/${tenant.id}/handoffs/${handoff.id}`,
-      headers: { "x-admin-token": "test-token" },
+      headers: memberHeaders,
       payload: {
         pipelineStage: "qualified",
         note: "Good fit",
@@ -2646,6 +2824,100 @@ describe("API", () => {
     await app.close();
   });
 
+  it("reprocesses a retried webhook whose prior delivery failed", async () => {
+    const store = new MemoryPlatformStore();
+    globalThis.fetch = vi.fn(async () => {
+      return new Response(JSON.stringify({ messages: [{ id: "wamid.ok" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    // A transient infrastructure error mid-processing (here a DB write) makes the
+    // webhook return 5xx, so the provider retries. The retry must be reprocessed,
+    // not dropped as a duplicate.
+    const realRecordDelivery = store.recordMessageDelivery.bind(store);
+    let deliveryAttempts = 0;
+    vi.spyOn(store, "recordMessageDelivery").mockImplementation(
+      async (input) => {
+        deliveryAttempts += 1;
+        if (deliveryAttempts === 1) {
+          throw new Error("delivery store write failed");
+        }
+        return realRecordDelivery(input);
+      },
+    );
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+      whatsappAccessToken: "whatsapp-token",
+    });
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+    await store.addFaq(tenant.id, {
+      question: "What do you do?",
+      answer: "We implement practical AI automation.",
+    });
+    await store.upsertChannelConnection(tenant.id, {
+      channel: "whatsapp",
+      provider: "meta-whatsapp-cloud",
+      externalAccountId: "phone-number-1",
+      status: "connected",
+    });
+
+    const payload = {
+      entry: [
+        {
+          changes: [
+            {
+              value: {
+                metadata: { phone_number_id: "phone-number-1" },
+                messages: [
+                  {
+                    id: "wamid.retry",
+                    from: "491701234567",
+                    text: { body: "What do you do?" },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    // First delivery fails downstream: the webhook returns 5xx so the provider
+    // will retry, and the event row is left in a non-processed state.
+    const first = await app.inject({
+      method: "POST",
+      url: "/webhooks/meta/whatsapp",
+      payload,
+    });
+    expect(first.statusCode).toBe(500);
+    expect(store.webhookEvents).toHaveLength(1);
+    expect(store.webhookEvents[0]?.status).toBe("failed");
+
+    // The provider retries the same event id — it must be reprocessed, not
+    // dropped as a duplicate, and this time it succeeds.
+    const second = await app.inject({
+      method: "POST",
+      url: "/webhooks/meta/whatsapp",
+      payload,
+    });
+    expect(second.statusCode).toBe(200);
+    const results = second.json<{
+      results: Array<{ status?: string; retried?: boolean }>;
+    }>().results;
+    expect(results[0]?.status).not.toBe("duplicate");
+    expect(results[0]?.retried).toBe(true);
+    expect(store.webhookEvents).toHaveLength(1);
+    expect(store.webhookEvents[0]?.status).toBe("processed");
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+    await app.close();
+  });
+
   it("blocks stale freeform channel replies before calling the provider", async () => {
     const store = new MemoryPlatformStore();
     const originalAddMessage = store.addMessage.bind(store);
@@ -2736,15 +3008,14 @@ describe("API", () => {
 
   it("creates contact profiles and unified inbox entries from captured leads", async () => {
     const store = new MemoryPlatformStore();
-    const app = await buildServer({
-      store,
-      adminToken: "test-token",
-      allowedOrigins: ["*"],
-    });
     const tenant = await store.createTenant({
       name: "Tenant One",
       slug: "tenant-one",
     });
+    const { app, memberHeaders } = await buildServerWithMember(
+      store,
+      tenant.id,
+    );
 
     const leadResponse = await app.inject({
       method: "POST",
@@ -2767,7 +3038,7 @@ describe("API", () => {
     const contactsResponse = await app.inject({
       method: "GET",
       url: `/admin/tenants/${tenant.id}/contacts`,
-      headers: { "x-admin-token": "test-token" },
+      headers: memberHeaders,
     });
     expect(contactsResponse.statusCode).toBe(200);
     expect(
@@ -2780,7 +3051,7 @@ describe("API", () => {
     const inboxResponse = await app.inject({
       method: "GET",
       url: `/admin/tenants/${tenant.id}/inbox`,
-      headers: { "x-admin-token": "test-token" },
+      headers: memberHeaders,
     });
     expect(inboxResponse.statusCode).toBe(200);
     expect(
@@ -2797,7 +3068,7 @@ describe("API", () => {
     const suggestionsResponse = await app.inject({
       method: "GET",
       url: `/admin/tenants/${tenant.id}/workflows/suggestions`,
-      headers: { "x-admin-token": "test-token" },
+      headers: memberHeaders,
     });
     expect(suggestionsResponse.statusCode).toBe(200);
     expect(
@@ -2903,15 +3174,14 @@ describe("API", () => {
 
   it("lists analytics, conversations, messages, and handoffs", async () => {
     const store = new MemoryPlatformStore();
-    const app = await buildServer({
-      store,
-      adminToken: "test-token",
-      allowedOrigins: ["*"],
-    });
     const tenant = await store.createTenant({
       name: "Tenant One",
       slug: "tenant-one",
     });
+    const { app, memberHeaders } = await buildServerWithMember(
+      store,
+      tenant.id,
+    );
     await store.addFaq(tenant.id, {
       question: "What are your opening hours?",
       answer: "We are open from 09:00 to 18:00.",
@@ -2956,7 +3226,7 @@ describe("API", () => {
     const conversationsResponse = await app.inject({
       method: "GET",
       url: `/admin/tenants/${tenant.id}/conversations`,
-      headers: { "x-admin-token": "test-token" },
+      headers: memberHeaders,
     });
     expect(conversationsResponse.statusCode).toBe(200);
     const conversations = conversationsResponse.json<Array<{ id: string }>>();
@@ -2969,7 +3239,7 @@ describe("API", () => {
     const messagesResponse = await app.inject({
       method: "GET",
       url: `/admin/tenants/${tenant.id}/conversations/${conversation.id}/messages`,
-      headers: { "x-admin-token": "test-token" },
+      headers: memberHeaders,
     });
     expect(messagesResponse.statusCode).toBe(200);
     expect(messagesResponse.json<unknown[]>()).toHaveLength(2);
@@ -2977,7 +3247,7 @@ describe("API", () => {
     const handoffsResponse = await app.inject({
       method: "GET",
       url: `/admin/tenants/${tenant.id}/handoffs`,
-      headers: { "x-admin-token": "test-token" },
+      headers: memberHeaders,
     });
     expect(handoffsResponse.statusCode).toBe(200);
     const handoff = handoffsResponse.json<Array<{ id: string }>>()[0];
@@ -2988,7 +3258,7 @@ describe("API", () => {
     const unansweredResponse = await app.inject({
       method: "GET",
       url: `/admin/tenants/${tenant.id}/unanswered`,
-      headers: { "x-admin-token": "test-token" },
+      headers: memberHeaders,
     });
     expect(unansweredResponse.statusCode).toBe(200);
     expect(
@@ -3001,7 +3271,7 @@ describe("API", () => {
     const dashboardResponse = await app.inject({
       method: "GET",
       url: `/admin/tenants/${tenant.id}/dashboard`,
-      headers: { "x-admin-token": "test-token" },
+      headers: memberHeaders,
     });
     expect(dashboardResponse.statusCode).toBe(200);
     expect(
@@ -3039,7 +3309,7 @@ describe("API", () => {
     const updateHandoffResponse = await app.inject({
       method: "PATCH",
       url: `/admin/tenants/${tenant.id}/handoffs/${handoff.id}`,
-      headers: { "x-admin-token": "test-token" },
+      headers: memberHeaders,
       payload: {
         status: "resolved",
         assignedTo: "Assad",
@@ -3315,23 +3585,218 @@ describe("API", () => {
     await app.close();
   });
 
-  it("threads validated pagination query params into list endpoints", async () => {
+  it("denies the platform admin token access to tenant personal data", async () => {
     const store = new MemoryPlatformStore();
-    const app = await buildServer({
-      store,
-      adminToken: "test-token",
-      allowedOrigins: ["*"],
-    });
     const tenant = await store.createTenant({
       name: "Tenant One",
       slug: "tenant-one",
     });
+    const { app, memberHeaders } = await buildServerWithMember(
+      store,
+      tenant.id,
+    );
+
+    const conversation = await store.findOrCreateConversation({
+      tenantId: tenant.id,
+      channel: "website",
+    });
+    await store.addMessage({
+      tenantId: tenant.id,
+      conversationId: conversation.id,
+      channel: "website",
+      direction: "inbound",
+      role: "user",
+      content: "This is a private end-user message.",
+    });
+
+    // The platform admin token (and any platform_owner without a real
+    // membership) must NOT be able to read tenant end-user personal data.
+    const adminHeaders = { "x-admin-token": "test-token" };
+    for (const url of [
+      `/admin/tenants/${tenant.id}/conversations`,
+      `/admin/tenants/${tenant.id}/inbox`,
+      `/admin/tenants/${tenant.id}/contacts`,
+      `/admin/tenants/${tenant.id}/conversations/${conversation.id}/messages`,
+      `/admin/tenants/${tenant.id}/export`,
+    ]) {
+      const denied = await app.inject({
+        method: "GET",
+        url,
+        headers: adminHeaders,
+      });
+      expect(denied.statusCode).toBe(403);
+    }
+
+    // A genuine tenant member still reads content, and that access is audited.
+    const allowed = await app.inject({
+      method: "GET",
+      url: `/admin/tenants/${tenant.id}/conversations/${conversation.id}/messages`,
+      headers: memberHeaders,
+    });
+    expect(allowed.statusCode).toBe(200);
+    expect(allowed.json<unknown[]>()).toHaveLength(1);
+    expect(
+      store.auditEvents.some(
+        (event) =>
+          event.action === "conversation.messages.viewed" &&
+          event.actorType === "user",
+      ),
+    ).toBe(true);
+
+    // Aggregate, non-personal analytics stay reachable for platform operations.
+    const analytics = await app.inject({
+      method: "GET",
+      url: `/admin/tenants/${tenant.id}/analytics`,
+      headers: adminHeaders,
+    });
+    expect(analytics.statusCode).toBe(200);
+
+    await app.close();
+  });
+
+  it("exposes a non-personal platform overview to the admin but not plain members", async () => {
+    const store = new MemoryPlatformStore();
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+    const { app, memberHeaders } = await buildServerWithMember(
+      store,
+      tenant.id,
+    );
+
+    const conversation = await store.findOrCreateConversation({
+      tenantId: tenant.id,
+      channel: "website",
+    });
+    await store.addMessage({
+      tenantId: tenant.id,
+      conversationId: conversation.id,
+      channel: "website",
+      direction: "inbound",
+      role: "user",
+      content: "super secret personal content",
+    });
+
+    const overview = await app.inject({
+      method: "GET",
+      url: "/admin/platform/overview",
+      headers: { "x-admin-token": "test-token" },
+    });
+    expect(overview.statusCode).toBe(200);
+    const body = overview.json<{
+      tenants: { total: number; active: number };
+      totals: { messages: number };
+      deliveries: { failureRate: number };
+      openHandoffs: number;
+    }>();
+    expect(body.tenants.total).toBeGreaterThanOrEqual(1);
+    expect(body.totals.messages).toBeGreaterThanOrEqual(1);
+    expect(body).toHaveProperty("deliveries.failureRate");
+    // The aggregate must never carry end-user message content.
+    expect(overview.body).not.toContain("super secret personal content");
+
+    // A tenant member who is not a platform_owner cannot reach the console.
+    const denied = await app.inject({
+      method: "GET",
+      url: "/admin/platform/overview",
+      headers: memberHeaders,
+    });
+    expect(denied.statusCode).toBe(403);
+
+    await app.close();
+  });
+
+  it("erases a single contact for a member but denies the admin token", async () => {
+    const store = new MemoryPlatformStore();
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+    const { app, memberHeaders } = await buildServerWithMember(
+      store,
+      tenant.id,
+    );
+
+    const conversation = await store.findOrCreateConversation({
+      tenantId: tenant.id,
+      channel: "website",
+    });
+    const contact = {
+      id: "c0000000-0000-4000-8000-000000000abc",
+      tenantId: tenant.id,
+      displayName: "Erase Me",
+      email: "erase@example.com",
+      identifiers: {},
+      metadata: {},
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    store.contacts.push(contact);
+    conversation.contactId = contact.id;
+    await store.addMessage({
+      tenantId: tenant.id,
+      conversationId: conversation.id,
+      channel: "website",
+      direction: "inbound",
+      role: "user",
+      content: "personal note",
+    });
+
+    const url = `/admin/tenants/${tenant.id}/contacts/${contact.id}`;
+
+    // The platform admin token has no membership: erasure of personal data is
+    // denied (R4 boundary).
+    const denied = await app.inject({
+      method: "DELETE",
+      url,
+      headers: { "x-admin-token": "test-token" },
+    });
+    expect(denied.statusCode).toBe(403);
+    expect(store.contacts).toHaveLength(1);
+
+    // A genuine member erases the contact and its conversation history.
+    const erased = await app.inject({
+      method: "DELETE",
+      url,
+      headers: memberHeaders,
+    });
+    expect(erased.statusCode).toBe(200);
+    expect(
+      erased.json<{ erased: boolean; deletedConversations: number }>(),
+    ).toMatchObject({ erased: true, deletedConversations: 1 });
+    expect(store.contacts).toHaveLength(0);
+    expect(
+      store.auditEvents.some((event) => event.action === "contact.erased"),
+    ).toBe(true);
+
+    // Erasing an unknown contact is a 404.
+    const missing = await app.inject({
+      method: "DELETE",
+      url,
+      headers: memberHeaders,
+    });
+    expect(missing.statusCode).toBe(404);
+
+    await app.close();
+  });
+
+  it("threads validated pagination query params into list endpoints", async () => {
+    const store = new MemoryPlatformStore();
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+    const { app, memberHeaders } = await buildServerWithMember(
+      store,
+      tenant.id,
+    );
     const handoffsSpy = vi.spyOn(store, "listHandoffs");
 
     const response = await app.inject({
       method: "GET",
       url: `/admin/tenants/${tenant.id}/handoffs?limit=25&offset=50&q=lead&status=open`,
-      headers: { "x-admin-token": "test-token" },
+      headers: memberHeaders,
     });
 
     expect(response.statusCode).toBe(200);
@@ -3347,7 +3812,7 @@ describe("API", () => {
     const defaultResponse = await app.inject({
       method: "GET",
       url: `/admin/tenants/${tenant.id}/handoffs`,
-      headers: { "x-admin-token": "test-token" },
+      headers: memberHeaders,
     });
     expect(defaultResponse.statusCode).toBe(200);
     expect(handoffsSpy).toHaveBeenCalledWith(tenant.id, {
@@ -3361,20 +3826,19 @@ describe("API", () => {
 
   it("rejects out-of-range pagination query params", async () => {
     const store = new MemoryPlatformStore();
-    const app = await buildServer({
-      store,
-      adminToken: "test-token",
-      allowedOrigins: ["*"],
-    });
     const tenant = await store.createTenant({
       name: "Tenant One",
       slug: "tenant-one",
     });
+    const { app, memberHeaders } = await buildServerWithMember(
+      store,
+      tenant.id,
+    );
 
     const response = await app.inject({
       method: "GET",
       url: `/admin/tenants/${tenant.id}/contacts?limit=9999`,
-      headers: { "x-admin-token": "test-token" },
+      headers: memberHeaders,
     });
 
     expect(response.statusCode).toBe(400);

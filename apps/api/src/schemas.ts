@@ -58,6 +58,10 @@ export const ParamsHandoffSchema = ParamsTenantSchema.extend({
   handoffId: z.string().uuid(),
 });
 
+export const ParamsContactSchema = ParamsTenantSchema.extend({
+  contactId: z.string().uuid(),
+});
+
 export const ParamsAssistantSchema = z.object({
   assistantId: z.string().min(8),
 });

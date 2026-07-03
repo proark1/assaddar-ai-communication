@@ -756,6 +756,67 @@ textarea {
   line-height: 1.1;
 }
 
+/* Performance analytics panel (quality, delivery health, voice). */
+.analyticsPanel {
+  margin-top: 12px;
+}
+
+.analyticsWindow {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.analyticsGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+}
+
+.analyticsStat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: var(--shadow-soft);
+  padding: 14px;
+}
+
+.analyticsStatHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.analyticsStatHeader svg {
+  color: var(--accent);
+}
+
+.analyticsStat strong {
+  font-size: 24px;
+  line-height: 1.1;
+}
+
+.analyticsStat small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.analyticsStat[data-alert="true"] {
+  border-color: var(--danger, #d92d20);
+}
+
+.analyticsStat[data-alert="true"] strong {
+  color: var(--danger, #d92d20);
+}
+
 /* Skeleton loaders (shimmer placeholders shown while data first loads). */
 .skeleton {
   display: block;

@@ -29,7 +29,22 @@ export type OutboundMessage = {
 
 export type DeliveryResult = {
   providerMessageId?: string;
-  status: "sent" | "queued" | "skipped";
+  /**
+   * - `sent`    — accepted by the provider.
+   * - `queued`  — accepted but not yet confirmed delivered.
+   * - `skipped` — intentionally not sent (missing credentials/recipient, or a
+   *               channel policy blocked it). NOT a failure; never retried.
+   * - `failed`  — we tried to send and the provider rejected it or the call
+   *               errored. Distinct from `skipped` so real problems are visible
+   *               in analytics and eligible for retry.
+   */
+  status: "sent" | "queued" | "skipped" | "failed";
+  /**
+   * Only meaningful for `failed`. `true` for transient errors (network/timeout,
+   * HTTP 429/5xx) that are worth retrying; `false`/undefined for permanent ones
+   * (HTTP 4xx other than 429) that a retry cannot fix.
+   */
+  retryable?: boolean;
   detail?: string;
 };
 
