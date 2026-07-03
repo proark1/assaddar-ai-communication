@@ -28,6 +28,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.GreetingText == "" {
 		t.Fatal("GreetingText should have a default")
 	}
+	if cfg.ThinkingText == "" {
+		t.Fatal("ThinkingText should have a default")
+	}
 	if cfg.Gemini.STTModel != "gemini-3.5-flash" {
 		t.Fatalf("STTModel = %q", cfg.Gemini.STTModel)
 	}
@@ -61,6 +64,7 @@ func TestLoadGreetingConfig(t *testing.T) {
 		"VOICE_EDGE_ANSWER_DELAY_MS":   "1250",
 		"VOICE_EDGE_GREETING_DELAY_MS": "750",
 		"VOICE_EDGE_GREETING_TEXT":     "Guten Tag.",
+		"VOICE_EDGE_THINKING_TEXT":     "Einen Augenblick.",
 	}
 	cfg, err := Load(func(key string) string { return env[key] })
 	if err != nil {
@@ -74,5 +78,8 @@ func TestLoadGreetingConfig(t *testing.T) {
 	}
 	if cfg.GreetingText != "Guten Tag." {
 		t.Fatalf("GreetingText = %q", cfg.GreetingText)
+	}
+	if cfg.ThinkingText != "Einen Augenblick." {
+		t.Fatalf("ThinkingText = %q", cfg.ThinkingText)
 	}
 }

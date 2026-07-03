@@ -42,10 +42,8 @@ type Server struct {
 	portPool          *media.PortPool
 	speechProvider    speech.Provider
 	turnClient        turnSender
-	greetingMu        sync.Mutex
-	greetingPCM       speech.PCMBuffer
-	greetingReady     bool
-	greetingDone      chan struct{}
+	greetingCache     pcmCache
+	thinkingCache     pcmCache
 	sessionsMu        sync.Mutex
 	sessions          map[string]*CallSession
 	registerResponses chan sip.Message
@@ -69,6 +67,13 @@ type CallSession struct {
 	StartedAt   time.Time
 	processing  atomic.Bool
 	greeting    atomic.Bool
+}
+
+type pcmCache struct {
+	mu    sync.Mutex
+	pcm   speech.PCMBuffer
+	ready bool
+	done  chan struct{}
 }
 
 type turnSender interface {
@@ -113,6 +118,7 @@ func (server *Server) Start(ctx context.Context) error {
 	server.registrarAddr = registrarAddr
 
 	go server.warmGreeting(ctx)
+	go server.warmThinking(ctx)
 	go server.registrationLoop(ctx)
 	return server.readLoop(ctx)
 }
@@ -267,6 +273,7 @@ func (server *Server) answerAfterDelay(ctx context.Context, session *CallSession
 		return
 	}
 	greetingReady := server.startGreetingWarmup(ctx)
+	go server.warmThinking(ctx)
 	if server.cfg.AnswerDelay > 0 {
 		server.markSessionPhase(session.CallID, "early-media")
 		server.sendProgress(request, remote, session)
@@ -428,6 +435,15 @@ func (server *Server) warmGreeting(ctx context.Context) {
 	}
 }
 
+func (server *Server) warmThinking(ctx context.Context) {
+	if strings.TrimSpace(server.cfg.ThinkingText) == "" {
+		return
+	}
+	if _, err := server.thinkingPCMFor(ctx); err != nil {
+		server.logger.Warn("failed to warm thinking prompt", "error", err)
+	}
+}
+
 func (server *Server) startGreetingWarmup(ctx context.Context) <-chan error {
 	done := make(chan error, 1)
 	go func() {
@@ -439,6 +455,25 @@ func (server *Server) startGreetingWarmup(ctx context.Context) <-chan error {
 		done <- err
 	}()
 	return done
+}
+
+func (server *Server) playThinking(ctx context.Context, session *CallSession) {
+	if session == nil || strings.TrimSpace(server.cfg.ThinkingText) == "" {
+		return
+	}
+	pcm, err := server.thinkingPCMFor(ctx)
+	if err != nil {
+		server.logger.Warn("failed to synthesize thinking prompt", "callId", session.CallID, "error", err)
+		return
+	}
+	if len(pcm.Samples) == 0 {
+		return
+	}
+	if err := server.sendPCM(ctx, session, pcm); err != nil {
+		server.logger.Warn("failed to send thinking prompt", "callId", session.CallID, "error", err)
+		return
+	}
+	server.logger.Info("thinking prompt sent", "callId", session.CallID)
 }
 
 func (server *Server) playGreeting(ctx context.Context, session *CallSession) {
@@ -479,15 +514,27 @@ func (server *Server) playGreeting(ctx context.Context, session *CallSession) {
 }
 
 func (server *Server) greetingPCMFor(ctx context.Context) (speech.PCMBuffer, error) {
+	return server.promptPCMFor(ctx, &server.greetingCache, server.cfg.GreetingText)
+}
+
+func (server *Server) thinkingPCMFor(ctx context.Context) (speech.PCMBuffer, error) {
+	return server.promptPCMFor(ctx, &server.thinkingCache, server.cfg.ThinkingText)
+}
+
+func (server *Server) promptPCMFor(ctx context.Context, cache *pcmCache, text string) (speech.PCMBuffer, error) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return speech.PCMBuffer{}, nil
+	}
 	for {
-		server.greetingMu.Lock()
-		if server.greetingReady {
-			pcm := clonePCM(server.greetingPCM)
-			server.greetingMu.Unlock()
+		cache.mu.Lock()
+		if cache.ready {
+			pcm := clonePCM(cache.pcm)
+			cache.mu.Unlock()
 			return pcm, nil
 		}
-		if done := server.greetingDone; done != nil {
-			server.greetingMu.Unlock()
+		if done := cache.done; done != nil {
+			cache.mu.Unlock()
 			select {
 			case <-ctx.Done():
 				return speech.PCMBuffer{}, ctx.Err()
@@ -496,22 +543,22 @@ func (server *Server) greetingPCMFor(ctx context.Context) (speech.PCMBuffer, err
 			}
 		}
 		done := make(chan struct{})
-		server.greetingDone = done
-		server.greetingMu.Unlock()
+		cache.done = done
+		cache.mu.Unlock()
 
-		pcm, err := server.speechProvider.Synthesize(ctx, strings.TrimSpace(server.cfg.GreetingText), speech.SynthesisOptions{
+		pcm, err := server.speechProvider.Synthesize(ctx, text, speech.SynthesisOptions{
 			Locale: server.cfg.DefaultLocale,
 			Voice:  server.cfg.Gemini.TTSVoice,
 		})
 
-		server.greetingMu.Lock()
+		cache.mu.Lock()
 		if err == nil && len(pcm.Samples) > 0 {
-			server.greetingPCM = clonePCM(pcm)
-			server.greetingReady = true
+			cache.pcm = clonePCM(pcm)
+			cache.ready = true
 		}
-		server.greetingDone = nil
+		cache.done = nil
 		close(done)
-		server.greetingMu.Unlock()
+		cache.mu.Unlock()
 
 		return pcm, err
 	}
@@ -550,6 +597,7 @@ func (server *Server) processUtterance(ctx context.Context, session *CallSession
 	if len(utterance) == 0 {
 		return nil
 	}
+	server.playThinking(ctx, session)
 	telephonyRate := session.Codec.ClockRate
 	if telephonyRate <= 0 {
 		telephonyRate = 8000
@@ -560,11 +608,14 @@ func (server *Server) processUtterance(ctx context.Context, session *CallSession
 		Samples:    utterance,
 	})
 	if err != nil {
+		if sendErr := server.sendText(ctx, session, localizedPrompt(server.cfg.DefaultLocale, "repeat")); sendErr != nil {
+			return fmt.Errorf("transcribe: %w; fallback: %v", err, sendErr)
+		}
 		return fmt.Errorf("transcribe: %w", err)
 	}
 	text := strings.TrimSpace(transcript.Text)
 	if text == "" {
-		return nil
+		return server.sendText(ctx, session, localizedPrompt(server.cfg.DefaultLocale, "repeat"))
 	}
 	server.logger.Info(
 		"caller utterance transcribed",
@@ -588,6 +639,9 @@ func (server *Server) processUtterance(ctx context.Context, session *CallSession
 		},
 	})
 	if err != nil {
+		if sendErr := server.sendText(ctx, session, localizedPrompt(server.cfg.DefaultLocale, "turn_error")); sendErr != nil {
+			return fmt.Errorf("voice turn: %w; fallback: %v", err, sendErr)
+		}
 		return fmt.Errorf("voice turn: %w", err)
 	}
 	server.logger.Info(
@@ -598,10 +652,18 @@ func (server *Server) processUtterance(ctx context.Context, session *CallSession
 	)
 	reply := strings.TrimSpace(response.Reply)
 	if reply == "" {
+		return server.sendText(ctx, session, localizedPrompt(server.cfg.DefaultLocale, "no_answer"))
+	}
+	return server.sendText(ctx, session, reply)
+}
+
+func (server *Server) sendText(ctx context.Context, session *CallSession, text string) error {
+	text = strings.TrimSpace(text)
+	if text == "" {
 		return nil
 	}
 	synthesisStartedAt := time.Now()
-	pcm, err := server.speechProvider.Synthesize(ctx, reply, speech.SynthesisOptions{
+	pcm, err := server.speechProvider.Synthesize(ctx, text, speech.SynthesisOptions{
 		Locale: server.cfg.DefaultLocale,
 		Voice:  server.cfg.Gemini.TTSVoice,
 	})
@@ -616,6 +678,30 @@ func (server *Server) processUtterance(ctx context.Context, session *CallSession
 		"samples", len(pcm.Samples),
 	)
 	return server.sendPCM(ctx, session, pcm)
+}
+
+func localizedPrompt(locale string, key string) string {
+	isGerman := strings.HasPrefix(strings.ToLower(strings.TrimSpace(locale)), "de")
+	if isGerman {
+		switch key {
+		case "repeat":
+			return "Entschuldigung, ich habe Sie nicht gut verstanden. Können Sie die Frage bitte kurz wiederholen?"
+		case "turn_error":
+			return "Entschuldigung, ich kann die freigegebenen Informationen gerade nicht abrufen. Ich gebe die Anfrage ans Team weiter."
+		case "no_answer":
+			return "Dazu habe ich keine freigegebene Information. Ich gebe die Anfrage ans Team weiter."
+		}
+	}
+	switch key {
+	case "repeat":
+		return "Sorry, I did not hear that clearly. Could you please repeat the question?"
+	case "turn_error":
+		return "Sorry, I cannot access the approved business information right now. I will pass this to the team."
+	case "no_answer":
+		return "I do not have approved information for that. I will pass this to the team."
+	default:
+		return "I will pass this to the team."
+	}
 }
 
 func (server *Server) sendPCM(ctx context.Context, session *CallSession, pcm speech.PCMBuffer) error {

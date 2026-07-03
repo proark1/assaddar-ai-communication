@@ -42,6 +42,11 @@ type Response struct {
 	TransferPhoneNumber *string `json:"transferPhoneNumber"`
 }
 
+const (
+	maxSendAttempts = 2
+	retryDelay      = 250 * time.Millisecond
+)
+
 func (client Client) Send(ctx context.Context, assistantID string, payload Request) (Response, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -51,13 +56,32 @@ func (client Client) Send(ctx context.Context, assistantID string, payload Reque
 	if err != nil {
 		return Response{}, err
 	}
+
+	var lastErr error
+	for attempt := 1; attempt <= maxSendAttempts; attempt++ {
+		response, retryable, err := client.sendOnce(ctx, endpoint, body)
+		if err == nil {
+			return response, nil
+		}
+		lastErr = err
+		if !retryable || attempt == maxSendAttempts || ctx.Err() != nil {
+			return Response{}, err
+		}
+		if err := waitForRetry(ctx); err != nil {
+			return Response{}, err
+		}
+	}
+	return Response{}, lastErr
+}
+
+func (client Client) sendOnce(ctx context.Context, endpoint string, body []byte) (Response, bool, error) {
 	timestamp := time.Now()
 	if client.Now != nil {
 		timestamp = client.Now()
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return Response{}, err
+		return Response{}, false, err
 	}
 	req.Header.Set("content-type", "application/json")
 	req.Header.Set("x-voice-edge-timestamp", strconv.FormatInt(timestamp.Unix(), 10))
@@ -69,22 +93,61 @@ func (client Client) Send(ctx context.Context, assistantID string, payload Reque
 	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return Response{}, err
+		return Response{}, ctx.Err() == nil, err
 	}
 	defer resp.Body.Close()
 
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return Response{}, err
+		return Response{}, ctx.Err() == nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return Response{}, fmt.Errorf("voice turn returned %d: %s", resp.StatusCode, strings.TrimSpace(string(responseBody)))
+		return Response{}, retryableStatus(resp.StatusCode), fmt.Errorf("voice turn returned %d: %s", resp.StatusCode, bodySnippet(responseBody))
 	}
 	var parsed Response
 	if err := json.Unmarshal(responseBody, &parsed); err != nil {
-		return Response{}, err
+		return Response{}, retryableBody(resp.Header.Get("content-type"), responseBody), fmt.Errorf("voice turn returned invalid JSON: %w: %s", err, bodySnippet(responseBody))
 	}
-	return parsed, nil
+	return parsed, false, nil
+}
+
+func waitForRetry(ctx context.Context) error {
+	timer := time.NewTimer(retryDelay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func retryableStatus(status int) bool {
+	switch status {
+	case http.StatusRequestTimeout,
+		http.StatusTooManyRequests,
+		http.StatusInternalServerError,
+		http.StatusBadGateway,
+		http.StatusServiceUnavailable,
+		http.StatusGatewayTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+func retryableBody(contentType string, body []byte) bool {
+	trimmed := strings.TrimSpace(string(body))
+	return strings.Contains(strings.ToLower(contentType), "text/html") || strings.HasPrefix(trimmed, "<")
+}
+
+func bodySnippet(body []byte) string {
+	value := strings.TrimSpace(string(body))
+	value = strings.Join(strings.Fields(value), " ")
+	if len(value) > 240 {
+		value = value[:240] + "..."
+	}
+	return value
 }
 
 func SignBody(secret string, body []byte, timestamp int64) string {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -48,5 +49,66 @@ func TestClientSendSignsRequest(t *testing.T) {
 	}
 	if response.Reply != "Hallo" {
 		t.Fatalf("Reply = %q", response.Reply)
+	}
+}
+
+func TestClientSendRetriesTransientHTMLResponse(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if attempts.Add(1) == 1 {
+			w.Header().Set("content-type", "text/html")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("<html>temporarily unavailable</html>"))
+			return
+		}
+		w.Header().Set("content-type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"conversationId":"conv","reply":"Hallo","status":"answered","confidence":0.9,"handoffRecommended":false}`))
+	}))
+	defer server.Close()
+
+	client := Client{BaseURL: server.URL + "/voice/turn", Secret: "secret"}
+	response, err := client.Send(context.Background(), "asst_123", Request{
+		Text:     "Hallo",
+		Provider: "voice_edge",
+	})
+	if err != nil {
+		t.Fatalf("Send returned error: %v", err)
+	}
+	if response.Reply != "Hallo" {
+		t.Fatalf("Reply = %q", response.Reply)
+	}
+	if got := attempts.Load(); got != 2 {
+		t.Fatalf("attempts = %d, want 2", got)
+	}
+}
+
+func TestClientSendRetriesRetryableStatus(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if attempts.Add(1) == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte("not ready"))
+			return
+		}
+		w.Header().Set("content-type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"conversationId":"conv","reply":"Bereit","status":"answered","confidence":0.9,"handoffRecommended":false}`))
+	}))
+	defer server.Close()
+
+	client := Client{BaseURL: server.URL + "/voice/turn", Secret: "secret"}
+	response, err := client.Send(context.Background(), "asst_123", Request{
+		Text:     "Hallo",
+		Provider: "voice_edge",
+	})
+	if err != nil {
+		t.Fatalf("Send returned error: %v", err)
+	}
+	if response.Reply != "Bereit" {
+		t.Fatalf("Reply = %q", response.Reply)
+	}
+	if got := attempts.Load(); got != 2 {
+		t.Fatalf("attempts = %d, want 2", got)
 	}
 }

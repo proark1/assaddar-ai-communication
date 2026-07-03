@@ -2,6 +2,7 @@ package edge
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/assaddar/ai-communication/apps/voice-edge/internal/sdp"
 	"github.com/assaddar/ai-communication/apps/voice-edge/internal/sip"
 	"github.com/assaddar/ai-communication/apps/voice-edge/internal/speech"
+	"github.com/assaddar/ai-communication/apps/voice-edge/internal/turn"
 )
 
 func TestResolveRegistrarAddsDefaultPort(t *testing.T) {
@@ -231,6 +233,65 @@ func TestGreetingIsSentAfterACKWithoutInboundRTP(t *testing.T) {
 	}
 }
 
+func TestProcessUtteranceSendsThinkingPromptAndTurnReply(t *testing.T) {
+	cfg := testConfig()
+	cfg.AnswerDelay = 0
+	cfg.GreetingText = ""
+	cfg.ThinkingText = "Einen Moment."
+	server, session, rtpReceiver := setupProcessSession(t, cfg, "call-thinking")
+	provider := &countingSpeechProvider{
+		transcript: speech.Transcript{Text: "Was kostet das?"},
+		synthesis:  speech.PCMBuffer{SampleRate: 8000, Samples: testSamples(4000, 320)},
+	}
+	server.speechProvider = provider
+	fakeTurn := &fakeTurnSender{
+		response: turn.Response{
+			ConversationID: "conv",
+			Reply:          "Das kann ich aus den freigegebenen Informationen beantworten.",
+			Status:         "answered",
+			Confidence:     0.9,
+		},
+	}
+	server.turnClient = fakeTurn
+
+	if err := server.processUtterance(testContext(t), session, testSamples(4000, 1600)); err != nil {
+		t.Fatalf("processUtterance returned error: %v", err)
+	}
+	_ = readRTPPacket(t, rtpReceiver, time.Second)
+	if got := provider.transcribes.Load(); got != 1 {
+		t.Fatalf("transcribes = %d, want 1", got)
+	}
+	if got := provider.synthesizes.Load(); got < 2 {
+		t.Fatalf("synthesizes = %d, want at least 2", got)
+	}
+	if got := fakeTurn.calls.Load(); got != 1 {
+		t.Fatalf("turn calls = %d, want 1", got)
+	}
+}
+
+func TestProcessUtteranceSendsAudibleFallbackOnTurnError(t *testing.T) {
+	cfg := testConfig()
+	cfg.AnswerDelay = 0
+	cfg.GreetingText = ""
+	cfg.ThinkingText = "Einen Moment."
+	server, session, rtpReceiver := setupProcessSession(t, cfg, "call-turn-error")
+	provider := &countingSpeechProvider{
+		transcript: speech.Transcript{Text: "Was kostet das?"},
+		synthesis:  speech.PCMBuffer{SampleRate: 8000, Samples: testSamples(4000, 320)},
+	}
+	server.speechProvider = provider
+	server.turnClient = &fakeTurnSender{err: errors.New("temporary voice turn failure")}
+
+	err := server.processUtterance(testContext(t), session, testSamples(4000, 1600))
+	if err == nil {
+		t.Fatal("processUtterance should return the voice turn error")
+	}
+	_ = readRTPPacket(t, rtpReceiver, time.Second)
+	if got := provider.synthesizes.Load(); got < 2 {
+		t.Fatalf("synthesizes = %d, want at least 2", got)
+	}
+}
+
 func TestHandleRTPPacketIgnoresInputWhileProcessing(t *testing.T) {
 	server, err := New(testConfig(), nil)
 	if err != nil {
@@ -300,13 +361,14 @@ func testConfig() config.Config {
 type countingSpeechProvider struct {
 	transcribes    atomic.Int32
 	synthesizes    atomic.Int32
+	transcript     speech.Transcript
 	synthesis      speech.PCMBuffer
 	synthesisDelay time.Duration
 }
 
 func (provider *countingSpeechProvider) Transcribe(context.Context, speech.PCMBuffer) (speech.Transcript, error) {
 	provider.transcribes.Add(1)
-	return speech.Transcript{}, nil
+	return provider.transcript, nil
 }
 
 func (provider *countingSpeechProvider) Synthesize(ctx context.Context, _ string, _ speech.SynthesisOptions) (speech.PCMBuffer, error) {
@@ -319,6 +381,59 @@ func (provider *countingSpeechProvider) Synthesize(ctx context.Context, _ string
 		}
 	}
 	return clonePCM(provider.synthesis), nil
+}
+
+type fakeTurnSender struct {
+	calls    atomic.Int32
+	response turn.Response
+	err      error
+}
+
+func (sender *fakeTurnSender) Send(context.Context, string, turn.Request) (turn.Response, error) {
+	sender.calls.Add(1)
+	if sender.err != nil {
+		return turn.Response{}, sender.err
+	}
+	return sender.response, nil
+}
+
+func setupProcessSession(t *testing.T, cfg config.Config, callID string) (*Server, *CallSession, *net.UDPConn) {
+	t.Helper()
+	server, err := New(cfg, nil)
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatalf("ListenUDP returned error: %v", err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	server.conn = conn
+
+	client, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatalf("client ListenUDP returned error: %v", err)
+	}
+	t.Cleanup(func() { client.Close() })
+
+	rtpReceiver, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatalf("rtp ListenUDP returned error: %v", err)
+	}
+	t.Cleanup(func() { rtpReceiver.Close() })
+
+	request := mustParseSIP(t, inviteRaw(callID, rtpReceiver.LocalAddr().(*net.UDPAddr).Port, "8 PCMA/8000"))
+	server.handleInvite(testContext(t), request, client.LocalAddr().(*net.UDPAddr))
+	t.Cleanup(func() { server.endSession(callID) })
+	responses := strings.Join(readSIPResponses(t, client, 3), "\n")
+	if !strings.Contains(responses, "SIP/2.0 200 OK") {
+		t.Fatalf("expected answered call, got:\n%s", responses)
+	}
+	session := server.getSession(callID)
+	if session == nil {
+		t.Fatal("session was not stored")
+	}
+	return server, session, rtpReceiver
 }
 
 func testSamples(value int16, count int) []int16 {

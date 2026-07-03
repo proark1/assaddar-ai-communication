@@ -21,6 +21,7 @@ type Config struct {
 	AnswerDelay   time.Duration
 	GreetingDelay time.Duration
 	GreetingText  string
+	ThinkingText  string
 	Easybell      EasybellConfig
 	VoiceTurnURL  string
 	VoiceSecret   string
@@ -59,6 +60,7 @@ func Load(getenv func(string) string) (Config, error) {
 		AnswerDelay:   time.Duration(envIntDefault(getenv, "VOICE_EDGE_ANSWER_DELAY_MS", 2000)) * time.Millisecond,
 		GreetingDelay: time.Duration(envIntDefault(getenv, "VOICE_EDGE_GREETING_DELAY_MS", 1000)) * time.Millisecond,
 		GreetingText:  envDefault(getenv, "VOICE_EDGE_GREETING_TEXT", "Hallo, hier ist der KI-Assistent von Assad Dar. Wie kann ich Ihnen helfen?"),
+		ThinkingText:  envDefault(getenv, "VOICE_EDGE_THINKING_TEXT", "Einen Moment, ich schaue kurz nach."),
 		VoiceTurnURL:  strings.TrimSpace(getenv("VOICE_TURN_URL")),
 		VoiceSecret:   strings.TrimSpace(getenv("VOICE_EDGE_SECRET")),
 		AssistantID:   strings.TrimSpace(getenv("VOICE_EDGE_ASSISTANT_ID")),
