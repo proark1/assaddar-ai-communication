@@ -15,7 +15,7 @@
     "@assaddar/core": "workspace:*",
     "@assaddar/db": "workspace:*",
     "@fastify/cors": "^11.0.0",
-    "@fastify/rate-limit": "^10.2.2",
+    "@fastify/rate-limit": "^11.1.0",
     "@sentry/node": "^10.62.0",
     "@supabase/supabase-js": "^2.110.0",
     "dotenv": "^16.6.1",
