@@ -55,10 +55,16 @@ import { DashboardMetrics } from "./DashboardMetrics";
 import { AnalyticsPanel } from "./AnalyticsPanel";
 import { useDialogA11y, useToasts } from "./dashboard-hooks";
 import {
+  buildAnswerTrustSummary,
+  buildContactMemorySummary,
+  buildCustomerPortalPreview,
   buildFollowUpIcs,
+  buildHandoffCopilotSummary,
   buildLeadReplyDraft,
   buildLeadSummary,
   buildMailtoHref,
+  buildPlaybookPreview,
+  buildVoiceQualitySummary,
   buildWidgetSnippets,
   defaultTheme,
   defaultWidgetUrl,
@@ -80,7 +86,6 @@ import {
   getLeadNextStep,
   getLeadScore,
   getPipelineStage,
-  getPriority,
   getQuestion,
   getUsageTotal,
   groupUnansweredQuestions,
@@ -781,6 +786,30 @@ export default function DashboardPage() {
   );
   const unansweredTopicGroups = groupUnansweredQuestions(unansweredQuestions);
   const matchedKnowledge = findBestKnowledgeMatch(testMessage, knowledge);
+  const approvedKnowledgeCount = knowledge.filter(
+    (item) => item.status === "approved",
+  ).length;
+  const playbookPreview = buildPlaybookPreview({
+    tenantName: selectedTenant?.name,
+    knowledgeCount: approvedKnowledgeCount,
+    channelConnections,
+    automationSettings,
+    bookingUrl,
+    missingKnowledgeCount: missingKnowledgeChecks.length,
+    leadCaptureEnabled,
+    readinessEnabled,
+  });
+  const customerPortalPreview = buildCustomerPortalPreview({
+    tenant: selectedTenant,
+    siteUrl,
+    bookingUrl,
+    leadCaptureEnabled,
+    readinessEnabled,
+    consentEnabled,
+    contactsCount: knownContactCount,
+    conversationsCount: conversations.length,
+    openHandoffsCount: openHandoffs.length,
+  });
   const currentSnippet = selectedTenant
     ? buildWidgetSnippets(
         widgetPlatform,
@@ -5308,22 +5337,54 @@ export default function DashboardPage() {
         </label>
         <div className="contactGrid">
           {contacts.length ? (
-            contacts.map((contact) => (
-              <article className="contactCard" key={contact.id}>
-                <div>
-                  <strong>{getContactDisplayName(contact)}</strong>
-                  <span>{getContactSubtitle(contact) || "No details yet"}</span>
-                </div>
-                <small>{contact.confidence ?? 0}% match</small>
-                <div className="tagRow">
-                  {Object.keys(contact.identifiers ?? {})
-                    .slice(0, 4)
-                    .map((key) => (
-                      <small key={key}>{titleCase(key)}</small>
-                    ))}
-                </div>
-              </article>
-            ))
+            contacts.map((contact) => {
+              const memory = buildContactMemorySummary(
+                contact,
+                conversations,
+                handoffs,
+              );
+
+              return (
+                <article className="contactCard" key={contact.id}>
+                  <div>
+                    <strong>{memory.label}</strong>
+                    <span>{memory.subtitle}</span>
+                  </div>
+                  <small>{memory.confidenceLabel}</small>
+                  <div className="contactMemoryStats">
+                    <article>
+                      <span>Conversations</span>
+                      <strong>{memory.conversationCount}</strong>
+                    </article>
+                    <article
+                      data-alert={memory.openHandoffCount ? "true" : "false"}
+                    >
+                      <span>Handoffs</span>
+                      <strong>{memory.openHandoffCount}</strong>
+                    </article>
+                    <article>
+                      <span>Last seen</span>
+                      <strong>
+                        {memory.lastSeenAt
+                          ? formatDate(memory.lastSeenAt)
+                          : "No activity"}
+                      </strong>
+                    </article>
+                  </div>
+                  <div className="tagRow">
+                    {[...memory.channels, ...memory.identifierLabels]
+                      .slice(0, 4)
+                      .map((key) => (
+                        <small key={key}>{key}</small>
+                      ))}
+                  </div>
+                  <div className="memoryAction">
+                    <Sparkles size={14} />
+                    <span>{memory.nextAction}</span>
+                  </div>
+                </article>
+              );
+            })
           ) : (
             <div className="emptyState compact">
               Contacts appear after website leads, WhatsApp messages, or calls.
@@ -5358,6 +5419,7 @@ export default function DashboardPage() {
     const followUpDate = leadFollowUpDate || getLeadFollowUpDate(selectedLead);
     const replyBody = leadReplyDraft;
     const replySubject = `Re: Anfrage ${getLeadDisplayName(selectedLead)}`;
+    const copilot = buildHandoffCopilotSummary(selectedLead);
 
     return (
       <div className="drawerBackdrop" role="presentation">
@@ -5391,6 +5453,26 @@ export default function DashboardPage() {
                 <strong>{getLeadScore(selectedLead)}/100</strong>
               </div>
               <small>{getLeadNextStep(selectedLead)}</small>
+            </div>
+
+            <div className="handoffCopilotPanel compact">
+              <div>
+                <span>Copilot action</span>
+                <strong>{copilot.suggestedAction}</strong>
+              </div>
+              <div>
+                <span>Priority</span>
+                <strong>{copilot.priority}</strong>
+              </div>
+              <div>
+                <span>Owner</span>
+                <strong>{copilot.owner}</strong>
+              </div>
+              {copilot.missingFields.length ? (
+                <small>
+                  Missing {copilot.missingFields.map(fieldLabel).join(", ")}
+                </small>
+              ) : null}
             </div>
 
             <div className="leadContactStrip">
@@ -5690,6 +5772,14 @@ export default function DashboardPage() {
   }
 
   function renderInbox() {
+    const selectedMemory = selectedInboxItem?.contact
+      ? buildContactMemorySummary(
+          selectedInboxItem.contact,
+          conversations,
+          handoffs,
+        )
+      : null;
+
     return (
       <section className="panel inboxPanel">
         <div className="panelHeader">
@@ -5828,6 +5918,46 @@ export default function DashboardPage() {
                     </article>
                   </div>
                 ) : null}
+                {selectedMemory ? (
+                  <div className="contactMemoryPanel">
+                    <div>
+                      <span>Memory</span>
+                      <strong>{selectedMemory.nextAction}</strong>
+                    </div>
+                    <div className="contactMemoryStats compact">
+                      <article>
+                        <span>Threads</span>
+                        <strong>{selectedMemory.conversationCount}</strong>
+                      </article>
+                      <article
+                        data-alert={
+                          selectedMemory.openHandoffCount ? "true" : "false"
+                        }
+                      >
+                        <span>Handoffs</span>
+                        <strong>{selectedMemory.openHandoffCount}</strong>
+                      </article>
+                      <article>
+                        <span>Known</span>
+                        <strong>
+                          {selectedMemory.missingFields.length
+                            ? `${3 - selectedMemory.missingFields.length}/3`
+                            : "3/3"}
+                        </strong>
+                      </article>
+                    </div>
+                    <div className="tagRow">
+                      {[
+                        ...selectedMemory.channels,
+                        ...selectedMemory.identifierLabels,
+                      ]
+                        .slice(0, 5)
+                        .map((tag) => (
+                          <small key={tag}>{tag}</small>
+                        ))}
+                    </div>
+                  </div>
+                ) : null}
                 {isTelephoneConversation(
                   selectedInboxItem,
                   selectedConversation,
@@ -5899,6 +6029,11 @@ export default function DashboardPage() {
 
   function renderHandoffs() {
     const canEditLeads = canManageLeads();
+    const copilotItems = filteredHandoffs.slice(0, 3).map((handoff) => ({
+      handoff,
+      summary: buildHandoffCopilotSummary(handoff),
+    }));
+
     return (
       <section className="panel">
         <div className="panelHeader">
@@ -5922,72 +6057,112 @@ export default function DashboardPage() {
           </div>
         </div>
 
+        {copilotItems.length ? (
+          <div className="handoffCopilotGrid">
+            {copilotItems.map(({ handoff, summary }) => (
+              <article key={`copilot-${handoff.id}`}>
+                <div>
+                  <span>{summary.priority}</span>
+                  <strong>{summary.suggestedAction}</strong>
+                </div>
+                <p>{getLeadDisplayName(handoff)}</p>
+                <small>
+                  {summary.nextStep} · {summary.owner}
+                </small>
+              </article>
+            ))}
+          </div>
+        ) : null}
+
         <div className="handoffBoard">
           {filteredHandoffs.length ? (
-            filteredHandoffs.map((handoff) => (
-              <article className="handoffItem large" key={handoff.id}>
-                <div>
-                  <strong>{handoff.reason}</strong>
-                  <span data-status={handoff.status}>{handoff.status}</span>
-                </div>
-                <p>{handoff.requesterMessage}</p>
-                <div className="handoffMeta">
-                  <small>{handoff.channel}</small>
-                  <small>{formatDate(handoff.createdAt)}</small>
-                  <small>Priority: {getPriority(handoff)}</small>
-                  <small>Owner: {handoff.assignedTo ?? "Unassigned"}</small>
-                </div>
-                <div className="rowActions">
-                  <button
-                    className="secondaryButton"
-                    type="button"
-                    disabled={
-                      !canEditLeads || handoff.assignedTo === "Assad Dar"
-                    }
-                    onClick={() => updateHandoff(handoff, "open", "Assad Dar")}
-                  >
-                    <UserCheck size={15} />
-                    Assign
-                  </button>
-                  <button
-                    className="secondaryButton"
-                    type="button"
-                    disabled={!canEditLeads || handoff.status === "in_progress"}
-                    onClick={() =>
-                      updateHandoff(
-                        handoff,
-                        "in_progress",
-                        handoff.assignedTo ?? "Assad Dar",
-                      )
-                    }
-                  >
-                    In progress
-                  </button>
-                  <button
-                    className="primaryButton"
-                    type="button"
-                    disabled={!canEditLeads || handoff.status === "resolved"}
-                    onClick={() =>
-                      updateHandoff(
-                        handoff,
-                        "resolved",
-                        handoff.assignedTo ?? "Assad Dar",
-                      )
-                    }
-                  >
-                    Resolve
-                  </button>
-                  <button
-                    className="dangerButton"
-                    type="button"
-                    disabled={!canEditLeads || handoff.status === "dismissed"}
-                    onClick={() => updateHandoff(handoff, "dismissed")}
-                  >
-                    Dismiss
-                  </button>
-                </div>
-              </article>
-            ))
+            filteredHandoffs.map((handoff) => {
+              const summary = buildHandoffCopilotSummary(handoff);
+
+              return (
+                <article className="handoffItem large" key={handoff.id}>
+                  <div>
+                    <strong>{handoff.reason}</strong>
+                    <span data-status={handoff.status}>{handoff.status}</span>
+                  </div>
+                  <p>{handoff.requesterMessage}</p>
+                  <div className="handoffMeta">
+                    <small>{handoff.channel}</small>
+                    <small>{formatDate(handoff.createdAt)}</small>
+                    <small>Priority: {summary.priority}</small>
+                    <small>Owner: {summary.owner}</small>
+                  </div>
+                  <div className="handoffNextAction">
+                    <Sparkles size={15} />
+                    <div>
+                      <strong>{summary.suggestedAction}</strong>
+                      <span>{summary.nextStep}</span>
+                    </div>
+                  </div>
+                  {summary.missingFields.length ? (
+                    <div className="warningRow block">
+                      <span>
+                        Missing{" "}
+                        {summary.missingFields.map(fieldLabel).join(", ")}
+                      </span>
+                    </div>
+                  ) : null}
+                  <div className="rowActions">
+                    <button
+                      className="secondaryButton"
+                      type="button"
+                      disabled={
+                        !canEditLeads || handoff.assignedTo === "Assad Dar"
+                      }
+                      onClick={() =>
+                        updateHandoff(handoff, "open", "Assad Dar")
+                      }
+                    >
+                      <UserCheck size={15} />
+                      Assign
+                    </button>
+                    <button
+                      className="secondaryButton"
+                      type="button"
+                      disabled={
+                        !canEditLeads || handoff.status === "in_progress"
+                      }
+                      onClick={() =>
+                        updateHandoff(
+                          handoff,
+                          "in_progress",
+                          handoff.assignedTo ?? "Assad Dar",
+                        )
+                      }
+                    >
+                      In progress
+                    </button>
+                    <button
+                      className="primaryButton"
+                      type="button"
+                      disabled={!canEditLeads || handoff.status === "resolved"}
+                      onClick={() =>
+                        updateHandoff(
+                          handoff,
+                          "resolved",
+                          handoff.assignedTo ?? "Assad Dar",
+                        )
+                      }
+                    >
+                      Resolve
+                    </button>
+                    <button
+                      className="dangerButton"
+                      type="button"
+                      disabled={!canEditLeads || handoff.status === "dismissed"}
+                      onClick={() => updateHandoff(handoff, "dismissed")}
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                </article>
+              );
+            })
           ) : (
             <div className="emptyState">No handoff requests in this view.</div>
           )}
@@ -6042,6 +6217,13 @@ export default function DashboardPage() {
           ? testAnswer.handoffRecommended || testAnswer.status === "handoff"
           : testAnswer.status === activeScenario.target
         : false;
+    const answerTrust = buildAnswerTrustSummary({
+      answer: testAnswer,
+      matchedKnowledge,
+      missingKnowledgeCount: missingKnowledgeChecks.length,
+      unansweredCount: unansweredQuestions.length,
+      scenarioPassed: testAnswer && activeScenario ? scenarioPassed : undefined,
+    });
 
     return (
       <div className="testStudioGrid">
@@ -6174,6 +6356,23 @@ export default function DashboardPage() {
               </span>
             </div>
           ) : null}
+          <div className="trustSignalPanel" data-tone={answerTrust.tone}>
+            <div className="trustSignalHeader">
+              <div>
+                <span>Answer trust</span>
+                <strong>{answerTrust.label}</strong>
+              </div>
+              <small>{answerTrust.recommendation}</small>
+            </div>
+            <div className="trustSignalList">
+              {answerTrust.signals.map((signal) => (
+                <article data-status={signal.status} key={signal.label}>
+                  <span>{signal.label}</span>
+                  <strong>{signal.detail}</strong>
+                </article>
+              ))}
+            </div>
+          </div>
         </section>
       </div>
     );
@@ -6351,6 +6550,65 @@ export default function DashboardPage() {
             </div>
           </section>
         </div>
+
+        <section className="panel portalPreviewPanel">
+          <div className="panelHeader">
+            <div className="panelTitle">
+              <Globe2 size={18} />
+              <h2>Customer portal preview</h2>
+            </div>
+            <span
+              className="countPill"
+              data-tone={
+                customerPortalPreview.score >= 80
+                  ? "good"
+                  : customerPortalPreview.score >= 50
+                    ? "warn"
+                    : undefined
+              }
+            >
+              {customerPortalPreview.status}
+            </span>
+          </div>
+          <div className="portalPreviewHero">
+            <div>
+              <span>Preview link</span>
+              <strong>{customerPortalPreview.url}</strong>
+            </div>
+            <button
+              className="secondaryButton"
+              type="button"
+              onClick={() =>
+                copyText(customerPortalPreview.url, "Customer portal link")
+              }
+            >
+              <Copy size={16} />
+              Copy link
+            </button>
+          </div>
+          <div className="portalModuleGrid">
+            {customerPortalPreview.modules.map((module) => (
+              <article
+                data-done={module.done ? "true" : "false"}
+                key={module.label}
+              >
+                {module.done ? (
+                  <CheckCircle2 size={16} />
+                ) : (
+                  <AlertCircle size={16} />
+                )}
+                <div>
+                  <strong>{module.label}</strong>
+                  <span>{module.detail}</span>
+                </div>
+              </article>
+            ))}
+          </div>
+          <div className="memoryAction wide">
+            <Sparkles size={14} />
+            <span>{customerPortalPreview.primaryAction}</span>
+          </div>
+        </section>
 
         <div className="settingsGrid">
           <section className="panel">
@@ -7198,6 +7456,21 @@ export default function DashboardPage() {
     const recentTelephoneConversations = inboxItems
       .filter((item) => item.channel === "telephone")
       .slice(0, 4);
+    const voiceQuality = buildVoiceQualitySummary({
+      connection,
+      edgeStatus: voiceEdgeStatus,
+      checklist: {
+        numberOrdered: phoneNumberOrdered,
+        sipConfigured: phoneSipConfigured,
+        testCallCompleted: phoneTestCallCompleted,
+        fallbackSet: phoneFallbackSet,
+        disclosureConfirmed: phoneDisclosureConfirmed,
+      },
+      fallbackNumber: telephoneFallbackNumber,
+      disclosureText: phoneDisclosureText,
+      transcriptRetentionDays: phoneTranscriptRetentionDays,
+      recentCallCount: recentTelephoneConversations.length,
+    });
 
     return (
       <section className="panel telephoneSetupPanel">
@@ -7352,6 +7625,32 @@ export default function DashboardPage() {
                   ? `Checked ${formatDate(voiceEdgeStatus.checkedAt)}`
                   : "Checks the Railway voice service health endpoint."}
               </small>
+            </div>
+          </section>
+
+          <section className="telephoneControlPanel">
+            <div className="miniPanelHeader">
+              <strong>Voice quality</strong>
+              <span>{voiceQuality.score}/100</span>
+            </div>
+            <div className="voiceQualityMeter" data-score={voiceQuality.label}>
+              <strong>{voiceQuality.label}</strong>
+              <span>{voiceQuality.recommendation}</span>
+            </div>
+            <div className="voiceQualityChecks">
+              {voiceQuality.checks.slice(0, 6).map((check) => (
+                <article
+                  data-done={check.done ? "true" : "false"}
+                  key={check.label}
+                >
+                  {check.done ? (
+                    <CheckCircle2 size={14} />
+                  ) : (
+                    <AlertCircle size={14} />
+                  )}
+                  <span>{check.label}</span>
+                </article>
+              ))}
             </div>
           </section>
         </div>
@@ -8826,12 +9125,55 @@ export default function DashboardPage() {
           </div>
         </section>
 
+        <section className="panel playbookPreviewPanel">
+          <div className="panelHeader">
+            <div className="panelTitle">
+              <ClipboardCheck size={18} />
+              <h2>{playbookPreview.title}</h2>
+            </div>
+            <span
+              className="countPill"
+              data-tone={
+                playbookPreview.completed === playbookPreview.total
+                  ? "good"
+                  : "warn"
+              }
+            >
+              {playbookPreview.stage}
+            </span>
+          </div>
+          <div className="playbookProgress">
+            <strong>
+              {playbookPreview.completed}/{playbookPreview.total}
+            </strong>
+            <span>Next: {playbookPreview.nextStep}</span>
+          </div>
+          <div className="playbookStepGrid">
+            {playbookPreview.steps.map((step) => (
+              <article
+                data-done={step.done ? "true" : "false"}
+                key={step.label}
+              >
+                {step.done ? (
+                  <CheckCircle2 size={16} />
+                ) : (
+                  <AlertCircle size={16} />
+                )}
+                <div>
+                  <strong>{step.label}</strong>
+                  <span>{step.detail}</span>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+
         <div className="automationGrid">
           <section className="panel">
             <div className="panelHeader">
               <div className="panelTitle">
                 <Settings size={18} />
-                <h2>Playbooks</h2>
+                <h2>Automation rules</h2>
               </div>
             </div>
             <div className="automationRuleList">

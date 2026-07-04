@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildAnswerTrustSummary,
+  buildContactMemorySummary,
+  buildCustomerPortalPreview,
+  buildHandoffCopilotSummary,
+  buildPlaybookPreview,
+  buildVoiceQualitySummary,
   getAnswer,
   getQuestion,
   normalizeBaseUrl,
@@ -8,7 +14,14 @@ import {
   readableError,
   statusTone,
 } from "../app/page-helpers";
-import type { KnowledgeItem } from "../app/page-types";
+import type {
+  ChannelConnection,
+  ContactProfile,
+  Conversation,
+  Handoff,
+  KnowledgeItem,
+  TestAnswer,
+} from "../app/page-types";
 
 function knowledge(overrides: Partial<KnowledgeItem>): KnowledgeItem {
   return {
@@ -96,5 +109,182 @@ describe("readableError", () => {
   });
   it("handles non-Error values", () => {
     expect(readableError("boom")).toBe("Something went wrong.");
+  });
+});
+
+describe("buildContactMemorySummary", () => {
+  it("summarizes channels, missing fields, and open handoffs", () => {
+    const contact: ContactProfile = {
+      id: "contact-1",
+      displayName: "Ada Lovelace",
+      email: "ada@example.com",
+      confidence: 92,
+      identifiers: { email: ["ada@example.com"] },
+      createdAt: "2026-01-01T10:00:00.000Z",
+    };
+    const conversations: Conversation[] = [
+      {
+        id: "conversation-1",
+        publicId: "pub-1",
+        channel: "website",
+        contactId: "contact-1",
+        status: "open",
+        locale: "en",
+        createdAt: "2026-01-02T10:00:00.000Z",
+      },
+      {
+        id: "conversation-2",
+        publicId: "pub-2",
+        channel: "telephone",
+        contactId: "contact-1",
+        status: "open",
+        locale: "en",
+        createdAt: "2026-01-03T10:00:00.000Z",
+      },
+    ];
+    const handoffs: Handoff[] = [
+      {
+        id: "handoff-1",
+        conversationId: "conversation-2",
+        channel: "telephone",
+        reason: "lead_capture",
+        requesterMessage: "Name: Ada",
+        status: "open",
+        createdAt: "2026-01-03T10:05:00.000Z",
+      },
+    ];
+
+    const summary = buildContactMemorySummary(contact, conversations, handoffs);
+
+    expect(summary.label).toBe("Ada Lovelace");
+    expect(summary.channels).toEqual(["Website", "Telephone"]);
+    expect(summary.openHandoffCount).toBe(1);
+    expect(summary.missingFields).toEqual(["phone", "company"]);
+    expect(summary.nextAction).toBe("Resolve open handoff");
+  });
+});
+
+describe("buildHandoffCopilotSummary", () => {
+  it("prioritizes urgent requests and exposes missing contact data", () => {
+    const handoff: Handoff = {
+      id: "handoff-1",
+      channel: "website",
+      reason: "urgent legal call",
+      requesterMessage: "Name: Ada\nCompany: Engine Co\nProject type: AI",
+      status: "open",
+      createdAt: "2026-01-01T10:00:00.000Z",
+    };
+
+    const summary = buildHandoffCopilotSummary(handoff);
+
+    expect(summary.priority).toBe("High");
+    expect(summary.suggestedAction).toBe("Take over now");
+    expect(summary.missingFields).toEqual(["email", "phone"]);
+  });
+});
+
+describe("buildAnswerTrustSummary", () => {
+  it("rewards confident answers grounded in approved knowledge", () => {
+    const answer: TestAnswer = {
+      status: "answered",
+      text: "We help with AI automation.",
+      intent: "services",
+      confidence: 0.8,
+      handoffRecommended: false,
+    };
+
+    const summary = buildAnswerTrustSummary({
+      answer,
+      matchedKnowledge: knowledge({
+        title: "Services",
+        content: "We help with AI automation.",
+        status: "approved",
+      }),
+      scenarioPassed: true,
+    });
+
+    expect(summary.tone).toBe("good");
+    expect(summary.score).toBe(95);
+    expect(summary.recommendation).toBe("Keep this answer live");
+  });
+});
+
+describe("buildVoiceQualitySummary", () => {
+  it("surfaces launch blockers for incomplete telephone setup", () => {
+    const connection: ChannelConnection = {
+      channel: "telephone",
+      provider: "easybell",
+      label: "Telephone",
+      status: "pending",
+      credentialConfigured: true,
+      settings: {},
+    };
+
+    const summary = buildVoiceQualitySummary({
+      connection,
+      edgeStatus: { status: "offline", url: "https://voice", checkedAt: "" },
+      checklist: { numberOrdered: true, disclosureConfirmed: true },
+      transcriptRetentionDays: 90,
+    });
+
+    expect(summary.label).toBe("Setup needed");
+    expect(summary.blockers).toEqual([
+      "Routing",
+      "Voice edge",
+      "SIP",
+      "Test call",
+    ]);
+    expect(summary.recommendation).toBe("Fix Routing");
+  });
+});
+
+describe("buildPlaybookPreview", () => {
+  it("tracks consultancy launch progress", () => {
+    const preview = buildPlaybookPreview({
+      tenantName: "Assad Dar AI Consultancy",
+      knowledgeCount: 8,
+      missingKnowledgeCount: 0,
+      bookingUrl: "https://cal.com/assad",
+      leadCaptureEnabled: true,
+      readinessEnabled: true,
+      automationSettings: { ownerLeadEmailEnabled: true },
+      channelConnections: [
+        {
+          channel: "website",
+          provider: "widget",
+          label: "Website",
+          status: "connected",
+          credentialConfigured: true,
+          settings: {},
+        },
+      ],
+    });
+
+    expect(preview.completed).toBe(6);
+    expect(preview.nextStep).toBe("Channel expansion");
+    expect(preview.stage).toBe("Nearly ready");
+  });
+});
+
+describe("buildCustomerPortalPreview", () => {
+  it("creates a project portal preview and readiness score", () => {
+    const preview = buildCustomerPortalPreview({
+      tenant: {
+        name: "Assad Dar AI Consultancy",
+        slug: "assad-dar-ai",
+        publicId: "tenant_public",
+      },
+      siteUrl: "https://example.com/",
+      bookingUrl: "https://cal.com/assad",
+      leadCaptureEnabled: true,
+      readinessEnabled: true,
+      consentEnabled: true,
+      contactsCount: 3,
+      conversationsCount: 4,
+    });
+
+    expect(preview.url).toBe("https://example.com/portal/assad-dar-ai");
+    expect(preview.score).toBe(100);
+    expect(preview.primaryAction).toBe("Share preview");
   });
 });
