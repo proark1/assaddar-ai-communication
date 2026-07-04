@@ -12,8 +12,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
-    "@playwright/test": "^1.51.1",
-    "typescript": "^5.8.2",
-    "vite": "^6.2.2"
+    "@playwright/test": "^1.61.1",
+    "typescript": "^6.0.3",
+    "vite": "^8.1.3"
   }
 }

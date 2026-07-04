@@ -96,11 +96,7 @@ export {
 export type TenantSummary = typeof tenants.$inferSelect;
 
 export type RoleName =
-  | "platform_owner"
-  | "tenant_owner"
-  | "tenant_admin"
-  | "operator"
-  | "viewer";
+  "platform_owner" | "tenant_owner" | "tenant_admin" | "operator" | "viewer";
 
 export type AuthUserRecord = Pick<
   typeof users.$inferSelect,
@@ -686,12 +682,7 @@ export type ChannelConnectionCredentials = {
 
 export type TelephoneNumberInventoryInput = {
   provider?:
-    | "easybell"
-    | "sipgate"
-    | "peoplefone"
-    | "custom_sip"
-    | "twilio"
-    | undefined;
+    "easybell" | "sipgate" | "peoplefone" | "custom_sip" | "twilio" | undefined;
   phoneNumber?: string | undefined;
   country?: string | undefined;
   locality?: string | null | undefined;
@@ -699,12 +690,7 @@ export type TelephoneNumberInventoryInput = {
   sipTarget?: string | null | undefined;
   assistantId?: string | null | undefined;
   status?:
-    | "available"
-    | "reserved"
-    | "assigned"
-    | "suspended"
-    | "retired"
-    | undefined;
+    "available" | "reserved" | "assigned" | "suspended" | "retired" | undefined;
   assignedTenantId?: string | null | undefined;
   metadata?: Record<string, unknown> | undefined;
 };
@@ -809,8 +795,7 @@ export type ContactProfileInput = {
   phone?: string | null | undefined;
   company?: string | null | undefined;
   identifiers?:
-    | Record<string, string[] | string | null | undefined>
-    | undefined;
+    Record<string, string[] | string | null | undefined> | undefined;
   metadata?: Record<string, unknown> | undefined;
 };
 
@@ -819,12 +804,7 @@ export type WhatsappTemplateInput = {
   language?: string | undefined;
   category?: "marketing" | "utility" | "authentication" | undefined;
   status?:
-    | "draft"
-    | "submitted"
-    | "approved"
-    | "rejected"
-    | "paused"
-    | undefined;
+    "draft" | "submitted" | "approved" | "rejected" | "paused" | undefined;
   body: string;
   variables?: string[] | undefined;
   providerTemplateId?: string | null | undefined;

@@ -2501,10 +2501,7 @@ async function buildServerWithMember(
   store: MemoryPlatformStore,
   tenantId: string,
   role:
-    | "viewer"
-    | "operator"
-    | "tenant_admin"
-    | "tenant_owner" = "tenant_owner",
+    "viewer" | "operator" | "tenant_admin" | "tenant_owner" = "tenant_owner",
 ) {
   const authUserId = crypto.randomUUID();
   const app = await buildServer({

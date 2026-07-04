@@ -354,10 +354,7 @@ export type AdminSession = {
 };
 
 export type TenantRole =
-  | "tenant_owner"
-  | "tenant_admin"
-  | "operator"
-  | "viewer";
+  "tenant_owner" | "tenant_admin" | "operator" | "viewer";
 
 export type TenantUser = {
   id: string;
@@ -411,10 +408,7 @@ export type ChannelConnection = {
 export type TelephoneSetupMode = "new_number" | "forwarding" | "sip_byoc";
 
 export type TelephoneProvider =
-  | "easybell"
-  | "sipgate"
-  | "peoplefone"
-  | "custom_sip";
+  "easybell" | "sipgate" | "peoplefone" | "custom_sip";
 
 export type TelephoneNumberType = "local" | "mobile" | "toll-free";
 
@@ -542,12 +536,7 @@ export type InboxFilter = "all" | "needs_human" | "recent";
 export type HandoffFilter = "open" | "in_progress" | "resolved" | "all";
 export type WidgetPlatform = "html" | "wordpress" | "webflow" | "shopify";
 export type LeadPipelineStage =
-  | "new"
-  | "contacted"
-  | "qualified"
-  | "proposal"
-  | "won"
-  | "lost";
+  "new" | "contacted" | "qualified" | "proposal" | "won" | "lost";
 
 export type AdminDeepLink = {
   tenantId?: string;

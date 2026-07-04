@@ -12,6 +12,9 @@
     "isolatedModules": true,
     "resolveJsonModule": true,
     "skipLibCheck": true,
+    "ignoreDeprecations": "6.0",
+    "types": ["node"],
+    "rootDir": ".",
     "baseUrl": ".",
     "paths": {
       "@assaddar/core": ["packages/core/src/index.ts"],
