@@ -2,13 +2,18 @@ import { BarChart3, Database, Globe2, Settings, UserCheck } from "lucide-react";
 import { APP_CONFIG } from "./config";
 import type {
   AdminDeepLink,
+  ChannelConnection,
+  Conversation,
   ContactProfile,
   Handoff,
   HandoffFilter,
   KnowledgeItem,
   LeadPipelineStage,
   TabKey,
+  TelephoneVoiceEdgeStatus,
+  Tenant,
   TenantAnalytics,
+  TestAnswer,
   UnansweredQuestion,
   WhatsappCompliance,
   WidgetAutomationSettings,
@@ -19,6 +24,7 @@ import type {
 // App-wide constants are consolidated in ./config (APP_CONFIG). These aliases
 // keep the existing references throughout this file readable and unchanged.
 export const defaultWidgetUrl = APP_CONFIG.api.widgetUrl;
+const defaultSiteUrl = APP_CONFIG.siteUrl;
 
 export const tabs: Array<{
   key: TabKey;
@@ -537,6 +543,532 @@ export function getContactSubtitle(contact?: ContactProfile | null) {
   return [contact?.email, contact?.phone, contact?.company]
     .filter(Boolean)
     .join(" · ");
+}
+
+export type ContactMemorySummary = {
+  label: string;
+  subtitle: string;
+  confidenceLabel: string;
+  channels: string[];
+  identifierLabels: string[];
+  conversationCount: number;
+  openHandoffCount: number;
+  lastSeenAt?: string | null;
+  missingFields: string[];
+  nextAction: string;
+};
+
+export function buildContactMemorySummary(
+  contact?: ContactProfile | null,
+  conversations: Conversation[] = [],
+  handoffs: Handoff[] = [],
+): ContactMemorySummary {
+  const matchedConversations = contact?.id
+    ? conversations.filter(
+        (conversation) => conversation.contactId === contact.id,
+      )
+    : [];
+  const conversationIds = new Set(
+    matchedConversations.map((conversation) => conversation.id),
+  );
+  const openHandoffs = handoffs.filter(
+    (handoff) =>
+      handoff.conversationId &&
+      conversationIds.has(handoff.conversationId) &&
+      !["resolved", "dismissed"].includes(handoff.status),
+  );
+  const timestamps = [
+    contact?.updatedAt,
+    contact?.createdAt,
+    ...matchedConversations.map(
+      (conversation) => conversation.updatedAt ?? conversation.createdAt,
+    ),
+  ]
+    .filter((value): value is string => Boolean(value))
+    .sort(
+      (left, right) => new Date(right).getTime() - new Date(left).getTime(),
+    );
+  const missingFields = [
+    contact?.email ? "" : "email",
+    contact?.phone ? "" : "phone",
+    contact?.company ? "" : "company",
+  ].filter(Boolean);
+  const channels = Array.from(
+    new Set(
+      matchedConversations.map((conversation) =>
+        titleCase(conversation.channel),
+      ),
+    ),
+  );
+  const identifierLabels = Object.keys(contact?.identifiers ?? {}).map(
+    titleCase,
+  );
+  const nextAction = !contact
+    ? "Select a known contact"
+    : openHandoffs.length
+      ? "Resolve open handoff"
+      : missingFields.length
+        ? `Ask for ${fieldLabel(missingFields[0] ?? "details")}`
+        : matchedConversations.length > 1
+          ? "Use prior context"
+          : "Monitor next conversation";
+
+  return {
+    label: getContactDisplayName(contact),
+    subtitle: getContactSubtitle(contact) || "No contact details yet",
+    confidenceLabel: `${Math.round(contact?.confidence ?? 0)}% match`,
+    channels,
+    identifierLabels,
+    conversationCount: matchedConversations.length,
+    openHandoffCount: openHandoffs.length,
+    lastSeenAt: timestamps[0] ?? null,
+    missingFields,
+    nextAction,
+  };
+}
+
+export type HandoffCopilotSummary = {
+  priority: string;
+  score: number;
+  nextStep: string;
+  owner: string;
+  suggestedAction: string;
+  missingFields: string[];
+  chips: string[];
+};
+
+export function buildHandoffCopilotSummary(
+  handoff: Handoff,
+): HandoffCopilotSummary {
+  const score = getLeadScore(handoff);
+  const nextStep = getLeadNextStep(handoff);
+  const missingFields = [
+    getLeadContactEmail(handoff) ? "" : "email",
+    getLeadContactPhone(handoff) ? "" : "phone",
+    getLeadDetailValue(handoff, "Company") ? "" : "company",
+  ].filter(Boolean);
+  const priority = getPriority(handoff);
+  const suggestedAction =
+    priority === "High"
+      ? "Take over now"
+      : handoff.status === "open"
+        ? "Assign owner"
+        : handoff.status === "in_progress"
+          ? nextStep
+          : handoff.status === "resolved"
+            ? "Document outcome"
+            : "Review request";
+
+  return {
+    priority,
+    score,
+    nextStep,
+    owner: handoff.assignedTo ?? "Unassigned",
+    suggestedAction,
+    missingFields,
+    chips: [
+      `Stage: ${titleCase(getPipelineStage(handoff))}`,
+      `Status: ${titleCase(handoff.status)}`,
+      `Channel: ${titleCase(handoff.channel)}`,
+    ],
+  };
+}
+
+export type TrustSignal = {
+  label: string;
+  status: "good" | "warn" | "danger";
+  detail: string;
+};
+
+export type AnswerTrustSummary = {
+  score: number;
+  tone: "good" | "warn" | "danger" | "neutral";
+  label: string;
+  recommendation: string;
+  signals: TrustSignal[];
+};
+
+export function buildAnswerTrustSummary(input: {
+  answer?: TestAnswer | null;
+  matchedKnowledge?: KnowledgeItem | null;
+  missingKnowledgeCount?: number;
+  unansweredCount?: number;
+  scenarioPassed?: boolean | undefined;
+}): AnswerTrustSummary {
+  const {
+    answer,
+    matchedKnowledge,
+    missingKnowledgeCount = 0,
+    unansweredCount = 0,
+    scenarioPassed,
+  } = input;
+
+  if (!answer) {
+    return {
+      score: 0,
+      tone: "neutral",
+      label: "Not tested",
+      recommendation: "Run a test question",
+      signals: [
+        {
+          label: "Grounding",
+          status: "warn",
+          detail: matchedKnowledge
+            ? "Likely FAQ match is ready"
+            : "No likely FAQ match yet",
+        },
+      ],
+    };
+  }
+
+  const confidenceScore = Math.round(answer.confidence * 100);
+  let score = confidenceScore;
+  if (matchedKnowledge?.status === "approved") {
+    score += 15;
+  }
+  if (answer.handoffRecommended && answer.status !== "handoff") {
+    score -= 10;
+  }
+  if (missingKnowledgeCount > 0) {
+    score -= Math.min(20, missingKnowledgeCount * 4);
+  }
+  if (unansweredCount > 0) {
+    score -= Math.min(15, unansweredCount * 3);
+  }
+  score = Math.max(0, Math.min(100, score));
+
+  const tone =
+    score >= 75 ? "good" : score >= 50 ? "warn" : ("danger" as const);
+  const signals: TrustSignal[] = [
+    {
+      label: "Confidence",
+      status:
+        confidenceScore >= 70
+          ? "good"
+          : confidenceScore >= 45
+            ? "warn"
+            : "danger",
+      detail: `${confidenceScore}% model confidence`,
+    },
+    {
+      label: "Grounding",
+      status: matchedKnowledge?.status === "approved" ? "good" : "warn",
+      detail: matchedKnowledge
+        ? getQuestion(matchedKnowledge)
+        : "No approved answer matched the test",
+    },
+    {
+      label: "Handoff",
+      status: answer.handoffRecommended ? "warn" : "good",
+      detail: answer.handoffRecommended
+        ? "Human review recommended"
+        : "No human handoff requested",
+    },
+  ];
+  if (scenarioPassed !== undefined) {
+    signals.unshift({
+      label: "Scenario",
+      status: scenarioPassed ? "good" : "warn",
+      detail: scenarioPassed
+        ? "Expected result reached"
+        : "Review expected outcome",
+    });
+  }
+
+  const recommendation =
+    tone === "good"
+      ? "Keep this answer live"
+      : !matchedKnowledge
+        ? "Add an approved FAQ"
+        : answer.handoffRecommended
+          ? "Review handoff path"
+          : "Improve the matched FAQ";
+
+  return {
+    score,
+    tone,
+    label: `${score}/100 trust`,
+    recommendation,
+    signals,
+  };
+}
+
+export type VoiceQualitySummary = {
+  score: number;
+  label: string;
+  blockers: string[];
+  recommendation: string;
+  checks: Array<{
+    label: string;
+    done: boolean;
+    detail: string;
+  }>;
+};
+
+export function buildVoiceQualitySummary(input: {
+  connection?: ChannelConnection | null | undefined;
+  edgeStatus?: TelephoneVoiceEdgeStatus | null | undefined;
+  checklist?: {
+    numberOrdered?: boolean;
+    sipConfigured?: boolean;
+    testCallCompleted?: boolean;
+    fallbackSet?: boolean;
+    disclosureConfirmed?: boolean;
+  };
+  fallbackNumber?: string;
+  disclosureText?: string;
+  transcriptRetentionDays?: number;
+  recentCallCount?: number;
+}): VoiceQualitySummary {
+  const checklist = input.checklist ?? {};
+  const hasNumber = Boolean(
+    checklist.numberOrdered ||
+    input.connection?.externalAccountId ||
+    input.connection?.settings?.phoneNumber ||
+    input.connection?.settings?.aiNumber,
+  );
+  const checks = [
+    {
+      label: "Routing",
+      done: input.connection?.status === "connected",
+      detail:
+        input.connection?.status === "connected"
+          ? "Connected"
+          : "Not connected",
+    },
+    {
+      label: "Voice edge",
+      done: input.edgeStatus?.status === "online",
+      detail: input.edgeStatus?.status ?? "Not checked",
+    },
+    {
+      label: "Number",
+      done: hasNumber,
+      detail: hasNumber ? "Assigned" : "Missing",
+    },
+    {
+      label: "SIP",
+      done: Boolean(checklist.sipConfigured),
+      detail: checklist.sipConfigured ? "Configured" : "Needs provider setup",
+    },
+    {
+      label: "Fallback",
+      done: Boolean(checklist.fallbackSet || input.fallbackNumber),
+      detail:
+        checklist.fallbackSet || input.fallbackNumber ? "Available" : "Missing",
+    },
+    {
+      label: "Disclosure",
+      done: Boolean(
+        checklist.disclosureConfirmed || input.disclosureText?.trim(),
+      ),
+      detail:
+        checklist.disclosureConfirmed || input.disclosureText?.trim()
+          ? "Ready"
+          : "Missing",
+    },
+    {
+      label: "Test call",
+      done: Boolean(checklist.testCallCompleted || input.recentCallCount),
+      detail:
+        checklist.testCallCompleted || input.recentCallCount
+          ? "Completed"
+          : "Not completed",
+    },
+    {
+      label: "Retention",
+      done: (input.transcriptRetentionDays ?? 0) > 0,
+      detail:
+        (input.transcriptRetentionDays ?? 0) > 0
+          ? `${input.transcriptRetentionDays} days`
+          : "Not set",
+    },
+  ];
+  const completed = checks.filter((check) => check.done).length;
+  const score = Math.round((completed / checks.length) * 100);
+  const blockers = checks
+    .filter(
+      (check) =>
+        !check.done &&
+        ["Routing", "Voice edge", "Number", "SIP", "Test call"].includes(
+          check.label,
+        ),
+    )
+    .map((check) => check.label);
+
+  return {
+    score,
+    label:
+      score >= 85
+        ? "Launch ready"
+        : score >= 65
+          ? "Needs test"
+          : "Setup needed",
+    blockers,
+    recommendation: blockers.length
+      ? `Fix ${blockers[0]}`
+      : "Monitor live calls",
+    checks,
+  };
+}
+
+export type PlaybookPreview = {
+  title: string;
+  stage: string;
+  completed: number;
+  total: number;
+  nextStep: string;
+  steps: Array<{
+    label: string;
+    done: boolean;
+    detail: string;
+  }>;
+};
+
+export function buildPlaybookPreview(input: {
+  tenantName?: string | undefined;
+  knowledgeCount?: number;
+  channelConnections?: ChannelConnection[];
+  automationSettings?: WidgetAutomationSettings;
+  bookingUrl?: string;
+  missingKnowledgeCount?: number;
+  leadCaptureEnabled?: boolean;
+  readinessEnabled?: boolean;
+}): PlaybookPreview {
+  const connectedChannels =
+    input.channelConnections?.filter(
+      (connection) =>
+        connection.status === "connected" || connection.channel === "website",
+    ).length ?? 0;
+  const knowledgeCount = input.knowledgeCount ?? 0;
+  const missingKnowledgeCount = input.missingKnowledgeCount ?? 0;
+  const steps = [
+    {
+      label: "Business profile",
+      done: Boolean(input.tenantName),
+      detail: input.tenantName ?? "Project name missing",
+    },
+    {
+      label: "Approved answers",
+      done: knowledgeCount >= 5 && missingKnowledgeCount === 0,
+      detail: `${knowledgeCount} approved, ${missingKnowledgeCount} gaps`,
+    },
+    {
+      label: "Website lead capture",
+      done: Boolean(input.leadCaptureEnabled),
+      detail: input.leadCaptureEnabled ? "Lead form active" : "Lead form off",
+    },
+    {
+      label: "Booking handoff",
+      done: Boolean(input.bookingUrl),
+      detail: input.bookingUrl ? "Booking URL ready" : "Booking URL missing",
+    },
+    {
+      label: "Owner alerts",
+      done: Boolean(input.automationSettings?.ownerLeadEmailEnabled),
+      detail: input.automationSettings?.ownerLeadEmailEnabled
+        ? "Owner notified"
+        : "Owner alerts off",
+    },
+    {
+      label: "Readiness flow",
+      done: Boolean(input.readinessEnabled),
+      detail: input.readinessEnabled ? "Scoring active" : "Scoring off",
+    },
+    {
+      label: "Channel expansion",
+      done: connectedChannels >= 2,
+      detail: `${connectedChannels} channel${connectedChannels === 1 ? "" : "s"} ready`,
+    },
+  ];
+  const completed = steps.filter((step) => step.done).length;
+  const nextStep =
+    steps.find((step) => !step.done)?.label ?? "Monitor outcomes";
+
+  return {
+    title: "Assad Dar AI Consultancy playbook",
+    stage:
+      completed === steps.length
+        ? "Running"
+        : completed >= 5
+          ? "Nearly ready"
+          : "Setup",
+    completed,
+    total: steps.length,
+    nextStep,
+    steps,
+  };
+}
+
+export type CustomerPortalPreview = {
+  url: string;
+  status: string;
+  score: number;
+  primaryAction: string;
+  modules: Array<{
+    label: string;
+    done: boolean;
+    detail: string;
+  }>;
+};
+
+export function buildCustomerPortalPreview(input: {
+  tenant?: Pick<Tenant, "name" | "slug" | "publicId"> | null | undefined;
+  siteUrl?: string;
+  bookingUrl?: string;
+  leadCaptureEnabled?: boolean;
+  readinessEnabled?: boolean;
+  consentEnabled?: boolean;
+  contactsCount?: number;
+  conversationsCount?: number;
+  openHandoffsCount?: number;
+}): CustomerPortalPreview {
+  const baseUrl = normalizeBaseUrl(input.siteUrl || defaultSiteUrl);
+  const slug = input.tenant?.slug || input.tenant?.publicId || "project";
+  const modules = [
+    {
+      label: "Conversation history",
+      done: (input.conversationsCount ?? 0) > 0,
+      detail: `${input.conversationsCount ?? 0} conversations`,
+    },
+    {
+      label: "Contact profile",
+      done: (input.contactsCount ?? 0) > 0,
+      detail: `${input.contactsCount ?? 0} known contacts`,
+    },
+    {
+      label: "Booking",
+      done: Boolean(input.bookingUrl),
+      detail: input.bookingUrl ? "Booking link ready" : "Booking link missing",
+    },
+    {
+      label: "Readiness score",
+      done: Boolean(input.readinessEnabled),
+      detail: input.readinessEnabled ? "Enabled" : "Off",
+    },
+    {
+      label: "Consent",
+      done: Boolean(input.consentEnabled),
+      detail: input.consentEnabled ? "Consent shown" : "Consent hidden",
+    },
+    {
+      label: "Human follow-up",
+      done: Boolean(input.leadCaptureEnabled),
+      detail: `${input.openHandoffsCount ?? 0} open handoffs`,
+    },
+  ];
+  const completed = modules.filter((module) => module.done).length;
+  const score = Math.round((completed / modules.length) * 100);
+
+  return {
+    url: `${baseUrl}/portal/${slug}`,
+    status:
+      score >= 80 ? "Ready preview" : score >= 50 ? "Needs content" : "Setup",
+    score,
+    primaryAction:
+      modules.find((module) => !module.done)?.label ?? "Share preview",
+    modules,
+  };
 }
 
 export function formatWindowState(compliance: WhatsappCompliance | null) {
