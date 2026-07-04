@@ -21,7 +21,7 @@ export const InboundMessageSchema = z.object({
   externalUserId: z.string().min(1).max(256).optional(),
   text: z.string().min(1).max(4000),
   locale: z.string().min(2).max(16).optional(),
-  metadata: z.record(z.unknown()).default({}),
+  metadata: z.record(z.string(), z.unknown()).default({}),
 });
 
 export type InboundMessage = z.infer<typeof InboundMessageSchema>;

@@ -10,7 +10,7 @@ export const NormalizedInboundEventSchema = z.object({
   externalConversationId: z.string().min(1).optional(),
   externalUserId: z.string().min(1).optional(),
   text: z.string().min(1).max(4000),
-  raw: z.record(z.unknown()).default({}),
+  raw: z.record(z.string(), z.unknown()).default({}),
 });
 
 export type NormalizedInboundEvent = z.infer<

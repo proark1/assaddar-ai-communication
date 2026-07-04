@@ -58,7 +58,7 @@ const VoiceTurnBodySchema = z.object({
   to: z.string().trim().min(1).max(80).optional(),
   provider: z.string().trim().min(1).max(80).default("sip_edge"),
   locale: z.string().trim().min(2).max(16).optional(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 const port = Number(process.env.VOICE_PORT ?? process.env.PORT ?? 4100);

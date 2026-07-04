@@ -183,7 +183,7 @@ export const BrainOnboardingAnswerSchema = z.object({
   answer: z.string().trim().min(1).max(4000),
   category: z.string().trim().min(1).max(80).optional(),
   status: z.enum(["draft", "approved", "archived"]).optional(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 export const UpsertBrainOnboardingSchema = z.object({
@@ -209,7 +209,7 @@ export const CreateKnowledgeSuggestionSchema = z.object({
   suggestedAnswer: z.string().trim().min(3).max(4000).nullable().optional(),
   suggestedTitle: z.string().trim().min(3).max(500).nullable().optional(),
   suggestedTags: z.array(z.string().trim().min(1).max(60)).max(20).optional(),
-  suggestedMetadata: z.record(z.unknown()).optional(),
+  suggestedMetadata: z.record(z.string(), z.unknown()).optional(),
   confidence: z.number().min(0).max(1).optional(),
 });
 
@@ -226,7 +226,7 @@ export const KnowledgeDocumentUploadSchema = z.object({
   contentType: z.string().trim().min(1).max(120),
   contentBase64: z.string().min(1).max(7_000_000),
   suggestedTags: z.array(z.string().trim().min(1).max(60)).max(20).optional(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
   maxSuggestions: z.number().int().min(1).max(20).optional(),
 });
 
@@ -262,7 +262,7 @@ export const WidgetLeadSchema = z.object({
   visitorId: z.string().min(1).max(120).optional(),
   pageUrl: z.string().url().max(500).optional(),
   fields: z
-    .record(z.string().max(1000))
+    .record(z.string(), z.string().max(1000))
     .refine(
       (fields) => Object.values(fields).some((value) => value.trim()),
       "At least one lead field is required.",
@@ -275,7 +275,7 @@ export const WidgetReadinessSchema = z.object({
   visitorId: z.string().min(1).max(120).optional(),
   pageUrl: z.string().url().max(500).optional(),
   answers: z
-    .record(z.string().max(1200))
+    .record(z.string(), z.string().max(1200))
     .refine(
       (answers) => Object.values(answers).some((value) => value.trim()),
       "At least one readiness answer is required.",
@@ -293,7 +293,7 @@ export const WidgetEventSchema = z.object({
     "cta_clicked",
     "intake_mode_selected",
   ]),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 export const MetaWebhookQuerySchema = z.object({
@@ -313,7 +313,7 @@ export const ChannelConnectionSchema = z.object({
   provider: z.string().min(1).max(80),
   externalAccountId: z.string().max(256).nullable().optional(),
   status: z.enum(["pending", "connected", "disabled"]).optional(),
-  settings: z.record(z.unknown()).optional(),
+  settings: z.record(z.string(), z.unknown()).optional(),
 });
 
 export const E164PhoneNumberSchema = z
@@ -379,7 +379,7 @@ export const TelephoneNumberInventorySchema = z.object({
     .enum(["available", "reserved", "assigned", "suspended", "retired"])
     .default("available"),
   assignedTenantId: z.string().uuid().nullable().optional(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 export const TelephoneNumberInventoryUpdateSchema =
@@ -389,7 +389,7 @@ export const BillableAcceptedCallSchema = z.object({
   providerCallId: z.string().trim().min(1).max(160),
   quantity: z.number().int().min(1).max(1).default(1),
   unitAmountCents: z.number().int().min(0).max(10_000).default(10),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 export const PurchaseTwilioNumberSchema = z.object({
@@ -540,7 +540,7 @@ export const WhatsappTemplateSchema = z.object({
   body: z.string().min(5).max(1024),
   variables: z.array(z.string().min(1).max(80)).max(20).optional(),
   providerTemplateId: z.string().max(240).nullable().optional(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 export const WebsiteImportSchema = z.object({
