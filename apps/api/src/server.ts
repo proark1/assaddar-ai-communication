@@ -11,6 +11,7 @@ import {
   createAnswerEngine,
   InboundMessageSchema,
   type AnswerDataStore,
+  type AnswerResult,
   type Channel,
   type GroundedAnswerGenerator,
   type HandoffStore,
@@ -2170,7 +2171,27 @@ export async function buildServer(
     },
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
-      return buildDashboardBootstrap(options, request, tenantId);
+      const startedAtMs = Date.now();
+      try {
+        const result = await buildDashboardBootstrap(
+          options,
+          request,
+          tenantId,
+        );
+        metrics.observeOperation(
+          "admin_dashboard_bootstrap",
+          "success",
+          startedAtMs,
+        );
+        return result;
+      } catch (error) {
+        metrics.observeOperation(
+          "admin_dashboard_bootstrap",
+          "error",
+          startedAtMs,
+        );
+        throw error;
+      }
     },
   );
 
@@ -2179,15 +2200,26 @@ export async function buildServer(
     { preHandler: requireTenantAccess(options, "viewer") },
     async (request, reply) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
-      const readiness = await buildProductionReadinessForTenant(
-        options,
-        request,
-        tenantId,
-      );
-      if (!readiness) {
-        return reply.code(404).send({ error: "Tenant not found." });
+      const startedAtMs = Date.now();
+      try {
+        const readiness = await buildProductionReadinessForTenant(
+          options,
+          request,
+          tenantId,
+        );
+        metrics.observeOperation(
+          "production_readiness",
+          "success",
+          startedAtMs,
+        );
+        if (!readiness) {
+          return reply.code(404).send({ error: "Tenant not found." });
+        }
+        return readiness;
+      } catch (error) {
+        metrics.observeOperation("production_readiness", "error", startedAtMs);
+        throw error;
       }
-      return readiness;
     },
   );
 
@@ -2701,17 +2733,25 @@ export async function buildServer(
         content: event.text,
       });
 
-      const answer = await engine.answer(
-        InboundMessageSchema.parse({
-          tenantId: tenant.id,
-          conversationId: conversation.id,
-          channel: "website",
-          externalUserId: body.visitorId,
-          text: event.text,
-          locale: body.locale ?? tenant.defaultLocale,
-          metadata: {},
-        }),
-      );
+      const answerStartedAtMs = Date.now();
+      let answer: AnswerResult;
+      try {
+        answer = await engine.answer(
+          InboundMessageSchema.parse({
+            tenantId: tenant.id,
+            conversationId: conversation.id,
+            channel: "website",
+            externalUserId: body.visitorId,
+            text: event.text,
+            locale: body.locale ?? tenant.defaultLocale,
+            metadata: {},
+          }),
+        );
+        metrics.observeOperation("widget_answer", "success", answerStartedAtMs);
+      } catch (error) {
+        metrics.observeOperation("widget_answer", "error", answerStartedAtMs);
+        throw error;
+      }
 
       await options.store.addMessage({
         tenantId: tenant.id,

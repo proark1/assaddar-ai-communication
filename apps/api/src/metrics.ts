@@ -198,6 +198,13 @@ export class MetricsRegistry {
     "Total number of captured (unhandled) errors, by kind.",
   );
 
+  /** Distribution of selected internal operation durations. */
+  readonly appOperationDuration = new Histogram(
+    "app_operation_duration_seconds",
+    "Internal operation duration in seconds, by low-cardinality operation name and status.",
+    DURATION_BUCKETS_SECONDS,
+  );
+
   private readonly startedAtMs = Date.now();
 
   private readonly gauges = [
@@ -219,9 +226,21 @@ export class MetricsRegistry {
       this.httpRequestsTotal.render(),
       this.httpRequestDuration.render(),
       this.errorsTotal.render(),
+      this.appOperationDuration.render(),
       ...this.gauges.map((gauge) => gauge.render()),
     ];
     // Exposition format requires a trailing newline.
     return `${blocks.join("\n")}\n`;
+  }
+
+  observeOperation(
+    operation: string,
+    status: "success" | "error",
+    startedAtMs: number,
+  ): void {
+    this.appOperationDuration.observe(
+      { operation, status },
+      (Date.now() - startedAtMs) / 1000,
+    );
   }
 }

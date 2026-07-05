@@ -8,6 +8,7 @@
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage --coverage.provider=v8 --coverage.reporter=text --coverage.reporter=html --coverage.reportsDirectory=../../coverage/api",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

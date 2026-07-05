@@ -163,16 +163,17 @@ export class AnswerEngine {
       detail: intent.name,
     });
 
-    const chunks = await this.dataStore.searchKnowledge(
+    const keywordSearch = this.dataStore.searchKnowledge(
       input.tenantId,
       normalized,
       this.retrievalLimit,
     );
+    const semanticSearch = this.semanticSearch(input.tenantId, normalized);
+    const [chunks, semanticRanked] = await Promise.all([
+      keywordSearch,
+      semanticSearch,
+    ]);
     const keywordRanked = rankChunks(normalized, chunks);
-    const semanticRanked = await this.semanticSearch(
-      input.tenantId,
-      normalized,
-    );
     const rankedChunks = mergeRankedChunks(keywordRanked, semanticRanked);
     if (semanticRanked.length > 0) {
       trace.push({

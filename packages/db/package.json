@@ -15,6 +15,7 @@
     "migrate": "tsx src/migrate.ts",
     "seed": "tsx src/seed.ts",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage --coverage.provider=v8 --coverage.reporter=text --coverage.reporter=html --coverage.reportsDirectory=../../coverage/db",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

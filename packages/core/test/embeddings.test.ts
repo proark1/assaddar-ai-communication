@@ -82,6 +82,51 @@ function permissivePolicy(tenantId: string, keywords: string[]) {
 }
 
 describe("AnswerEngine hybrid retrieval", () => {
+  it("starts keyword and semantic retrieval in parallel", async () => {
+    let semanticStarted = false;
+    let releaseKeyword: (() => void) | undefined;
+    let keywordTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const store: AnswerDataStore = {
+      async getTenantPolicy(tenantId) {
+        return permissivePolicy(tenantId, ["credit", "cards", "payment"]);
+      },
+      async searchKnowledge() {
+        await new Promise<void>((resolve, reject) => {
+          releaseKeyword = resolve;
+          keywordTimer = setTimeout(
+            () => reject(new Error("semantic search did not start in time")),
+            100,
+          );
+        });
+        if (keywordTimer) {
+          clearTimeout(keywordTimer);
+        }
+        return [chunk("kw-1", "We accept credit cards and PayPal.")];
+      },
+      async searchKnowledgeByEmbedding() {
+        semanticStarted = true;
+        releaseKeyword?.();
+        return [];
+      },
+    };
+
+    const engine = createAnswerEngine({
+      dataStore: store,
+      embedder: async () => [0.1, 0.2, 0.3],
+    });
+
+    const result = await engine.answer({
+      tenantId: tenant,
+      channel: "website",
+      text: "credit cards",
+      metadata: {},
+    });
+
+    expect(result.status).toBe("answered");
+    expect(semanticStarted).toBe(true);
+  });
+
   it("surfaces a semantically-similar chunk the keyword search misses", async () => {
     const store: AnswerDataStore = {
       async getTenantPolicy(tenantId) {

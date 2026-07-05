@@ -102,6 +102,59 @@ test("widget renders inside a shadow root and sends a grounded message", async (
   expect(resetState.messages).toHaveLength(1);
 });
 
+test("widget tracks non-critical events with sendBeacon when available", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "sendBeacon", {
+      configurable: true,
+      value: (url: string, data: BodyInit | null) => {
+        (
+          window as unknown as {
+            __assaddarBeacon?: { url: string; type: string };
+          }
+        ).__assaddarBeacon = {
+          url,
+          type: data instanceof Blob ? data.type : typeof data,
+        };
+        return true;
+      },
+    });
+  });
+
+  await page.route("**/widget/config/**", async (route) => {
+    await route.fulfill({
+      json: {
+        assistantId: "asst_test",
+        tenantName: "Test Tenant",
+        defaultLocale: "en",
+        theme: {
+          openingMessage: "Hi from test",
+        },
+        limits: {
+          maxMessageLength: 1200,
+        },
+      },
+    });
+  });
+
+  await expect(await loadWidget(page)).toBe(true);
+  await page.getByRole("button", { name: "Chat" }).click();
+
+  const beacon = await page.evaluate(
+    () =>
+      (
+        window as unknown as {
+          __assaddarBeacon?: { url: string; type: string };
+        }
+      ).__assaddarBeacon,
+  );
+  expect(beacon).toMatchObject({
+    url: "http://127.0.0.1:5174/widget/events",
+    type: "application/json",
+  });
+});
+
 test("widget shows pending and rate-limit feedback", async ({ page }) => {
   await page.route("**/widget/config/**", async (route) => {
     await route.fulfill({

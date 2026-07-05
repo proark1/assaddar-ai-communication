@@ -23,9 +23,10 @@
     "format:check": "prettier --check .",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
+    "quality:budgets": "node scripts/check-budgets.mjs",
     "smoke:api": "node scripts/smoke-api.mjs",
     "test": "pnpm -r --if-present test",
-    "test:coverage": "vitest run --coverage --coverage.provider=v8 --coverage.reporter=text --coverage.reporter=html --coverage.reportsDirectory=coverage --coverage.include='packages/*/src/**' --coverage.include='apps/api/src/**' --coverage.exclude='**/*.test.ts' --coverage.exclude='**/*.config.*' --coverage.exclude='**/dist/**' --coverage.exclude='**/node_modules/**'",
+    "test:coverage": "pnpm -r --if-present test:coverage",
     "typecheck": "pnpm -r --if-present typecheck",
     "prepare": "husky"
   },

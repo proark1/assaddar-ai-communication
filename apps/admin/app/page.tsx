@@ -619,6 +619,7 @@ export default function DashboardPage() {
   const { toasts, pushToast, dismissToast } = useToasts();
   const copiedResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const workspaceRefreshId = useRef(0);
+  const inFlightGetRequests = useRef(new Map<string, Promise<unknown>>());
 
   const normalizedApiBase = normalizeBaseUrl(apiBase);
   const selectedTenant = useMemo(
@@ -1626,29 +1627,55 @@ export default function DashboardPage() {
   }
 
   async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-    const response = await fetch(`${normalizedApiBase}${path}`, {
+    const method = init?.method?.toUpperCase() ?? "GET";
+    const url = `${normalizedApiBase}${path}`;
+    const headers = {
+      "content-type": "application/json",
+      ...(adminToken ? { "x-admin-token": adminToken } : {}),
+      ...(!adminToken && supabaseAccessToken
+        ? { authorization: `Bearer ${supabaseAccessToken}` }
+        : {}),
+      ...(init?.headers ?? {}),
+    };
+    const canDedupe = method === "GET" && !init?.body;
+    const dedupeKey = canDedupe
+      ? `${method} ${url} ${JSON.stringify(headers)}`
+      : "";
+
+    if (dedupeKey) {
+      const existing = inFlightGetRequests.current.get(dedupeKey);
+      if (existing) {
+        return existing as Promise<T>;
+      }
+    }
+
+    const request = fetch(url, {
       ...init,
+      method,
       credentials: "include",
-      headers: {
-        "content-type": "application/json",
-        ...(adminToken ? { "x-admin-token": adminToken } : {}),
-        ...(!adminToken && supabaseAccessToken
-          ? { authorization: `Bearer ${supabaseAccessToken}` }
-          : {}),
-        ...(init?.headers ?? {}),
-      },
+      headers,
+    }).then(async (response) => {
+      if (!response.ok) {
+        const body = await response.text();
+        throw new Error(body || `${response.status} ${response.statusText}`);
+      }
+
+      if (response.status === 204) {
+        return undefined as T;
+      }
+
+      return response.json() as Promise<T>;
     });
 
-    if (!response.ok) {
-      const body = await response.text();
-      throw new Error(body || `${response.status} ${response.statusText}`);
+    if (dedupeKey) {
+      inFlightGetRequests.current.set(dedupeKey, request);
+      request.then(
+        () => inFlightGetRequests.current.delete(dedupeKey),
+        () => inFlightGetRequests.current.delete(dedupeKey),
+      );
     }
 
-    if (response.status === 204) {
-      return undefined as T;
-    }
-
-    return response.json() as Promise<T>;
+    return request;
   }
 
   async function refreshTenants() {

@@ -1609,20 +1609,34 @@ void (() => {
       | "intake_mode_selected",
     metadata: Record<string, unknown> = {},
   ) {
+    const payload = JSON.stringify({
+      assistantId: context.config.assistantId,
+      conversationId: state.conversationId,
+      visitorId: state.visitorId,
+      pageUrl: window.location.href,
+      eventType,
+      metadata,
+    });
+    const url = `${context.apiBase}/widget/events`;
+
     try {
-      await fetch(`${context.apiBase}/widget/events`, {
+      if (navigator.sendBeacon) {
+        const queued = navigator.sendBeacon(
+          url,
+          new Blob([payload], { type: "application/json" }),
+        );
+        if (queued) {
+          return;
+        }
+      }
+
+      await fetch(url, {
         method: "POST",
+        keepalive: true,
         headers: {
           "content-type": "application/json",
         },
-        body: JSON.stringify({
-          assistantId: context.config.assistantId,
-          conversationId: state.conversationId,
-          visitorId: state.visitorId,
-          pageUrl: window.location.href,
-          eventType,
-          metadata,
-        }),
+        body: payload,
       });
     } catch {
       // Analytics must never block the visitor experience.
@@ -1700,10 +1714,15 @@ void (() => {
     // const declared further down would be initialised (temporal dead zone).
     const MAX_FETCH_RETRIES = 2;
     const RETRY_BASE_DELAY_MS = 300;
+    const FETCH_TIMEOUT_MS = 15_000;
     let lastError: unknown;
     for (let attempt = 0; attempt <= MAX_FETCH_RETRIES; attempt += 1) {
+      const timeout = createTimeoutSignal(init?.signal, FETCH_TIMEOUT_MS);
       try {
-        const response = await fetch(url, init);
+        const response = await fetch(url, {
+          ...init,
+          signal: timeout.signal,
+        });
         if (response.status >= 500 && attempt < MAX_FETCH_RETRIES) {
           await delay(RETRY_BASE_DELAY_MS * 2 ** attempt);
           continue;
@@ -1715,9 +1734,32 @@ void (() => {
           await delay(RETRY_BASE_DELAY_MS * 2 ** attempt);
           continue;
         }
+      } finally {
+        timeout.clear();
       }
     }
     throw lastError instanceof Error ? lastError : new Error("Network error");
+  }
+
+  function createTimeoutSignal(
+    signal: AbortSignal | null | undefined,
+    ms: number,
+  ) {
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    const timeoutId = window.setTimeout(abort, ms);
+    if (signal?.aborted) {
+      abort();
+    } else {
+      signal?.addEventListener("abort", abort, { once: true });
+    }
+    return {
+      signal: controller.signal,
+      clear() {
+        window.clearTimeout(timeoutId);
+        signal?.removeEventListener("abort", abort);
+      },
+    };
   }
 
   async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {

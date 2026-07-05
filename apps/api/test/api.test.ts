@@ -3185,6 +3185,15 @@ describe("API", () => {
     expect(chatResponse.json<{ reply: string }>().reply).toContain("09:00");
     expect(store.messages).toHaveLength(2);
 
+    const metricsResponse = await app.inject({
+      method: "GET",
+      url: "/metrics",
+    });
+    expect(metricsResponse.statusCode).toBe(200);
+    expect(metricsResponse.body).toContain(
+      'app_operation_duration_seconds_count{operation="widget_answer",status="success"} 1',
+    );
+
     await app.close();
   });
 

@@ -54,6 +54,9 @@ jobs:
       - name: Test
         run: pnpm test
 
+      - name: Coverage
+        run: pnpm test:coverage
+
       - name: Test voice edge
         working-directory: apps/voice-edge
         run: go test ./...
@@ -63,6 +66,9 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+      - name: Quality budgets
+        run: pnpm quality:budgets
 
   smoke:
     name: API smoke test

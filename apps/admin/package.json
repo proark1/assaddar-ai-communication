@@ -8,7 +8,8 @@
     "dev": "next dev -p 3000",
     "start": "next start -H 0.0.0.0 -p ${PORT:-3000}",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage --coverage.provider=v8 --coverage.reporter=text --coverage.reporter=html --coverage.reportsDirectory=../../coverage/admin"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.110.0",
