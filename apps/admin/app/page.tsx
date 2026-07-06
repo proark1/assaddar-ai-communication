@@ -3703,6 +3703,8 @@ export default function DashboardPage() {
           knowledge={analytics?.approvedKnowledge ?? knowledge.length}
           openHandoffs={analytics?.openHandoffs ?? openHandoffs.length}
           unanswered={unansweredCount}
+          onOpenAnswers={() => setActiveTab("knowledge")}
+          onOpenInbox={() => setActiveTab("leads")}
         />
         <AnalyticsPanel analytics={analytics} />
       </>
@@ -4305,6 +4307,22 @@ export default function DashboardPage() {
   function renderKnowledgeLoopPanel(canEditKnowledge: boolean) {
     const bestGap =
       unansweredTopicGroups[0]?.items[0] ?? unansweredQuestions[0];
+    const openKnowledgeManager = () => {
+      document
+        .getElementById("knowledge-manager")
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    };
+    const openTestStudio = () => {
+      if (bestGap && !testMessage) {
+        setTestMessage(bestGap.question);
+      }
+      setActiveTab("settings");
+      window.setTimeout(() => {
+        document
+          .getElementById("test-settings")
+          ?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 0);
+    };
     const loopSteps = [
       {
         label: "Find gap",
@@ -4312,6 +4330,8 @@ export default function DashboardPage() {
         detail: bestGap
           ? `${unansweredQuestions.length} unanswered question${unansweredQuestions.length === 1 ? "" : "s"} waiting`
           : "No active customer gaps",
+        action: () => bestGap && draftFaqFromUnanswered(bestGap),
+        disabled: !bestGap || !canEditKnowledge,
       },
       {
         label: "Draft answer",
@@ -4320,6 +4340,8 @@ export default function DashboardPage() {
           question && answer
             ? "Candidate FAQ ready"
             : "Use a real customer question",
+        action: openKnowledgeManager,
+        disabled: false,
       },
       {
         label: "Publish FAQ",
@@ -4330,6 +4352,8 @@ export default function DashboardPage() {
               question.trim().toLowerCase(),
         ),
         detail: "Save it as approved knowledge",
+        action: openKnowledgeManager,
+        disabled: false,
       },
       {
         label: "Retest",
@@ -4337,6 +4361,8 @@ export default function DashboardPage() {
         detail: testAnswer
           ? `${titleCase(testAnswer.status)} at ${Math.round(testAnswer.confidence * 100)}% confidence`
           : "Run the same question in Test",
+        action: openTestStudio,
+        disabled: !testMessage && !bestGap,
       },
     ];
 
@@ -4351,11 +4377,18 @@ export default function DashboardPage() {
         </div>
         <div className="loopStepGrid">
           {loopSteps.map((step, index) => (
-            <article data-done={step.done ? "true" : "false"} key={step.label}>
+            <button
+              className="loopStepCard"
+              data-done={step.done ? "true" : "false"}
+              disabled={step.disabled}
+              key={step.label}
+              type="button"
+              onClick={step.action}
+            >
               <small>{index + 1}</small>
               <strong>{step.label}</strong>
               <span>{step.detail}</span>
-            </article>
+            </button>
           ))}
         </div>
         <div className="loopFocus">
@@ -4384,17 +4417,7 @@ export default function DashboardPage() {
               className="primaryButton"
               type="button"
               disabled={!testMessage && !bestGap}
-              onClick={() => {
-                if (bestGap && !testMessage) {
-                  setTestMessage(bestGap.question);
-                }
-                setActiveTab("settings");
-                window.setTimeout(() => {
-                  document
-                    .getElementById("test-settings")
-                    ?.scrollIntoView({ behavior: "smooth", block: "start" });
-                }, 0);
-              }}
+              onClick={openTestStudio}
             >
               <MessageCircle size={15} />
               Open test
@@ -4416,8 +4439,7 @@ export default function DashboardPage() {
           <span className="countPill">{knowledgeIngestionJobs.length}</span>
         </div>
         <div className="knowledgeTools">
-          <label className="field">
-            <span>File</span>
+          <label className="filePicker">
             <input
               key={knowledgeUploadFile?.name ?? "empty-upload"}
               type="file"
@@ -4427,6 +4449,13 @@ export default function DashboardPage() {
                 setKnowledgeUploadFile(event.target.files?.[0] ?? null)
               }
             />
+            <span className="filePickerIcon">
+              <Upload size={18} />
+            </span>
+            <span>
+              <strong>{knowledgeUploadFile?.name ?? "Choose document"}</strong>
+              <small>TXT, Markdown, CSV, JSON, or PDF</small>
+            </span>
           </label>
           <button
             className="primaryButton"
@@ -4615,7 +4644,7 @@ export default function DashboardPage() {
         {renderKnowledgeLoopPanel(canEditKnowledge)}
         {renderKnowledgeUploadsPanel(canEditKnowledge)}
         {renderKnowledgeSuggestionsPanel(canEditKnowledge)}
-        <section className="panel">
+        <section className="panel" id="knowledge-manager">
           <div className="panelHeader">
             <div className="panelTitle">
               <Database size={18} />
@@ -7068,33 +7097,47 @@ export default function DashboardPage() {
     return (
       <div className="workspaceStack">
         <section className="metricsGrid compactMetrics">
-          <article className="metricCard">
+          <button
+            className="metricCard metricButton"
+            type="button"
+            onClick={() => openChannelsSection("connect-channels")}
+          >
             <Globe2 size={18} />
             <span>Channels</span>
             <strong>{channelConnections.length}</strong>
-          </article>
-          <article className="metricCard">
+          </button>
+          <button
+            className="metricCard metricButton"
+            type="button"
+            onClick={() => openChannelsSection("connect-channels")}
+          >
             <CheckCircle2 size={18} />
             <span>Connected</span>
             <strong>{connectedChannelCount}</strong>
-          </article>
-          <article className="metricCard">
+          </button>
+          <button
+            className="metricCard metricButton"
+            type="button"
+            onClick={() => openChannelsSection("connect-channels")}
+          >
             <MessageCircle size={18} />
             <span>Messaging ready</span>
             <strong>{messagingChannelsReady}</strong>
-          </article>
-          <article
-            className="metricCard"
+          </button>
+          <button
+            className="metricCard metricButton"
             data-alert={
               telephoneConnection?.status === "connected" ? "false" : "true"
             }
+            type="button"
+            onClick={() => openChannelsSection("telephone-channel-setup")}
           >
             <Inbox size={18} />
             <span>Telephone</span>
             <strong>
               {telephoneConnection?.status === "connected" ? "Ready" : "Setup"}
             </strong>
-          </article>
+          </button>
         </section>
 
         <section className="panel channelLaunchPanel">
@@ -7106,22 +7149,34 @@ export default function DashboardPage() {
             <span className="countPill">Recommended</span>
           </div>
           <div className="channelLaunchMap">
-            <article data-step="1">
+            <button
+              data-step="1"
+              type="button"
+              onClick={() => openSettingsSection("widget-settings")}
+            >
               <strong>Website first</strong>
               <span>Embed the assistant and capture the first leads.</span>
-            </article>
-            <article data-step="2">
+            </button>
+            <button
+              data-step="2"
+              type="button"
+              onClick={() => openChannelsSection("telephone-channel-setup")}
+            >
               <strong>Telephone AI</strong>
               <span>
                 Connect a provider number or SIP trunk and run test calls.
               </span>
-            </article>
-            <article data-step="3">
+            </button>
+            <button
+              data-step="3"
+              type="button"
+              onClick={() => openChannelsSection("connect-channels")}
+            >
               <strong>Messaging and email</strong>
               <span>
                 Add WhatsApp, Messenger, Instagram, Telegram, and Email.
               </span>
-            </article>
+            </button>
           </div>
           {!canEditChannels ? (
             <div className="inlineNotice">
@@ -7135,7 +7190,7 @@ export default function DashboardPage() {
 
         {renderTelephoneSetup(telephoneConnection)}
 
-        <section className="panel">
+        <section className="panel" id="connect-channels">
           <div className="panelHeader">
             <div className="panelTitle">
               <Globe2 size={18} />
@@ -7157,9 +7212,16 @@ export default function DashboardPage() {
           <div className="channelGrid">
             {channelConnections
               .filter((connection) => connection.channel !== "telephone")
-              .map((connection) => {
+              .map((connection, index) => {
                 const webhook =
                   connection.assistantWebhookUrl ?? connection.webhookUrl ?? "";
+                const connectionKey = [
+                  connection.channel,
+                  connection.provider,
+                  connection.externalAccountId ?? "default",
+                  webhook || "no-webhook",
+                  index,
+                ].join("-");
                 const draftValue =
                   channelAccountDrafts[connection.channel] ??
                   connection.externalAccountId ??
@@ -7169,7 +7231,7 @@ export default function DashboardPage() {
                   channelImplementationGuides[connection.channel];
                 const details = channelExperienceDetails[connection.channel];
                 return (
-                  <article className="channelCard" key={connection.channel}>
+                  <article className="channelCard" key={connectionKey}>
                     <div className="channelCardHeader">
                       <div>
                         <strong>{connection.label}</strong>
@@ -7188,7 +7250,7 @@ export default function DashboardPage() {
 
                     <ol className="channelTutorial">
                       {details.tutorial.map((step) => (
-                        <li key={step}>{step}</li>
+                        <li key={`${connectionKey}-${step}`}>{step}</li>
                       ))}
                     </ol>
 
@@ -7196,7 +7258,7 @@ export default function DashboardPage() {
                       {getChannelSetupSteps(connection, webhook).map((step) => (
                         <article
                           data-done={step.done ? "true" : "false"}
-                          key={step.label}
+                          key={`${connectionKey}-${step.label}`}
                         >
                           {step.done ? (
                             <CheckCircle2 size={16} />
@@ -7500,7 +7562,10 @@ export default function DashboardPage() {
     });
 
     return (
-      <section className="panel telephoneSetupPanel">
+      <section
+        className="panel telephoneSetupPanel"
+        id="telephone-channel-setup"
+      >
         <div className="panelHeader">
           <div className="panelTitle">
             <PhoneCall size={18} />
@@ -9493,6 +9558,15 @@ export default function DashboardPage() {
 
   function openSettingsSection(sectionId: string) {
     setActiveTab("settings");
+    window.setTimeout(() => {
+      document
+        .getElementById(sectionId)
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 0);
+  }
+
+  function openChannelsSection(sectionId: string) {
+    setActiveTab("channels");
     window.setTimeout(() => {
       document
         .getElementById(sectionId)

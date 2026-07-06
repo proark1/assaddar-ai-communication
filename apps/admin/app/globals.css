@@ -101,7 +101,9 @@ textarea:focus-visible {
 
 /* Hamburger menu button + sidebar close button: hidden on desktop. */
 .menuButton,
-.sidebarClose {
+.sidebarClose,
+.iconButton.menuButton,
+.iconButton.sidebarClose {
   display: none;
 }
 
@@ -712,7 +714,10 @@ textarea {
   min-width: 0;
 }
 
-.settingsSection {
+.settingsSection,
+#knowledge-manager,
+#connect-channels,
+#telephone-channel-setup {
   scroll-margin-top: 92px;
 }
 
@@ -735,6 +740,24 @@ textarea {
   background: rgba(255, 255, 255, 0.96);
   box-shadow: var(--shadow-soft);
   padding: 14px;
+}
+
+.metricButton {
+  width: 100%;
+  min-height: 74px;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  transition:
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    transform 140ms ease;
+}
+
+.metricButton:hover:not(:disabled) {
+  border-color: rgba(47, 111, 115, 0.34);
+  box-shadow: 0 14px 30px -22px rgba(22, 25, 30, 0.58);
+  transform: translateY(-1px);
 }
 
 .metricCard svg {
@@ -1163,6 +1186,78 @@ textarea {
   grid-template-columns: minmax(0, 1fr) 180px;
   gap: 12px;
   margin-bottom: 14px;
+}
+
+.filePicker {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  min-height: 66px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  color: var(--text);
+  padding: 10px;
+  cursor: pointer;
+  transition:
+    border-color 140ms ease,
+    background 140ms ease,
+    color 140ms ease;
+}
+
+.filePicker:hover {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+}
+
+.filePicker > input[type="file"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  border: 0;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  opacity: 0;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.filePicker:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(47, 111, 115, 0.14);
+}
+
+.filePickerIcon {
+  display: inline-flex;
+  width: 40px;
+  height: 40px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--accent);
+}
+
+.filePicker strong,
+.filePicker small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.filePicker small {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .listSearch {
@@ -2125,6 +2220,14 @@ textarea {
   text-decoration: none;
 }
 
+.primaryButton.linkButton {
+  color: #ffffff;
+}
+
+.secondaryButton.linkButton {
+  color: var(--text-soft);
+}
+
 .noteList article {
   background: var(--surface-muted);
 }
@@ -2463,16 +2566,39 @@ textarea {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
-.loopStepGrid article {
+.loopStepGrid article,
+.loopStepCard {
   display: grid;
   gap: 5px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface-muted);
+  color: var(--text);
   padding: 11px;
+  text-align: left;
 }
 
-.loopStepGrid article[data-done="true"] {
+.loopStepCard {
+  min-height: 116px;
+  cursor: pointer;
+  transition:
+    border-color 140ms ease,
+    background 140ms ease,
+    transform 140ms ease;
+}
+
+.loopStepCard:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: #fff;
+  transform: translateY(-1px);
+}
+
+.loopStepCard:disabled {
+  cursor: default;
+}
+
+.loopStepGrid article[data-done="true"],
+.loopStepCard[data-done="true"] {
   border-color: var(--green-line);
   background: var(--green-bg);
 }
@@ -2704,9 +2830,8 @@ textarea {
 }
 
 .pipelineBoard {
-  grid-template-columns: repeat(6, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   align-items: stretch;
-  overflow-x: auto;
   padding-bottom: 2px;
 }
 
@@ -3362,7 +3487,8 @@ textarea {
   gap: 10px;
 }
 
-.channelLaunchMap article {
+.channelLaunchMap article,
+.channelLaunchMap button {
   position: relative;
   display: grid;
   gap: 5px;
@@ -3370,10 +3496,27 @@ textarea {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface-muted);
+  color: var(--text);
   padding: 12px 12px 12px 44px;
+  text-align: left;
 }
 
-.channelLaunchMap article::before {
+.channelLaunchMap button {
+  cursor: pointer;
+  transition:
+    border-color 140ms ease,
+    background 140ms ease,
+    transform 140ms ease;
+}
+
+.channelLaunchMap button:hover {
+  border-color: var(--accent);
+  background: #fff;
+  transform: translateY(-1px);
+}
+
+.channelLaunchMap article::before,
+.channelLaunchMap button::before {
   content: attr(data-step);
   position: absolute;
   left: 12px;
@@ -5000,6 +5143,10 @@ textarea {
   color: var(--accent);
 }
 
+.landingNav a.landingNavCta {
+  color: var(--accent);
+}
+
 .landingHero {
   position: relative;
   display: grid;
@@ -5092,6 +5239,10 @@ textarea {
 .landingWorkflow,
 .landingCta {
   padding: clamp(44px, 7vw, 86px) clamp(18px, 5vw, 72px);
+}
+
+.landingBand[id] {
+  scroll-margin-top: 86px;
 }
 
 .landingBand.tinted {
@@ -5318,7 +5469,9 @@ textarea {
   }
 
   .menuButton,
-  .sidebarClose {
+  .sidebarClose,
+  .iconButton.menuButton,
+  .iconButton.sidebarClose {
     display: inline-flex;
   }
 
@@ -5442,6 +5595,24 @@ textarea {
 
   .tabBar button {
     justify-content: flex-start;
+    min-height: 44px;
+  }
+
+  .homeIntro .quickActionGrid {
+    display: none;
+  }
+
+  .authPanel {
+    order: -1;
+  }
+
+  .primaryButton,
+  .secondaryButton,
+  .dangerButton,
+  .iconButton,
+  .tenantButton,
+  .quickActionGrid button {
+    min-height: 44px;
   }
 
   .workspaceIntro {
@@ -5518,7 +5689,7 @@ textarea {
   }
 
   .authIntro h1 {
-    font-size: 34px;
+    font-size: 30px;
   }
 
   .landingNav {
@@ -5528,6 +5699,16 @@ textarea {
 
   .landingNav nav {
     justify-content: flex-start;
+  }
+
+  .landingNav a {
+    display: inline-flex;
+    min-height: 32px;
+    align-items: center;
+  }
+
+  .landingBand[id] {
+    scroll-margin-top: 150px;
   }
 
   .landingHero {
