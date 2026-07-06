@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import {
   ArrowRight,
   Bot,
@@ -72,19 +73,19 @@ export default function LandingPage() {
   return (
     <main className="landingPage">
       <header className="landingNav">
-        <a className="landingBrand" href="/">
+        <Link className="landingBrand" href="/">
           <span className="brandMark">
             <Bot size={20} />
           </span>
           <span>Assaddar AI Communication</span>
-        </a>
+        </Link>
         <nav aria-label="Landing navigation">
           <a href="#platform">Platform</a>
           <a href="#channels">Channels</a>
           <a href="#implementation">Implementation</a>
-          <a className="landingNavCta" href="/">
+          <Link className="landingNavCta" href="/">
             Open admin
-          </a>
+          </Link>
         </nav>
       </header>
 
@@ -99,10 +100,10 @@ export default function LandingPage() {
             workspace.
           </p>
           <div className="landingHeroActions">
-            <a className="primaryButton linkButton" href="/">
+            <Link className="primaryButton linkButton" href="/">
               Open the admin
               <ArrowRight size={16} />
-            </a>
+            </Link>
             <a className="secondaryButton linkButton" href="#platform">
               See how it works
             </a>
@@ -232,10 +233,10 @@ export default function LandingPage() {
           </h2>
         </div>
         <div className="landingCtaActions">
-          <a className="primaryButton linkButton" href="/">
+          <Link className="primaryButton linkButton" href="/">
             Open admin
             <ArrowRight size={16} />
-          </a>
+          </Link>
           <a
             className="secondaryButton linkButton"
             href="https://www.assad-dar.de/de"

@@ -132,6 +132,14 @@ export function hasSharedIdentifier(
   return false;
 }
 
+export function contactIdentifierContainmentValues(
+  identifiers: Record<string, string[]>,
+) {
+  return Object.entries(identifiers).flatMap(([key, values]) =>
+    values.filter(Boolean).map((value) => JSON.stringify({ [key]: [value] })),
+  );
+}
+
 export function channelIdentifierKey(channel: Channel) {
   const keys: Record<string, string> = {
     website: "websiteVisitorIds",

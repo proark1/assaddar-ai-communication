@@ -53,7 +53,7 @@ import { AdminSidebar } from "./AdminSidebar";
 import { DeleteKnowledgeModal } from "./DeleteKnowledgeModal";
 import { DashboardMetrics } from "./DashboardMetrics";
 import { AnalyticsPanel } from "./AnalyticsPanel";
-import { useDialogA11y, useToasts } from "./dashboard-hooks";
+import { useDebouncedValue, useDialogA11y, useToasts } from "./dashboard-hooks";
 import {
   buildAnswerTrustSummary,
   buildContactMemorySummary,
@@ -64,6 +64,7 @@ import {
   buildLeadSummary,
   buildMailtoHref,
   buildPlaybookPreview,
+  buildTelephoneWarningsFromSettings,
   buildVoiceQualitySummary,
   buildWidgetSnippets,
   defaultTheme,
@@ -73,6 +74,7 @@ import {
   findBestKnowledgeMatch,
   formatDate,
   formatPercent,
+  formatTelephoneMode,
   formatWindowState,
   getAnswer,
   getAnswerWarnings,
@@ -95,15 +97,27 @@ import {
   isLeadRecent,
   mergeTheme,
   normalizeBaseUrl,
+  normalizeTelephoneProviderUi,
   parseFaqImport,
   parseLeadDetails,
   parseTags,
   rate,
   readableError,
   readAdminDeepLink,
+  settingAfterHoursAction,
+  settingBoolean,
+  settingBusinessHoursMode,
+  settingNumber,
+  settingRecord,
+  settingSpeakingStyle,
+  settingString,
+  settingTestCallStatus,
   statusTone,
   suggestFaqAnswerFromUnanswered,
   tabs,
+  telephoneProviderGuideUrl,
+  telephoneProviderLabel,
+  telephoneSettingString,
   titleCase,
 } from "./page-helpers";
 import type {
@@ -620,6 +634,9 @@ export default function DashboardPage() {
   const copiedResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const workspaceRefreshId = useRef(0);
   const inFlightGetRequests = useRef(new Map<string, Promise<unknown>>());
+  const debouncedKnowledgeSearch = useDebouncedValue(knowledgeSearch);
+  const debouncedInboxSearch = useDebouncedValue(inboxSearch);
+  const debouncedContactSearch = useDebouncedValue(contactSearch);
 
   const normalizedApiBase = normalizeBaseUrl(apiBase);
   const selectedTenant = useMemo(
@@ -1519,7 +1536,12 @@ export default function DashboardPage() {
         refreshKnowledgeIngestionJobs(selectedTenant.id),
       ]);
     }
-  }, [activeTab, knowledgeSearch, knowledgeStatusFilter, selectedTenant?.id]);
+  }, [
+    activeTab,
+    debouncedKnowledgeSearch,
+    knowledgeStatusFilter,
+    selectedTenant?.id,
+  ]);
 
   useEffect(() => {
     if (selectedTenant?.id && activeTab === "leads") {
@@ -1529,13 +1551,13 @@ export default function DashboardPage() {
         refreshHandoffs(selectedTenant.id),
       ]);
     }
-  }, [activeTab, inboxSearch, selectedTenant?.id]);
+  }, [activeTab, debouncedInboxSearch, selectedTenant?.id]);
 
   useEffect(() => {
     if (selectedTenant?.id && activeTab === "leads") {
       void refreshContacts(selectedTenant.id);
     }
-  }, [activeTab, contactSearch, selectedTenant?.id]);
+  }, [activeTab, debouncedContactSearch, selectedTenant?.id]);
 
   useEffect(() => {
     if (selectedTenant?.id && activeTab === "settings") {
@@ -2021,31 +2043,9 @@ export default function DashboardPage() {
         return stillLoaded ? current : "";
       });
 
-      const detailLoads: Promise<unknown>[] = [];
-      if (activeTab === "knowledge") {
-        detailLoads.push(
-          refreshKnowledge(tenantId),
-          refreshKnowledgeSuggestions(tenantId),
-          refreshKnowledgeIngestionJobs(tenantId),
-        );
-      }
-
-      if (activeTab === "leads") {
-        detailLoads.push(
-          refreshConversations(tenantId),
-          refreshUnifiedInbox(tenantId),
-        );
-      } else {
-        setUnifiedInbox([]);
-        setInboxHasMore(false);
+      if (activeTab !== "leads") {
         setSelectedConversationId("");
       }
-
-      if (activeTab === "settings" && canManageUsers(tenantId)) {
-        detailLoads.push(refreshTenantUsers(tenantId));
-      }
-
-      await Promise.allSettled(detailLoads);
     } catch (error) {
       if (workspaceRefreshId.current === refreshId) {
         setStatus(readableError(error));
@@ -2071,7 +2071,7 @@ export default function DashboardPage() {
       const items = await apiFetch<KnowledgeItem[]>(
         buildListPath(`/admin/tenants/${tenantId}/knowledge`, {
           offset: options.offset ?? 0,
-          q: knowledgeSearch,
+          q: debouncedKnowledgeSearch,
           status: knowledgeStatusFilter,
         }),
       );
@@ -2149,7 +2149,7 @@ export default function DashboardPage() {
       const items = await apiFetch<Conversation[]>(
         buildListPath(`/admin/tenants/${tenantId}/conversations`, {
           offset: options.offset ?? 0,
-          q: inboxSearch,
+          q: debouncedInboxSearch,
         }),
       );
       setConversations((current) =>
@@ -2185,7 +2185,7 @@ export default function DashboardPage() {
       const items = await apiFetch<UnifiedInboxItem[]>(
         buildListPath(`/admin/tenants/${tenantId}/inbox`, {
           offset: options.offset ?? 0,
-          q: inboxSearch,
+          q: debouncedInboxSearch,
         }),
       );
       setUnifiedInbox((current) =>
@@ -2220,7 +2220,7 @@ export default function DashboardPage() {
       const items = await apiFetch<ContactProfile[]>(
         buildListPath(`/admin/tenants/${tenantId}/contacts`, {
           offset: options.offset ?? 0,
-          q: contactSearch,
+          q: debouncedContactSearch,
         }),
       );
       setContacts((current) =>
@@ -2261,7 +2261,7 @@ export default function DashboardPage() {
       const items = await apiFetch<Handoff[]>(
         buildListPath(`/admin/tenants/${tenantId}/handoffs`, {
           offset: options.offset ?? 0,
-          q: inboxSearch,
+          q: debouncedInboxSearch,
         }),
       );
       setHandoffs((current) =>
@@ -8562,183 +8562,6 @@ export default function DashboardPage() {
         </div>
       </section>
     );
-  }
-
-  function telephoneSettingString(
-    connection: ChannelConnection | undefined,
-    key: string,
-  ) {
-    const value = connection?.settings?.[key];
-    return typeof value === "string" ? value : undefined;
-  }
-
-  function formatTelephoneMode(value: string) {
-    const labels: Record<string, string> = {
-      purchased_twilio: "Purchased Twilio number",
-      existing_twilio: "Existing Twilio number",
-      new_number_provider: "Provider number",
-      carrier_forwarding: "Carrier forwarding",
-      sip_byoc: "SIP trunk",
-      not_configured: "Not configured",
-    };
-    return labels[value] ?? value.replace(/_/g, " ");
-  }
-
-  function telephoneProviderLabel(provider: string | undefined) {
-    const labels: Record<string, string> = {
-      easybell: "easybell",
-      sipgate: "sipgate",
-      peoplefone: "peoplefone",
-      custom_sip: "Custom SIP",
-      twilio: "Twilio",
-    };
-    return provider ? (labels[provider] ?? provider) : "Not selected";
-  }
-
-  function normalizeTelephoneProviderUi(
-    provider: string | undefined,
-  ): TelephoneProvider {
-    if (
-      provider === "easybell" ||
-      provider === "sipgate" ||
-      provider === "peoplefone" ||
-      provider === "custom_sip"
-    ) {
-      return provider;
-    }
-    return "easybell";
-  }
-
-  function telephoneProviderGuideUrl(provider: TelephoneProvider) {
-    const guides: Record<TelephoneProvider, string> = {
-      easybell: "https://en.easybell.de/business/sip-trunks/",
-      sipgate:
-        "https://teamhelp.sipgate.co.uk/integrations-and-connections/using-sipgate-trunking/what-is-sipgate-trunking",
-      peoplefone: "https://support.peoplefone.com/en-che/peoplefone-sip-trunk/",
-      custom_sip: "https://www.asterisk.org/sip-trunking-for-asterisk/",
-    };
-    return guides[provider];
-  }
-
-  function settingRecord(value: unknown): Record<string, unknown> {
-    return typeof value === "object" && value !== null && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : {};
-  }
-
-  function settingString(value: unknown) {
-    return typeof value === "string" ? value : undefined;
-  }
-
-  function settingBoolean(value: unknown, fallback: boolean) {
-    return typeof value === "boolean" ? value : fallback;
-  }
-
-  function settingNumber(value: unknown, fallback: number) {
-    return typeof value === "number" && Number.isFinite(value)
-      ? value
-      : fallback;
-  }
-
-  function settingTestCallStatus(value: string | undefined) {
-    if (value === "pending" || value === "passed" || value === "failed") {
-      return value;
-    }
-    return "not_started";
-  }
-
-  function settingBusinessHoursMode(value: string | undefined) {
-    if (
-      value === "business_hours" ||
-      value === "after_hours_only" ||
-      value === "always_on"
-    ) {
-      return value;
-    }
-    return "always_on";
-  }
-
-  function settingAfterHoursAction(value: string | undefined) {
-    if (
-      value === "voicemail" ||
-      value === "callback" ||
-      value === "transfer" ||
-      value === "answer"
-    ) {
-      return value;
-    }
-    return "answer";
-  }
-
-  function settingSpeakingStyle(value: string | undefined) {
-    if (
-      value === "friendly" ||
-      value === "concise" ||
-      value === "professional"
-    ) {
-      return value;
-    }
-    return "professional";
-  }
-
-  function buildTelephoneWarningsFromSettings(
-    settings: Record<string, unknown>,
-    connection?: ChannelConnection,
-  ): TelephoneSetupWarning[] {
-    const checklist = settingRecord(settings.setupChecklist);
-    const gdpr = settingRecord(settings.gdpr);
-    const testCall = settingRecord(settings.testCall);
-    const warnings: TelephoneSetupWarning[] = [];
-    if (
-      !settingBoolean(
-        checklist.numberOrdered,
-        Boolean(connection?.externalAccountId),
-      )
-    ) {
-      warnings.push({
-        level: "warn",
-        title: "Number not confirmed",
-        detail: "Confirm the provider number or forwarding destination.",
-      });
-    }
-    if (!settingBoolean(checklist.sipConfigured, false)) {
-      warnings.push({
-        level: "warn",
-        title: "SIP routing pending",
-        detail: "Route the provider trunk or PBX to the voice edge.",
-      });
-    }
-    if (
-      !settingBoolean(checklist.testCallCompleted, false) &&
-      settingString(testCall.status) !== "passed"
-    ) {
-      warnings.push({
-        level: "warn",
-        title: "Test call missing",
-        detail: "Complete a live call test before publishing the number.",
-      });
-    }
-    if (
-      !settingBoolean(checklist.fallbackSet, false) &&
-      !settingString(settings.fallbackNumber)
-    ) {
-      warnings.push({
-        level: "info",
-        title: "Fallback number missing",
-        detail: "Add a human fallback number for transfer and emergencies.",
-      });
-    }
-    if (
-      !settingBoolean(checklist.disclosureConfirmed, false) &&
-      !settingString(gdpr.disclosureText)
-    ) {
-      warnings.push({
-        level: "warn",
-        title: "AI disclosure missing",
-        detail: "Add the disclosure callers hear before AI processing starts.",
-      });
-    }
-    return warnings;
   }
 
   function isTelephoneConversation(

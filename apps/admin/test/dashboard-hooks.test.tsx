@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
-import { useToasts } from "../app/dashboard-hooks";
+import { useDebouncedValue, useToasts } from "../app/dashboard-hooks";
 
 describe("useToasts", () => {
   beforeEach(() => {
@@ -47,5 +47,32 @@ describe("useToasts", () => {
       }
     });
     expect(result.current.toasts.length).toBeLessThanOrEqual(4);
+  });
+});
+
+describe("useDebouncedValue", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("updates only after the debounce window", () => {
+    const { result, rerender } = renderHook(
+      ({ value }) => useDebouncedValue(value, 250),
+      { initialProps: { value: "a" } },
+    );
+
+    expect(result.current).toBe("a");
+
+    rerender({ value: "abc" });
+    expect(result.current).toBe("a");
+
+    act(() => vi.advanceTimersByTime(249));
+    expect(result.current).toBe("a");
+
+    act(() => vi.advanceTimersByTime(1));
+    expect(result.current).toBe("abc");
   });
 });

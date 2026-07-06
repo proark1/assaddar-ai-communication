@@ -63,6 +63,7 @@ import {
 import { assertTenantId } from "./tenant-scope";
 import {
   channelIdentifierKey,
+  contactIdentifierContainmentValues,
   createPublicAssistantId,
   createPublicConversationId,
   deriveConversationNextAction,
@@ -5991,6 +5992,30 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
           ),
         )
         .limit(1);
+      if (matched) {
+        return matched;
+      }
+    }
+
+    const identifierPredicates = contactIdentifierContainmentValues(
+      input.identifiers,
+    ).map((value) => sql`${contacts.identifiers} @> ${value}::jsonb`);
+
+    if (identifierPredicates.length) {
+      const [matched] = await this.db
+        .select()
+        .from(contacts)
+        .where(
+          and(
+            eq(contacts.tenantId, tenantId),
+            identifierPredicates.length === 1
+              ? identifierPredicates[0]
+              : or(...identifierPredicates),
+          ),
+        )
+        .orderBy(desc(contacts.updatedAt))
+        .limit(1);
+
       if (matched) {
         return matched;
       }
