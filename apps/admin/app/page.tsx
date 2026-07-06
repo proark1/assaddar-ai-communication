@@ -9694,6 +9694,13 @@ export default function DashboardPage() {
             </button>
             <button
               type="button"
+              onClick={() => openSettingsSection("number-settings")}
+            >
+              <PhoneCall size={16} />
+              Numbers
+            </button>
+            <button
+              type="button"
               onClick={() => openSettingsSection("automation-settings")}
             >
               <Sparkles size={16} />
@@ -9714,6 +9721,9 @@ export default function DashboardPage() {
         </div>
         <div id="widget-settings" className="settingsSection">
           {renderWidget()}
+        </div>
+        <div id="number-settings" className="settingsSection">
+          {renderSelfServiceBillingPanel()}
         </div>
         <div id="automation-settings" className="settingsSection">
           {renderAutomation()}
@@ -10358,10 +10368,10 @@ export default function DashboardPage() {
           <button
             type="button"
             className="iconButton neutral menuButton"
-            aria-label="Open navigation"
+            aria-label={sidebarOpen ? "Close navigation" : "Open navigation"}
             aria-controls="primary-sidebar"
             aria-expanded={sidebarOpen ? "true" : "false"}
-            onClick={() => setSidebarOpen(true)}
+            onClick={() => setSidebarOpen((current) => !current)}
           >
             <Menu size={20} />
           </button>

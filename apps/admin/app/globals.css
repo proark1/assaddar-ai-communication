@@ -108,6 +108,8 @@ textarea:focus-visible {
 }
 
 .brand .sidebarClose {
+  position: relative;
+  z-index: 2;
   margin-left: auto;
 }
 
@@ -5497,6 +5499,7 @@ textarea {
 
   .shell[data-sidebar-open="true"] .sidebarOverlay {
     display: block;
+    left: min(304px, 86vw);
   }
 
   .menuButton,
@@ -5588,7 +5591,17 @@ textarea {
   }
 
   .menuButton {
+    position: relative;
+    z-index: 9;
     order: -1;
+  }
+
+  .shell[data-sidebar-open="true"] .menuButton {
+    position: fixed;
+    top: 28px;
+    left: min(calc(min(304px, 86vw) + 20px), calc(100vw - 62px));
+    z-index: 45;
+    box-shadow: var(--shadow-soft);
   }
 
   .titleGroup {
