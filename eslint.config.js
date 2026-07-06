@@ -1,4 +1,5 @@
 import js from "@eslint/js";
+import nextPlugin from "@next/eslint-plugin-next";
 import tseslint from "typescript-eslint";
 import prettier from "eslint-config-prettier";
 import globals from "globals";
@@ -39,6 +40,20 @@ export default tseslint.config(
       "@typescript-eslint/no-empty-object-type": "off",
       "no-empty": ["warn", { allowEmptyCatch: true }],
     },
+  },
+  {
+    plugins: {
+      "@next/next": nextPlugin,
+    },
+    settings: {
+      next: {
+        rootDir: "apps/admin/",
+      },
+    },
+  },
+  {
+    files: ["apps/admin/**/*.{ts,tsx}"],
+    rules: nextPlugin.flatConfig.coreWebVitals.rules,
   },
   {
     // Node/tooling scripts run in a plain Node context.

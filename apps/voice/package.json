@@ -18,10 +18,10 @@
     "@sentry/node": "^10.62.0",
     "dotenv": "^16.6.1",
     "fastify": "^5.2.1",
+    "tsx": "^4.19.3",
     "zod": "^3.24.2"
   },
   "devDependencies": {
-    "tsx": "^4.19.3",
     "typescript": "^5.8.2"
   }
 }

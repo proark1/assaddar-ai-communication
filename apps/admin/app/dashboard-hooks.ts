@@ -92,6 +92,21 @@ export function useDialogA11y(
   return ref;
 }
 
+/**
+ * Return a value only after it has stayed unchanged for `delayMs`. Useful for
+ * search inputs so typing does not fire one request per keystroke.
+ */
+export function useDebouncedValue<T>(value: T, delayMs = 250): T {
+  const [debounced, setDebounced] = useState(value);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(value), delayMs);
+    return () => clearTimeout(timer);
+  }, [delayMs, value]);
+
+  return debounced;
+}
+
 /** In-memory toast queue with auto-dismiss. */
 export function useToasts() {
   const [toasts, setToasts] = useState<Toast[]>([]);

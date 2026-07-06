@@ -11,6 +11,8 @@ import type {
   LeadPipelineStage,
   TabKey,
   TelephoneVoiceEdgeStatus,
+  TelephoneProvider,
+  TelephoneSetupWarning,
   Tenant,
   TenantAnalytics,
   TestAnswer,
@@ -910,6 +912,177 @@ export function buildVoiceQualitySummary(input: {
       : "Monitor live calls",
     checks,
   };
+}
+
+export function telephoneSettingString(
+  connection: ChannelConnection | undefined,
+  key: string,
+) {
+  const value = connection?.settings?.[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+export function formatTelephoneMode(value: string) {
+  const labels: Record<string, string> = {
+    purchased_twilio: "Purchased Twilio number",
+    existing_twilio: "Existing Twilio number",
+    new_number_provider: "Provider number",
+    carrier_forwarding: "Carrier forwarding",
+    sip_byoc: "SIP trunk",
+    not_configured: "Not configured",
+  };
+  return labels[value] ?? value.replace(/_/g, " ");
+}
+
+export function telephoneProviderLabel(provider: string | undefined) {
+  const labels: Record<string, string> = {
+    easybell: "easybell",
+    sipgate: "sipgate",
+    peoplefone: "peoplefone",
+    custom_sip: "Custom SIP",
+    twilio: "Twilio",
+  };
+  return provider ? (labels[provider] ?? provider) : "Not selected";
+}
+
+export function normalizeTelephoneProviderUi(
+  provider: string | undefined,
+): TelephoneProvider {
+  if (
+    provider === "easybell" ||
+    provider === "sipgate" ||
+    provider === "peoplefone" ||
+    provider === "custom_sip"
+  ) {
+    return provider;
+  }
+  return "easybell";
+}
+
+export function telephoneProviderGuideUrl(provider: TelephoneProvider) {
+  const guides: Record<TelephoneProvider, string> = {
+    easybell: "https://en.easybell.de/business/sip-trunks/",
+    sipgate:
+      "https://teamhelp.sipgate.co.uk/integrations-and-connections/using-sipgate-trunking/what-is-sipgate-trunking",
+    peoplefone: "https://support.peoplefone.com/en-che/peoplefone-sip-trunk/",
+    custom_sip: "https://www.asterisk.org/sip-trunking-for-asterisk/",
+  };
+  return guides[provider];
+}
+
+export function settingRecord(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+export function settingString(value: unknown) {
+  return typeof value === "string" ? value : undefined;
+}
+
+export function settingBoolean(value: unknown, fallback: boolean) {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+export function settingNumber(value: unknown, fallback: number) {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+export function settingTestCallStatus(value: string | undefined) {
+  if (value === "pending" || value === "passed" || value === "failed") {
+    return value;
+  }
+  return "not_started";
+}
+
+export function settingBusinessHoursMode(value: string | undefined) {
+  if (
+    value === "business_hours" ||
+    value === "after_hours_only" ||
+    value === "always_on"
+  ) {
+    return value;
+  }
+  return "always_on";
+}
+
+export function settingAfterHoursAction(value: string | undefined) {
+  if (
+    value === "voicemail" ||
+    value === "callback" ||
+    value === "transfer" ||
+    value === "answer"
+  ) {
+    return value;
+  }
+  return "answer";
+}
+
+export function settingSpeakingStyle(value: string | undefined) {
+  if (value === "friendly" || value === "concise" || value === "professional") {
+    return value;
+  }
+  return "professional";
+}
+
+export function buildTelephoneWarningsFromSettings(
+  settings: Record<string, unknown>,
+  connection?: ChannelConnection,
+): TelephoneSetupWarning[] {
+  const checklist = settingRecord(settings.setupChecklist);
+  const gdpr = settingRecord(settings.gdpr);
+  const testCall = settingRecord(settings.testCall);
+  const warnings: TelephoneSetupWarning[] = [];
+  if (
+    !settingBoolean(
+      checklist.numberOrdered,
+      Boolean(connection?.externalAccountId),
+    )
+  ) {
+    warnings.push({
+      level: "warn",
+      title: "Number not confirmed",
+      detail: "Confirm the provider number or forwarding destination.",
+    });
+  }
+  if (!settingBoolean(checklist.sipConfigured, false)) {
+    warnings.push({
+      level: "warn",
+      title: "SIP routing pending",
+      detail: "Route the provider trunk or PBX to the voice edge.",
+    });
+  }
+  if (
+    !settingBoolean(checklist.testCallCompleted, false) &&
+    settingString(testCall.status) !== "passed"
+  ) {
+    warnings.push({
+      level: "warn",
+      title: "Test call missing",
+      detail: "Complete a live call test before publishing the number.",
+    });
+  }
+  if (
+    !settingBoolean(checklist.fallbackSet, false) &&
+    !settingString(settings.fallbackNumber)
+  ) {
+    warnings.push({
+      level: "info",
+      title: "Fallback number missing",
+      detail: "Add a human fallback number for transfer and emergencies.",
+    });
+  }
+  if (
+    !settingBoolean(checklist.disclosureConfirmed, false) &&
+    !settingString(gdpr.disclosureText)
+  ) {
+    warnings.push({
+      level: "warn",
+      title: "AI disclosure missing",
+      detail: "Add the disclosure callers hear before AI processing starts.",
+    });
+  }
+  return warnings;
 }
 
 export type PlaybookPreview = {

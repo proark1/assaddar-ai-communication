@@ -1,16 +1,35 @@
+FROM node:22-slim AS deps
+
+WORKDIR /app
+
+RUN corepack enable && corepack prepare pnpm@10.28.1 --activate
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json vitest.config.ts ./
+COPY apps ./apps
+COPY packages ./packages
+COPY scripts ./scripts
+
+RUN pnpm install --frozen-lockfile --prod=false
+
+FROM deps AS build
+
+RUN pnpm build
+
 FROM node:22-slim AS app
 
 WORKDIR /app
 
 RUN corepack enable && corepack prepare pnpm@10.28.1 --activate
 
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json vitest.workspace.ts ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json vitest.config.ts ./
 COPY apps ./apps
 COPY packages ./packages
 COPY scripts ./scripts
 
-RUN pnpm install --frozen-lockfile --prod=false
-RUN pnpm build
+RUN pnpm install --frozen-lockfile --prod
+
+COPY --from=build /app/apps/admin/.next ./apps/admin/.next
+COPY --from=build /app/apps/widget/dist ./apps/widget/dist
 
 ENV NODE_ENV=production
 

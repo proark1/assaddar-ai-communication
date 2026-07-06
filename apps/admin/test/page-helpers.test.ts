@@ -5,14 +5,27 @@ import {
   buildCustomerPortalPreview,
   buildHandoffCopilotSummary,
   buildPlaybookPreview,
+  buildTelephoneWarningsFromSettings,
   buildVoiceQualitySummary,
+  formatTelephoneMode,
   getAnswer,
   getQuestion,
   normalizeBaseUrl,
+  normalizeTelephoneProviderUi,
   parseFaqImport,
   parseTags,
   readableError,
+  settingAfterHoursAction,
+  settingBoolean,
+  settingBusinessHoursMode,
+  settingNumber,
+  settingRecord,
+  settingSpeakingStyle,
+  settingString,
+  settingTestCallStatus,
   statusTone,
+  telephoneProviderLabel,
+  telephoneSettingString,
 } from "../app/page-helpers";
 import type {
   ChannelConnection,
@@ -235,6 +248,67 @@ describe("buildVoiceQualitySummary", () => {
       "Test call",
     ]);
     expect(summary.recommendation).toBe("Fix Routing");
+  });
+});
+
+describe("telephone setting helpers", () => {
+  it("normalizes telephone provider, mode, and setting values", () => {
+    const connection: ChannelConnection = {
+      channel: "telephone",
+      provider: "easybell",
+      label: "Telephone",
+      status: "connected",
+      externalAccountId: "+491234",
+      credentialConfigured: true,
+      settings: { sipTarget: "sip:tenant@example.com" },
+    };
+
+    expect(telephoneSettingString(connection, "sipTarget")).toBe(
+      "sip:tenant@example.com",
+    );
+    expect(formatTelephoneMode("sip_byoc")).toBe("SIP trunk");
+    expect(formatTelephoneMode("custom_mode")).toBe("custom mode");
+    expect(telephoneProviderLabel("custom_sip")).toBe("Custom SIP");
+    expect(telephoneProviderLabel(undefined)).toBe("Not selected");
+    expect(normalizeTelephoneProviderUi("sipgate")).toBe("sipgate");
+    expect(normalizeTelephoneProviderUi("twilio")).toBe("easybell");
+    expect(settingRecord({ ok: true })).toEqual({ ok: true });
+    expect(settingRecord(["nope"])).toEqual({});
+    expect(settingString("value")).toBe("value");
+    expect(settingString(42)).toBeUndefined();
+    expect(settingBoolean(false, true)).toBe(false);
+    expect(settingBoolean("false", true)).toBe(true);
+    expect(settingNumber(12, 1)).toBe(12);
+    expect(settingNumber(Number.NaN, 1)).toBe(1);
+    expect(settingTestCallStatus("passed")).toBe("passed");
+    expect(settingTestCallStatus("unknown")).toBe("not_started");
+    expect(settingBusinessHoursMode("after_hours_only")).toBe(
+      "after_hours_only",
+    );
+    expect(settingBusinessHoursMode("weekends")).toBe("always_on");
+    expect(settingAfterHoursAction("transfer")).toBe("transfer");
+    expect(settingAfterHoursAction("queue")).toBe("answer");
+    expect(settingSpeakingStyle("friendly")).toBe("friendly");
+    expect(settingSpeakingStyle("verbose")).toBe("professional");
+  });
+
+  it("builds telephone setup warnings from persisted settings", () => {
+    const warnings = buildTelephoneWarningsFromSettings({
+      setupChecklist: {
+        numberOrdered: true,
+        sipConfigured: false,
+        testCallCompleted: false,
+      },
+      testCall: { status: "failed" },
+      gdpr: {},
+    });
+
+    expect(warnings.map((warning) => warning.title)).toEqual([
+      "SIP routing pending",
+      "Test call missing",
+      "Fallback number missing",
+      "AI disclosure missing",
+    ]);
   });
 });
 

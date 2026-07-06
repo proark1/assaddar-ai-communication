@@ -54,18 +54,17 @@ export default function Error({
           </p>
         ) : null}
         <div className="rowActions" style={{ marginTop: 16 }}>
-          <a
+          <button
             className="secondaryButton"
-            href="/"
-            onClick={(event) => {
+            type="button"
+            onClick={() => {
               // Force a full reload rather than a client-side navigation so a
               // corrupted client state is fully discarded.
-              event.preventDefault();
               window.location.reload();
             }}
           >
             Reload page
-          </a>
+          </button>
           <button
             className="primaryButton"
             type="button"
