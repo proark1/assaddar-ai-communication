@@ -4179,6 +4179,11 @@ describe("API", () => {
         mode: "new_number_provider",
         setupType: "new_number",
         provider: "easybell",
+        sipConfigured: true,
+        setupChecklist: {
+          numberOrdered: true,
+          sipConfigured: true,
+        },
       },
     });
 
@@ -4307,6 +4312,52 @@ describe("API", () => {
         },
         testCall: {
           status: "passed",
+        },
+      },
+    });
+
+    const updatedNewNumberResponse = await app.inject({
+      method: "POST",
+      url: `/admin/tenants/${tenant.id}/telephone/new-number`,
+      headers: { "x-admin-token": "test-token" },
+      payload: {
+        provider: "easybell",
+        requestedCountry: "DE",
+        numberType: "local",
+        areaCode: "030",
+        locality: "Berlin",
+        orderedNumber: "+49303333333",
+        sipRegistrar: "sip.easybell.de",
+        sipUsername: "tenant-one",
+        sipConfigured: true,
+        notes: "Updated provider record.",
+      },
+    });
+
+    expect(updatedNewNumberResponse.statusCode).toBe(201);
+    expect(
+      store.channelConnections.find(
+        (connection) => connection.provider === "easybell",
+      ),
+    ).toMatchObject({
+      status: "connected",
+      settings: {
+        notes: "Updated provider record.",
+        businessHours: {
+          mode: "business_hours",
+        },
+        gdpr: {
+          transcriptRetentionDays: 90,
+        },
+        testCall: {
+          status: "passed",
+        },
+        setupChecklist: {
+          numberOrdered: true,
+          sipConfigured: true,
+          testCallCompleted: true,
+          fallbackSet: true,
+          disclosureConfirmed: true,
         },
       },
     });

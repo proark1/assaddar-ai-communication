@@ -1691,6 +1691,11 @@ export async function buildServer(
       const body = NewTelephoneNumberSetupSchema.parse(request.body);
       const voiceBridgeUrl = buildTelephoneVoiceBridgeUrl(options, tenant);
       const sipTarget = buildTelephoneSipTarget(tenant);
+      const currentSettings = await getTelephoneConnectionSettings(
+        options,
+        tenantId,
+        body.provider,
+      );
       const instructions = buildNewTelephoneNumberInstructions({
         provider: body.provider,
         requestedCountry: body.requestedCountry,
@@ -1713,6 +1718,7 @@ export async function buildServer(
         externalAccountId,
         status,
         settings: {
+          ...currentSettings,
           mode: "new_number_provider",
           setupType: "new_number",
           provider: body.provider,
@@ -1728,6 +1734,11 @@ export async function buildServer(
           voiceBridgeUrl,
           sipTarget,
           instructions,
+          setupChecklist: {
+            ...asRecord(currentSettings.setupChecklist),
+            numberOrdered: Boolean(body.orderedNumber),
+            sipConfigured: body.sipConfigured,
+          },
           notes: body.notes ?? null,
           updatedAt: new Date().toISOString(),
         },
@@ -1753,6 +1764,11 @@ export async function buildServer(
       const body = CarrierForwardingSchema.parse(request.body);
       const voiceBridgeUrl = buildTelephoneVoiceBridgeUrl(options, tenant);
       const sipTarget = buildTelephoneSipTarget(tenant);
+      const currentSettings = await getTelephoneConnectionSettings(
+        options,
+        tenantId,
+        body.provider,
+      );
       const instructions = buildCarrierForwardingInstructions({
         aiNumber: body.aiNumber,
         provider: body.provider,
@@ -1764,6 +1780,7 @@ export async function buildServer(
         externalAccountId: body.existingNumber,
         status: body.forwardingConfirmed ? "connected" : "pending",
         settings: {
+          ...currentSettings,
           mode: "carrier_forwarding",
           setupType: "existing_forwarding",
           provider: body.provider,
@@ -1775,6 +1792,11 @@ export async function buildServer(
           voiceBridgeUrl,
           sipTarget,
           instructions,
+          setupChecklist: {
+            ...asRecord(currentSettings.setupChecklist),
+            numberOrdered: Boolean(body.existingNumber && body.aiNumber),
+            sipConfigured: body.forwardingConfirmed,
+          },
           notes: body.notes ?? null,
           updatedAt: new Date().toISOString(),
         },
@@ -1800,6 +1822,11 @@ export async function buildServer(
       const body = SipByocSetupSchema.parse(request.body);
       const voiceBridgeUrl = buildTelephoneVoiceBridgeUrl(options, tenant);
       const sipTarget = buildTelephoneSipTarget(tenant);
+      const currentSettings = await getTelephoneConnectionSettings(
+        options,
+        tenantId,
+        body.provider,
+      );
       const instructions = buildSipByocInstructions({
         provider: body.provider,
         voiceBridgeUrl,
@@ -1817,6 +1844,7 @@ export async function buildServer(
           "SIP/BYOC",
         status: body.sipConfigured ? "connected" : "pending",
         settings: {
+          ...currentSettings,
           mode: "sip_byoc",
           setupType: "sip_trunk",
           provider: body.provider,
@@ -1832,6 +1860,13 @@ export async function buildServer(
           voiceBridgeUrl,
           sipTarget,
           instructions,
+          setupChecklist: {
+            ...asRecord(currentSettings.setupChecklist),
+            numberOrdered: Boolean(
+              body.publicNumber || body.inboundSipUri || body.trunkSid,
+            ),
+            sipConfigured: body.sipConfigured,
+          },
           notes: body.notes ?? null,
           updatedAt: new Date().toISOString(),
         },
@@ -4266,6 +4301,26 @@ function buildTelephoneSipTarget(tenant: StoreTenant) {
   return `sip:${tenant.publicId}@${sipDomain}`;
 }
 
+async function getTelephoneConnectionSettings(
+  options: BuildServerOptions,
+  tenantId: string,
+  provider: z.infer<typeof TelephoneProviderSchema>,
+) {
+  const connections = await options.store.listChannelConnections(tenantId);
+  const current =
+    connections
+      .map((connection) => asRecord(connection))
+      .find(
+        (connection) =>
+          connection.channel === "telephone" &&
+          connection.provider === provider,
+      ) ??
+    connections
+      .map((connection) => asRecord(connection))
+      .find((connection) => connection.channel === "telephone");
+  return asRecord(current?.settings);
+}
+
 function buildTelephoneComplianceNotice(
   country: string,
   numberType: z.infer<typeof TwilioNumberTypeSchema>,
@@ -4455,7 +4510,7 @@ function buildTelephoneSetupWarnings(settings: Record<string, unknown>) {
       detail: "Add the provider number or mark the new number order complete.",
     });
   }
-  if (!checklist.sipConfigured) {
+  if (!checklist.sipConfigured && !settings.sipConfigured) {
     warnings.push({
       level: "warn",
       title: "SIP routing pending",

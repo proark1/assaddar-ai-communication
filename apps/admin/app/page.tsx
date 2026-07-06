@@ -1298,6 +1298,10 @@ export default function DashboardPage() {
     const gdpr = settingRecord(settings.gdpr);
     const voiceQuality = settingRecord(settings.voiceQuality);
     const testCall = settingRecord(settings.testCall);
+    const persistedSipConfigured = settingBoolean(
+      settings.sipConfigured,
+      false,
+    );
 
     setPhoneNumberOrdered(
       settingBoolean(
@@ -1305,7 +1309,26 @@ export default function DashboardPage() {
         Boolean(telephoneConnection.externalAccountId),
       ),
     );
-    setPhoneSipConfigured(settingBoolean(checklist.sipConfigured, false));
+    setPhoneSipConfigured(
+      settingBoolean(checklist.sipConfigured, persistedSipConfigured),
+    );
+    setNewNumberCountry(settingString(settings.requestedCountry) ?? "DE");
+    const persistedNumberType = settingString(settings.numberType);
+    setNewNumberType(
+      persistedNumberType === "mobile" || persistedNumberType === "toll-free"
+        ? persistedNumberType
+        : "local",
+    );
+    setNewNumberAreaCode(settingString(settings.areaCode) ?? "");
+    setNewNumberLocality(settingString(settings.locality) ?? "");
+    setOrderedPhoneNumber(
+      settingString(settings.orderedNumber) ??
+        settingString(settings.phoneNumber) ??
+        "",
+    );
+    setNewNumberSipRegistrar(settingString(settings.sipRegistrar) ?? "");
+    setNewNumberSipUsername(settingString(settings.sipUsername) ?? "");
+    setNewNumberSipConfigured(persistedSipConfigured);
     setPhoneTestCallCompleted(
       settingBoolean(
         checklist.testCallCompleted,

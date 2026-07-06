@@ -1045,7 +1045,12 @@ export function buildTelephoneWarningsFromSettings(
       detail: "Confirm the provider number or forwarding destination.",
     });
   }
-  if (!settingBoolean(checklist.sipConfigured, false)) {
+  if (
+    !settingBoolean(
+      checklist.sipConfigured,
+      settingBoolean(settings.sipConfigured, false),
+    )
+  ) {
     warnings.push({
       level: "warn",
       title: "SIP routing pending",
