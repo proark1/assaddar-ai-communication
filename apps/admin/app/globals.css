@@ -278,6 +278,37 @@ textarea {
   padding-left: 34px;
 }
 
+.inputIcon.withAction input {
+  padding-right: 42px;
+}
+
+.inputIcon .inputAction {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transform: translateY(-50%);
+}
+
+.inputIcon .inputAction:hover {
+  background: var(--surface-muted);
+  color: var(--text-soft);
+}
+
+.inputIcon .inputAction svg {
+  position: static;
+  transform: none;
+}
+
 .primaryButton,
 .secondaryButton,
 .dangerButton,
@@ -305,7 +336,7 @@ textarea {
 
 .primaryButton {
   border: 0;
-  background: linear-gradient(180deg, #3f8588, var(--accent));
+  background: linear-gradient(180deg, #34777a, var(--accent));
   color: #ffffff;
   padding: 0 15px;
   box-shadow: 0 10px 22px -16px rgba(47, 111, 115, 0.72);
@@ -5156,11 +5187,11 @@ textarea {
   background:
     linear-gradient(
       90deg,
-      rgba(22, 25, 30, 0.9),
-      rgba(22, 25, 30, 0.6) 42%,
-      rgba(22, 25, 30, 0.14)
+      rgba(22, 25, 30, 0.88),
+      rgba(22, 25, 30, 0.62) 38%,
+      rgba(22, 25, 30, 0.08) 68%
     ),
-    url("/landing-dashboard.png") center right / cover no-repeat,
+    url("/landing-dashboard.png") center right 14% / cover no-repeat,
     linear-gradient(135deg, var(--code), #34302b);
   padding: clamp(44px, 7vw, 92px) clamp(18px, 5vw, 72px);
 }
@@ -5598,10 +5629,6 @@ textarea {
     min-height: 44px;
   }
 
-  .homeIntro .quickActionGrid {
-    display: none;
-  }
-
   .authPanel {
     order: -1;
   }
@@ -5714,8 +5741,13 @@ textarea {
   .landingHero {
     min-height: 620px;
     background:
-      linear-gradient(180deg, rgba(22, 25, 30, 0.9), rgba(22, 25, 30, 0.62)),
-      url("/landing-dashboard.png") center / cover no-repeat,
+      linear-gradient(
+        180deg,
+        rgba(22, 25, 30, 0.86),
+        rgba(22, 25, 30, 0.62) 56%,
+        rgba(22, 25, 30, 0.34)
+      ),
+      url("/landing-dashboard.png") 68% center / cover no-repeat,
       linear-gradient(135deg, var(--code), #34302b);
   }
 

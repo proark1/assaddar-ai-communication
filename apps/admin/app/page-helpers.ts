@@ -1359,7 +1359,7 @@ export function buildWidgetSnippets(
   assistantId: string,
   apiBase: string,
 ) {
-  const script = `<script src="${defaultWidgetUrl}" data-assistant-id="${assistantId}" data-api-url="${apiBase}" async></script>`;
+  const script = `<script src="${defaultWidgetUrl}" data-assistant-id="${assistantId}" data-api-url="${apiBase}" charset="utf-8" async></script>`;
 
   if (platform === "wordpress") {
     return `<!-- Add before </body> in your WordPress theme or insert with a header/footer plugin. -->\n${script}`;

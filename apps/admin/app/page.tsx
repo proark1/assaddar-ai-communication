@@ -11,6 +11,8 @@ import {
   Code2,
   Copy,
   Database,
+  Eye,
+  EyeOff,
   ExternalLink,
   Filter,
   Globe2,
@@ -41,6 +43,7 @@ import {
 } from "lucide-react";
 import {
   FormEvent,
+  KeyboardEvent,
   useCallback,
   useEffect,
   useMemo,
@@ -289,6 +292,15 @@ const channelExperienceDetails: Record<
   },
 };
 
+type AuthMode = "login" | "signup" | "admin_token";
+
+const authModeOrder: AuthMode[] = ["login", "signup", "admin_token"];
+const authModeTabIds: Record<AuthMode, string> = {
+  login: "auth-login-tab",
+  signup: "auth-signup-tab",
+  admin_token: "auth-admin-token-tab",
+};
+
 const sampleQuestions = APP_CONFIG.sampleQuestions;
 
 const businessKnowledgeChecks = [
@@ -360,9 +372,13 @@ export default function DashboardPage() {
   const [signupName, setSignupName] = useState("");
   const [signupEmail, setSignupEmail] = useState("");
   const [signupPassword, setSignupPassword] = useState("");
-  const [authMode, setAuthMode] = useState<"login" | "signup" | "admin_token">(
-    "login",
-  );
+  const [authMode, setAuthMode] = useState<AuthMode>("login");
+  const [visibleSecrets, setVisibleSecrets] = useState({
+    adminToken: false,
+    invite: false,
+    login: false,
+    signup: false,
+  });
   const [inviteName, setInviteName] = useState("");
   const [invitePassword, setInvitePassword] = useState("");
   const [tenants, setTenants] = useState<Tenant[]>([]);
@@ -9826,6 +9842,42 @@ export default function DashboardPage() {
     return renderSettingsWorkspace();
   }
 
+  function selectAuthMode(nextMode: AuthMode) {
+    setAuthMode(nextMode);
+    window.setTimeout(() => {
+      document.getElementById(authModeTabIds[nextMode])?.focus();
+    }, 0);
+  }
+
+  function handleAuthModeKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    const currentIndex = authModeOrder.indexOf(authMode);
+    if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+      event.preventDefault();
+      selectAuthMode(
+        authModeOrder[(currentIndex + 1) % authModeOrder.length] ?? "login",
+      );
+      return;
+    }
+    if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+      event.preventDefault();
+      selectAuthMode(
+        authModeOrder[
+          (currentIndex - 1 + authModeOrder.length) % authModeOrder.length
+        ] ?? "login",
+      );
+      return;
+    }
+    if (event.key === "Home") {
+      event.preventDefault();
+      selectAuthMode(authModeOrder[0] ?? "login");
+      return;
+    }
+    if (event.key === "End") {
+      event.preventDefault();
+      selectAuthMode(authModeOrder[authModeOrder.length - 1] ?? "admin_token");
+    }
+  }
+
   if (!connectionAttempted && !tenants.length) {
     return (
       <main className="authShell">
@@ -9876,24 +9928,45 @@ export default function DashboardPage() {
                   onChange={(event) => setInviteName(event.target.value)}
                   autoComplete="name"
                   autoFocus
+                  required
                 />
               </label>
               <label className="field">
                 <span>Password</span>
-                <div className="inputIcon">
+                <div className="inputIcon withAction">
                   <KeyRound size={16} />
                   <input
-                    type="password"
+                    type={visibleSecrets.invite ? "text" : "password"}
                     value={invitePassword}
                     onChange={(event) => setInvitePassword(event.target.value)}
                     autoComplete="new-password"
+                    required
                   />
+                  <button
+                    className="inputAction"
+                    type="button"
+                    aria-label={
+                      visibleSecrets.invite
+                        ? "Hide invite password"
+                        : "Show invite password"
+                    }
+                    aria-pressed={visibleSecrets.invite}
+                    onClick={() =>
+                      setVisibleSecrets((current) => ({
+                        ...current,
+                        invite: !current.invite,
+                      }))
+                    }
+                  >
+                    {visibleSecrets.invite ? (
+                      <EyeOff size={16} />
+                    ) : (
+                      <Eye size={16} />
+                    )}
+                  </button>
                 </div>
               </label>
-              <button
-                className="primaryButton full"
-                disabled={busy || !inviteName || !invitePassword}
-              >
+              <button className="primaryButton full" disabled={busy}>
                 {busy ? (
                   <Loader2 className="spin" size={16} />
                 ) : (
@@ -9914,23 +9987,43 @@ export default function DashboardPage() {
             </form>
           ) : (
             <>
-              <div className="segmented authModeSwitch">
+              <div
+                className="segmented authModeSwitch"
+                role="tablist"
+                aria-label="Authentication mode"
+                onKeyDown={handleAuthModeKeyDown}
+              >
                 <button
+                  id="auth-login-tab"
+                  role="tab"
+                  aria-controls="auth-login-panel"
+                  aria-selected={authMode === "login"}
                   data-active={authMode === "login" ? "true" : "false"}
+                  tabIndex={authMode === "login" ? 0 : -1}
                   type="button"
                   onClick={() => setAuthMode("login")}
                 >
                   User login
                 </button>
                 <button
+                  id="auth-signup-tab"
+                  role="tab"
+                  aria-controls="auth-signup-panel"
+                  aria-selected={authMode === "signup"}
                   data-active={authMode === "signup" ? "true" : "false"}
+                  tabIndex={authMode === "signup" ? 0 : -1}
                   type="button"
                   onClick={() => setAuthMode("signup")}
                 >
                   Register
                 </button>
                 <button
+                  id="auth-admin-token-tab"
+                  role="tab"
+                  aria-controls="auth-admin-token-panel"
+                  aria-selected={authMode === "admin_token"}
                   data-active={authMode === "admin_token" ? "true" : "false"}
+                  tabIndex={authMode === "admin_token" ? 0 : -1}
                   type="button"
                   onClick={() => setAuthMode("admin_token")}
                 >
@@ -9939,7 +10032,13 @@ export default function DashboardPage() {
               </div>
 
               {authMode === "login" ? (
-                <form className="authForm" onSubmit={loginWithPassword}>
+                <form
+                  className="authForm"
+                  id="auth-login-panel"
+                  role="tabpanel"
+                  aria-labelledby="auth-login-tab"
+                  onSubmit={loginWithPassword}
+                >
                   <label className="field">
                     <span>Email</span>
                     <input
@@ -9948,20 +10047,44 @@ export default function DashboardPage() {
                       onChange={(event) => setLoginEmail(event.target.value)}
                       autoComplete="email"
                       autoFocus
+                      required
                     />
                   </label>
                   <label className="field">
                     <span>Password</span>
-                    <div className="inputIcon">
+                    <div className="inputIcon withAction">
                       <KeyRound size={16} />
                       <input
-                        type="password"
+                        type={visibleSecrets.login ? "text" : "password"}
                         value={loginPassword}
                         onChange={(event) =>
                           setLoginPassword(event.target.value)
                         }
                         autoComplete="current-password"
+                        required
                       />
+                      <button
+                        className="inputAction"
+                        type="button"
+                        aria-label={
+                          visibleSecrets.login
+                            ? "Hide password"
+                            : "Show password"
+                        }
+                        aria-pressed={visibleSecrets.login}
+                        onClick={() =>
+                          setVisibleSecrets((current) => ({
+                            ...current,
+                            login: !current.login,
+                          }))
+                        }
+                      >
+                        {visibleSecrets.login ? (
+                          <EyeOff size={16} />
+                        ) : (
+                          <Eye size={16} />
+                        )}
+                      </button>
                     </div>
                   </label>
                   {showAdvancedConnection ? (
@@ -9973,10 +10096,7 @@ export default function DashboardPage() {
                       />
                     </label>
                   ) : null}
-                  <button
-                    className="primaryButton full"
-                    disabled={busy || !loginEmail || !loginPassword}
-                  >
+                  <button className="primaryButton full" disabled={busy}>
                     {busy ? (
                       <Loader2 className="spin" size={16} />
                     ) : (
@@ -10005,7 +10125,13 @@ export default function DashboardPage() {
                   ) : null}
                 </form>
               ) : authMode === "signup" ? (
-                <form className="authForm" onSubmit={signUpWithPassword}>
+                <form
+                  className="authForm"
+                  id="auth-signup-panel"
+                  role="tabpanel"
+                  aria-labelledby="auth-signup-tab"
+                  onSubmit={signUpWithPassword}
+                >
                   <label className="field">
                     <span>Name</span>
                     <input
@@ -10013,6 +10139,7 @@ export default function DashboardPage() {
                       onChange={(event) => setSignupName(event.target.value)}
                       autoComplete="name"
                       autoFocus
+                      required
                     />
                   </label>
                   <label className="field">
@@ -10022,20 +10149,44 @@ export default function DashboardPage() {
                       value={signupEmail}
                       onChange={(event) => setSignupEmail(event.target.value)}
                       autoComplete="email"
+                      required
                     />
                   </label>
                   <label className="field">
                     <span>Password</span>
-                    <div className="inputIcon">
+                    <div className="inputIcon withAction">
                       <KeyRound size={16} />
                       <input
-                        type="password"
+                        type={visibleSecrets.signup ? "text" : "password"}
                         value={signupPassword}
                         onChange={(event) =>
                           setSignupPassword(event.target.value)
                         }
                         autoComplete="new-password"
+                        required
                       />
+                      <button
+                        className="inputAction"
+                        type="button"
+                        aria-label={
+                          visibleSecrets.signup
+                            ? "Hide password"
+                            : "Show password"
+                        }
+                        aria-pressed={visibleSecrets.signup}
+                        onClick={() =>
+                          setVisibleSecrets((current) => ({
+                            ...current,
+                            signup: !current.signup,
+                          }))
+                        }
+                      >
+                        {visibleSecrets.signup ? (
+                          <EyeOff size={16} />
+                        ) : (
+                          <Eye size={16} />
+                        )}
+                      </button>
                     </div>
                   </label>
                   {showAdvancedConnection ? (
@@ -10047,12 +10198,7 @@ export default function DashboardPage() {
                       />
                     </label>
                   ) : null}
-                  <button
-                    className="primaryButton full"
-                    disabled={
-                      busy || !signupName || !signupEmail || !signupPassword
-                    }
-                  >
+                  <button className="primaryButton full" disabled={busy}>
                     {busy ? (
                       <Loader2 className="spin" size={16} />
                     ) : (
@@ -10083,6 +10229,9 @@ export default function DashboardPage() {
               ) : (
                 <form
                   className="authForm"
+                  id="auth-admin-token-panel"
+                  role="tabpanel"
+                  aria-labelledby="auth-admin-token-tab"
                   onSubmit={(event) => {
                     event.preventDefault();
                     void refreshTenants();
@@ -10090,15 +10239,38 @@ export default function DashboardPage() {
                 >
                   <label className="field">
                     <span>Bootstrap admin token</span>
-                    <div className="inputIcon">
+                    <div className="inputIcon withAction">
                       <KeyRound size={16} />
                       <input
-                        type="password"
+                        type={visibleSecrets.adminToken ? "text" : "password"}
                         value={adminToken}
                         onChange={(event) => setAdminToken(event.target.value)}
                         autoComplete="off"
                         autoFocus
+                        required
                       />
+                      <button
+                        className="inputAction"
+                        type="button"
+                        aria-label={
+                          visibleSecrets.adminToken
+                            ? "Hide bootstrap token"
+                            : "Show bootstrap token"
+                        }
+                        aria-pressed={visibleSecrets.adminToken}
+                        onClick={() =>
+                          setVisibleSecrets((current) => ({
+                            ...current,
+                            adminToken: !current.adminToken,
+                          }))
+                        }
+                      >
+                        {visibleSecrets.adminToken ? (
+                          <EyeOff size={16} />
+                        ) : (
+                          <Eye size={16} />
+                        )}
+                      </button>
                     </div>
                   </label>
                   {showAdvancedConnection ? (
@@ -10110,10 +10282,7 @@ export default function DashboardPage() {
                       />
                     </label>
                   ) : null}
-                  <button
-                    className="primaryButton full"
-                    disabled={busy || !adminToken}
-                  >
+                  <button className="primaryButton full" disabled={busy}>
                     {busy ? (
                       <Loader2 className="spin" size={16} />
                     ) : (

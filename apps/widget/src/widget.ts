@@ -431,7 +431,7 @@ void (() => {
       .panel {
         display: none;
         width: min(380px, calc(100vw - 28px));
-        height: min(620px, calc(100vh - 92px));
+        max-height: min(620px, calc(100vh - 92px));
         background: ${backgroundColor};
         border: 1px solid rgba(22, 25, 30, 0.14);
         border-radius: 10px;
@@ -485,6 +485,7 @@ void (() => {
       .messages {
         flex: 1 1 auto;
         min-height: 96px;
+        max-height: min(460px, calc(100vh - 280px));
         overflow: auto;
         display: flex;
         flex-direction: column;
@@ -734,9 +735,10 @@ void (() => {
         .assaddar-shell { right: 10px; left: 10px; bottom: 10px; }
         .panel {
           width: 100%;
-          height: min(640px, calc(100vh - 24px));
+          max-height: min(640px, calc(100vh - 24px));
           border-radius: 10px;
         }
+        .messages { max-height: min(380px, calc(100vh - 250px)); }
         .readiness-form { max-height: min(290px, calc(100vh - 318px)); }
         .launcher { float: right; }
       }
@@ -1265,13 +1267,30 @@ void (() => {
 
   function createInitialState(openingMessage: string): WidgetState {
     return {
-      visitorId: `visitor_${crypto.randomUUID().replaceAll("-", "").slice(0, 20)}`,
+      visitorId: createVisitorId(),
       sentAt: [] as number[],
       messages: [
         { role: "assistant", text: openingMessage },
       ] as StoredMessage[],
       updatedAt: Date.now(),
     };
+  }
+
+  function createVisitorId() {
+    if (typeof crypto.randomUUID === "function") {
+      return `visitor_${crypto.randomUUID().replaceAll("-", "").slice(0, 20)}`;
+    }
+
+    if (typeof crypto.getRandomValues === "function") {
+      const bytes = new Uint8Array(10);
+      crypto.getRandomValues(bytes);
+      const token = Array.from(bytes, (byte) =>
+        byte.toString(16).padStart(2, "0"),
+      ).join("");
+      return `visitor_${token}`;
+    }
+
+    return `visitor_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
   }
 
   function resetState(state: WidgetState, openingMessage: string) {
