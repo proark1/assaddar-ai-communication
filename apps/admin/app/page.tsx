@@ -203,6 +203,10 @@ const channelImplementationGuides: Partial<
   },
 };
 
+function isForbiddenAccessError(error: unknown) {
+  return /forbidden|403/i.test(readableError(error));
+}
+
 const channelExperienceDetails: Record<
   ChannelConnection["channel"],
   {
@@ -644,6 +648,8 @@ export default function DashboardPage() {
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
+  const [personalDataAccessDenied, setPersonalDataAccessDenied] =
+    useState(false);
   // Mobile navigation: toggles the sidebar into a slide-in drawer on small screens.
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { toasts, pushToast, dismissToast } = useToasts();
@@ -660,6 +666,10 @@ export default function DashboardPage() {
       tenants.find((tenant) => tenant.id === selectedTenantId) ?? tenants[0],
     [selectedTenantId, tenants],
   );
+  const selectedTenantMemberLoginEmail =
+    selectedTenant?.slug === "assad-dar-ai-consultancy"
+      ? "assad.dar@gmail.com"
+      : "";
   const selectedConversation = useMemo(
     () =>
       conversations.find(
@@ -794,6 +804,10 @@ export default function DashboardPage() {
     [channelConnections],
   );
   const knownContactCount = analytics?.contacts ?? contacts.length;
+  const conversationSummaryCount =
+    analytics?.conversations ?? conversations.length;
+  const openHandoffSummaryCount =
+    analytics?.openHandoffs ?? openHandoffs.length;
   const telephoneConnection = channelConnections.find(
     (connection) => connection.channel === "telephone",
   );
@@ -841,8 +855,8 @@ export default function DashboardPage() {
     readinessEnabled,
     consentEnabled,
     contactsCount: knownContactCount,
-    conversationsCount: conversations.length,
-    openHandoffsCount: openHandoffs.length,
+    conversationsCount: conversationSummaryCount,
+    openHandoffsCount: openHandoffSummaryCount,
   });
   const currentSnippet = selectedTenant
     ? buildWidgetSnippets(
@@ -2022,6 +2036,7 @@ export default function DashboardPage() {
       setTenantInvites([]);
       setChannelAccountDrafts({});
       setWorkspaceLoading(false);
+      setPersonalDataAccessDenied(false);
       return;
     }
 
@@ -2050,6 +2065,7 @@ export default function DashboardPage() {
       setUnansweredQuestions(bootstrap.unansweredQuestions);
       setWorkflowSuggestions(bootstrap.workflowSuggestions);
       setProductionReadiness(bootstrap.productionReadiness);
+      setPersonalDataAccessDenied(false);
       setTenantUsers(bootstrap.tenantUsers);
       setTenantInvites(bootstrap.tenantInvites);
       setChannelAccountDrafts(
@@ -2087,7 +2103,32 @@ export default function DashboardPage() {
       }
     } catch (error) {
       if (workspaceRefreshId.current === refreshId) {
-        setStatus(readableError(error));
+        if (isForbiddenAccessError(error)) {
+          setPersonalDataAccessDenied(true);
+          setConversations([]);
+          setUnifiedInbox([]);
+          setContacts([]);
+          setHandoffs([]);
+          setConversationMessages([]);
+          setInboxHasMore(false);
+          setContactsHasMore(false);
+          setHandoffsHasMore(false);
+          setSelectedConversationId("");
+          setStatus("Conversation text is hidden for this session.");
+          try {
+            const result = await apiFetch<TenantAnalytics>(
+              `/admin/tenants/${tenantId}/analytics`,
+            );
+            if (workspaceRefreshId.current === refreshId) {
+              setAnalytics(result);
+            }
+          } catch {
+            // The access notice is more useful here than a second aggregate error.
+          }
+        } else {
+          setPersonalDataAccessDenied(false);
+          setStatus(readableError(error));
+        }
       }
     } finally {
       if (workspaceRefreshId.current === refreshId) {
@@ -2205,8 +2246,16 @@ export default function DashboardPage() {
       if (!items.length) {
         setSelectedConversationId("");
       }
+      setPersonalDataAccessDenied(false);
     } catch (error) {
-      setStatus(readableError(error));
+      if (isForbiddenAccessError(error)) {
+        setPersonalDataAccessDenied(true);
+        setConversations([]);
+        setSelectedConversationId("");
+        setStatus("Conversation text is hidden for this session.");
+      } else {
+        setStatus(readableError(error));
+      }
     }
   }
 
@@ -2239,9 +2288,13 @@ export default function DashboardPage() {
       ) {
         setSelectedConversationId(items[0].id);
       }
-    } catch {
+      setPersonalDataAccessDenied(false);
+    } catch (error) {
       setUnifiedInbox([]);
       setInboxHasMore(false);
+      if (isForbiddenAccessError(error)) {
+        setPersonalDataAccessDenied(true);
+      }
     }
   }
 
@@ -2266,9 +2319,13 @@ export default function DashboardPage() {
         options.append ? [...current, ...items] : items,
       );
       setContactsHasMore(items.length === listPageSize);
-    } catch {
+      setPersonalDataAccessDenied(false);
+    } catch (error) {
       setContacts([]);
       setContactsHasMore(false);
+      if (isForbiddenAccessError(error)) {
+        setPersonalDataAccessDenied(true);
+      }
     }
   }
 
@@ -2281,8 +2338,15 @@ export default function DashboardPage() {
         `/admin/tenants/${tenantId}/conversations/${conversationId}/messages`,
       );
       setConversationMessages(items);
+      setPersonalDataAccessDenied(false);
     } catch (error) {
-      setStatus(readableError(error));
+      if (isForbiddenAccessError(error)) {
+        setConversationMessages([]);
+        setPersonalDataAccessDenied(true);
+        setStatus("Conversation text is hidden for this session.");
+      } else {
+        setStatus(readableError(error));
+      }
     }
   }
 
@@ -2307,8 +2371,16 @@ export default function DashboardPage() {
         options.append ? [...current, ...items] : items,
       );
       setHandoffsHasMore(items.length === listPageSize);
+      setPersonalDataAccessDenied(false);
     } catch (error) {
-      setStatus(readableError(error));
+      if (isForbiddenAccessError(error)) {
+        setPersonalDataAccessDenied(true);
+        setHandoffs([]);
+        setHandoffsHasMore(false);
+        setStatus("Conversation text is hidden for this session.");
+      } else {
+        setStatus(readableError(error));
+      }
     }
   }
 
@@ -4226,7 +4298,7 @@ export default function DashboardPage() {
                 <Inbox size={18} />
                 <h2>Needs attention</h2>
               </div>
-              <span className="countPill">{openHandoffs.length}</span>
+              <span className="countPill">{openHandoffSummaryCount}</span>
             </div>
             <div className="compactList">
               {openHandoffs.length ? (
@@ -4241,6 +4313,10 @@ export default function DashboardPage() {
                     <span>{handoff.requesterMessage}</span>
                   </button>
                 ))
+              ) : personalDataAccessDenied ? (
+                <div className="emptyState compact">
+                  Handoffs are hidden for this session.
+                </div>
               ) : (
                 <div className="emptyState compact">No open handoffs.</div>
               )}
@@ -4253,9 +4329,7 @@ export default function DashboardPage() {
                 <MessageSquare size={18} />
                 <h2>Recent conversations</h2>
               </div>
-              <span className="countPill">
-                {analytics?.conversations ?? conversations.length}
-              </span>
+              <span className="countPill">{conversationSummaryCount}</span>
             </div>
             <div className="compactList">
               {conversations.length ? (
@@ -4273,6 +4347,10 @@ export default function DashboardPage() {
                     <span>{formatDate(conversation.createdAt)}</span>
                   </button>
                 ))
+              ) : personalDataAccessDenied ? (
+                <div className="emptyState compact">
+                  Conversation list hidden for this session.
+                </div>
               ) : (
                 <div className="emptyState compact">No conversations yet.</div>
               )}
@@ -5399,8 +5477,9 @@ export default function DashboardPage() {
               })
             ) : (
               <div className="emptyState">
-                No leads yet. Enable lead capture in the widget settings and
-                publish the widget on the website.
+                {personalDataAccessDenied
+                  ? "Lead details are hidden for this session."
+                  : "No leads yet. Enable lead capture in the widget settings and publish the widget on the website."}
               </div>
             )}
           </div>
@@ -5482,7 +5561,9 @@ export default function DashboardPage() {
             })
           ) : (
             <div className="emptyState compact">
-              Contacts appear after website leads, WhatsApp messages, or calls.
+              {personalDataAccessDenied
+                ? "Contact profiles are hidden for this session."
+                : "Contacts appear after website leads, WhatsApp messages, or calls."}
             </div>
           )}
         </div>
@@ -5947,7 +6028,11 @@ export default function DashboardPage() {
                   </button>
                 ))
               ) : (
-                <div className="emptyState compact">No conversations.</div>
+                <div className="emptyState compact">
+                  {personalDataAccessDenied
+                    ? "Conversation list hidden for this session."
+                    : "No conversations."}
+                </div>
               )}
             </div>
             {inboxHasMore ? (
@@ -6087,10 +6172,8 @@ export default function DashboardPage() {
                       </strong>
                     </article>
                     <article>
-                      <span>Recording</span>
-                      <strong>
-                        {phoneRecordingEnabled ? "Enabled" : "Disabled"}
-                      </strong>
+                      <span>Audio</span>
+                      <strong>Not stored</strong>
                     </article>
                     <article>
                       <span>Retention</span>
@@ -6114,7 +6197,11 @@ export default function DashboardPage() {
                 </div>
               </>
             ) : (
-              <div className="emptyState">Select a conversation.</div>
+              <div className="emptyState">
+                {personalDataAccessDenied
+                  ? "Conversation transcripts are hidden for this session."
+                  : "Select a conversation."}
+              </div>
             )}
           </div>
         </div>
@@ -6259,7 +6346,11 @@ export default function DashboardPage() {
               );
             })
           ) : (
-            <div className="emptyState">No handoff requests in this view.</div>
+            <div className="emptyState">
+              {personalDataAccessDenied
+                ? "Handoff requests are hidden for this session."
+                : "No handoff requests in this view."}
+            </div>
           )}
         </div>
         {handoffsHasMore ? (
@@ -8261,6 +8352,13 @@ export default function DashboardPage() {
             <div className="miniPanelHeader">
               <strong>GDPR phone settings</strong>
             </div>
+            <div className="inlineNotice">
+              <ShieldCheck size={16} />
+              <span>
+                Phone calls currently save transcript messages. Raw audio
+                recordings are not stored in this admin.
+              </span>
+            </div>
             <label className="field">
               <span>Caller disclosure</span>
               <textarea
@@ -8290,7 +8388,7 @@ export default function DashboardPage() {
                     setPhoneRecordingEnabled(event.target.checked)
                   }
                 />
-                <span>Call recording enabled</span>
+                <span>Recording disclosure configured</span>
               </label>
               <label className="toggle">
                 <input
@@ -9642,6 +9740,51 @@ export default function DashboardPage() {
     }, 0);
   }
 
+  async function switchToProjectMemberLogin() {
+    if (selectedTenantMemberLoginEmail) {
+      setLoginEmail(selectedTenantMemberLoginEmail);
+    }
+    setAuthMode("login");
+    await logout();
+  }
+
+  function renderPersonalDataAccessNotice() {
+    if (!personalDataAccessDenied) {
+      return null;
+    }
+
+    return (
+      <div className="inlineNotice accessNotice" data-tone="warn">
+        <ShieldCheck size={16} />
+        <div className="inlineNoticeContent">
+          <strong>Conversation text is restricted for this session.</strong>
+          <span>
+            The bootstrap token can load aggregate counts and setup, but
+            messages, contacts, handoffs, and call transcripts require a real
+            project-member login.
+          </span>
+          <span>
+            {selectedTenantMemberLoginEmail
+              ? `Log in with ${selectedTenantMemberLoginEmail} to view this project's plain-text transcripts.`
+              : "Log in as a project member to view plain-text transcripts."}{" "}
+            Raw audio recordings are not stored yet.
+          </span>
+        </div>
+        {adminToken || adminSession?.authType === "admin_token" ? (
+          <button
+            className="secondaryButton accessNoticeAction"
+            disabled={busy}
+            type="button"
+            onClick={() => void switchToProjectMemberLogin()}
+          >
+            <UserCheck size={15} />
+            User login
+          </button>
+        ) : null}
+      </div>
+    );
+  }
+
   function renderHome() {
     return (
       <div className="workspaceStack">
@@ -9673,6 +9816,7 @@ export default function DashboardPage() {
             </button>
           </div>
         </section>
+        {renderPersonalDataAccessNotice()}
         {renderOverview()}
       </div>
     );
@@ -9698,14 +9842,15 @@ export default function DashboardPage() {
             </article>
             <article>
               <span>Conversations</span>
-              <strong>{conversations.length}</strong>
+              <strong>{conversationSummaryCount}</strong>
             </article>
             <article>
               <span>Handoffs</span>
-              <strong>{openHandoffs.length}</strong>
+              <strong>{openHandoffSummaryCount}</strong>
             </article>
           </div>
         </section>
+        {renderPersonalDataAccessNotice()}
         {renderLeadActionCenter()}
         {renderLeads()}
         <div className="leadSupportGrid">

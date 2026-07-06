@@ -3789,6 +3789,22 @@ textarea {
   background: var(--amber-bg);
 }
 
+.inlineNotice.accessNotice {
+  align-items: center;
+}
+
+.inlineNoticeContent {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 3px;
+}
+
+.accessNoticeAction {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
 .inlineNotice svg {
   flex: 0 0 auto;
   margin-top: 1px;
@@ -5679,6 +5695,15 @@ textarea {
 
   .workspaceIntro {
     padding: 14px;
+  }
+
+  .inlineNotice.accessNotice {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .accessNoticeAction {
+    width: 100%;
   }
 
   .workspaceIntro h2 {
