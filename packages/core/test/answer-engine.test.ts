@@ -165,6 +165,44 @@ describe("AnswerEngine", () => {
     expect(result.text).toContain("keine freigegebene Information");
   });
 
+  it("answers approved German phone knowledge even when intent keywords miss", async () => {
+    const engine = createAnswerEngine({
+      dataStore: new MemoryAnswerStore(
+        {
+          [tenantA]: {
+            ...createDefaultTenantPolicy(tenantA),
+            defaultLocale: "de",
+          },
+        },
+        [
+          faqChunk(
+            tenantA,
+            "Wie beginnt ein Kundenprojekt?",
+            "Ein Kundenprojekt beginnt mit einem kurzen Erstgespraech, einer Analyse der aktuellen Prozesse und einer priorisierten Roadmap.",
+          ),
+        ],
+      ),
+      preferDirectTelephoneAnswers: true,
+    });
+
+    const result = await engine.answer({
+      tenantId: tenantA,
+      channel: "telephone",
+      text: "Wie beginnt man ein Kundenprojekt?",
+      locale: "de-DE",
+      metadata: {},
+    });
+
+    expect(result.status).toBe("answered");
+    expect(result.intent).toBe("approved_knowledge");
+    expect(result.text).toContain("Kundenprojekt beginnt");
+    expect(result.trace).toContainEqual({
+      step: "intent_policy",
+      outcome: "skipped",
+      detail: "unknown_try_approved_knowledge",
+    });
+  });
+
   it("blocks general random questions before retrieval", async () => {
     const engine = createAnswerEngine({
       dataStore: new MemoryAnswerStore(

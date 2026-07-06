@@ -9,6 +9,7 @@ import {
 } from "@assaddar/channels";
 import {
   createAnswerEngine,
+  createEmbeddingProvider,
   createGeminiGroundedAnswerGenerator,
   InboundMessageSchema,
 } from "@assaddar/core";
@@ -212,11 +213,20 @@ const store = new TenantRepository(
   undefined,
   createEnvChannelCredentialCipher(process.env),
 );
+const embeddingProvider = createEmbeddingProvider(process.env);
 const groundedGenerator = createGeminiGroundedAnswerGenerator(process.env);
 const engine = createAnswerEngine({
   dataStore: store,
   handoffStore: store,
   preferDirectTelephoneAnswers: true,
+  ...(embeddingProvider
+    ? {
+        embedder: async (text) => {
+          const [vector] = await embeddingProvider.embed([text]);
+          return vector ?? null;
+        },
+      }
+    : {}),
   ...(groundedGenerator ? { groundedGenerator } : {}),
 });
 const adapter = new TwilioVoiceAdapter();

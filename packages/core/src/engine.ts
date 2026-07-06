@@ -146,22 +146,17 @@ export class AnswerEngine {
     if (!intent.allowed) {
       trace.push({
         step: "intent_policy",
-        outcome: "failed",
+        outcome: "skipped",
+        detail: "unknown_try_approved_knowledge",
+      });
+    } else {
+      trace.push({
+        step: "intent_policy",
+        outcome: "passed",
         detail: intent.name,
       });
-      return this.refuse(
-        input,
-        policy,
-        trace,
-        "intent_not_allowed",
-        defaultRefusal(input.locale),
-      );
     }
-    trace.push({
-      step: "intent_policy",
-      outcome: "passed",
-      detail: intent.name,
-    });
+    const answerIntent = intent.allowed ? intent.name : "approved_knowledge";
 
     const keywordSearch = this.dataStore.searchKnowledge(
       input.tenantId,
@@ -193,7 +188,7 @@ export class AnswerEngine {
         input,
         policy,
         trace,
-        "knowledge_not_found",
+        intent.allowed ? "knowledge_not_found" : "intent_not_allowed",
         defaultRefusal(input.locale),
       );
     }
@@ -245,7 +240,7 @@ export class AnswerEngine {
         channel: input.channel,
         text: applyTone(fallbackAnswer, policy),
         confidence: bestChunk.score,
-        intent: intent.name,
+        intent: answerIntent,
         citations: [citation],
         handoffRecommended: false,
         usage: estimateUsage(normalized, fallbackAnswer),
@@ -260,7 +255,7 @@ export class AnswerEngine {
       input,
       policy,
       trace,
-      intent: intent.name,
+      intent: answerIntent,
       fallbackAnswer,
       chunks: supportingChunks.length > 0 ? supportingChunks : [bestChunk],
     });
@@ -283,7 +278,7 @@ export class AnswerEngine {
       channel: input.channel,
       text: applyTone(answer, policy),
       confidence: bestChunk.score,
-      intent: intent.name,
+      intent: answerIntent,
       citations: [citation],
       handoffRecommended: false,
       usage: estimateUsage(normalized, answer),
