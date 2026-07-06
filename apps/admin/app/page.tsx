@@ -7561,6 +7561,19 @@ export default function DashboardPage() {
     const recentTelephoneConversations = inboxItems
       .filter((item) => item.channel === "telephone")
       .slice(0, 4);
+    const liveTraffic = connection?.liveTraffic;
+    const liveRecentCount = Math.max(
+      liveTraffic?.recentConversationCount ?? 0,
+      recentTelephoneConversations.length,
+    );
+    const liveTrafficSeen = Boolean(
+      liveTraffic?.latestCallAt || liveRecentCount,
+    );
+    const latestLiveCallLabel = liveTraffic?.latestCallAt
+      ? `Last ${formatDate(liveTraffic.latestCallAt)}`
+      : liveRecentCount
+        ? `${liveRecentCount} recent conversations`
+        : "Waiting for first call";
     const voiceQuality = buildVoiceQualitySummary({
       connection,
       edgeStatus: voiceEdgeStatus,
@@ -7587,12 +7600,20 @@ export default function DashboardPage() {
             <PhoneCall size={18} />
             <h2>Telephone AI setup</h2>
           </div>
-          <span
-            className="countPill"
-            data-tone={connection?.status === "connected" ? "good" : "warn"}
-          >
-            {connection?.status ?? "pending"}
-          </span>
+          <div className="panelHeaderActions">
+            <span
+              className="countPill"
+              data-tone={connection?.status === "connected" ? "good" : "warn"}
+            >
+              Setup {connection?.status ?? "pending"}
+            </span>
+            <span
+              className="countPill"
+              data-tone={liveTrafficSeen ? "good" : "warn"}
+            >
+              {liveTrafficSeen ? "Live traffic" : "No calls"}
+            </span>
+          </div>
         </div>
 
         <div className="telephoneSummary">
@@ -7611,10 +7632,18 @@ export default function DashboardPage() {
           <article
             data-alert={connection?.status === "connected" ? "false" : "true"}
           >
-            <span>Call routing</span>
+            <span>Setup status</span>
             <strong>
-              {connection?.status === "connected" ? "Ready" : "Setup needed"}
+              {connection?.status === "connected" ? "Ready" : "Pending"}
             </strong>
+            <small>
+              {phoneSipConfigured ? "SIP checked" : "SIP not checked"}
+            </small>
+          </article>
+          <article data-alert={liveTrafficSeen ? "false" : "true"}>
+            <span>Live traffic</span>
+            <strong>{liveTrafficSeen ? "Seen" : "No calls yet"}</strong>
+            <small>{latestLiveCallLabel}</small>
           </article>
         </div>
 

@@ -4543,7 +4543,69 @@ type ChannelDashboardItem = {
   credentialConfigured: boolean;
   settings: Record<string, unknown>;
   updatedAt?: unknown;
+  liveTraffic?: {
+    status: "active" | "idle";
+    recentConversationCount: number;
+    latestCallAt?: string | null;
+    latestConversationId?: string | null;
+    latestConversationPublicId?: string | null;
+    latestCaller?: string | null;
+  };
 };
+
+function dateLikeToIso(value: unknown) {
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  if (typeof value === "string" && value.trim()) {
+    return value;
+  }
+  return null;
+}
+
+function withTelephoneLiveTraffic(
+  channelConnections: ChannelDashboardItem[],
+  unifiedInbox: unknown[],
+) {
+  const telephoneConversations = unifiedInbox
+    .map((item) => asRecord(item))
+    .filter((item) => item.channel === "telephone")
+    .sort((left, right) => {
+      const leftTime = Date.parse(
+        dateLikeToIso(left.updatedAt) ?? dateLikeToIso(left.createdAt) ?? "",
+      );
+      const rightTime = Date.parse(
+        dateLikeToIso(right.updatedAt) ?? dateLikeToIso(right.createdAt) ?? "",
+      );
+      return (
+        (Number.isNaN(rightTime) ? 0 : rightTime) -
+        (Number.isNaN(leftTime) ? 0 : leftTime)
+      );
+    });
+  const latest = telephoneConversations[0];
+  const latestCallAt = latest
+    ? (dateLikeToIso(latest.updatedAt) ?? dateLikeToIso(latest.createdAt))
+    : null;
+  const liveTraffic = {
+    status: latest ? ("active" as const) : ("idle" as const),
+    recentConversationCount: telephoneConversations.length,
+    latestCallAt,
+    latestConversationId: typeof latest?.id === "string" ? latest.id : null,
+    latestConversationPublicId:
+      typeof latest?.publicId === "string" ? latest.publicId : null,
+    latestCaller:
+      typeof latest?.externalUserId === "string" ? latest.externalUserId : null,
+  };
+
+  return channelConnections.map((connection) =>
+    connection.channel === "telephone"
+      ? {
+          ...connection,
+          liveTraffic,
+        }
+      : connection,
+  );
+}
 
 function buildChannelConnectionDashboard(input: {
   tenant: StoreTenant | null;
@@ -5396,11 +5458,14 @@ async function buildDashboardBootstrap(
       ? options.store.listTenantInvites(tenantId)
       : Promise.resolve([]),
   ]);
-  const channelConnections = buildChannelConnectionDashboard({
-    tenant,
-    connections: rawChannelConnections,
-    options,
-  });
+  const channelConnections = withTelephoneLiveTraffic(
+    buildChannelConnectionDashboard({
+      tenant,
+      connections: rawChannelConnections,
+      options,
+    }),
+    unifiedInbox,
+  );
   const productionReadiness = tenant
     ? buildProductionReadiness({
         tenant,

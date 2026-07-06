@@ -4989,6 +4989,91 @@ describe("API", () => {
     await app.close();
   });
 
+  it("keeps telephone setup status separate from live call traffic", async () => {
+    const store = new MemoryPlatformStore();
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+    const { app, memberHeaders } = await buildServerWithMember(
+      store,
+      tenant.id,
+    );
+    await store.upsertChannelConnection(tenant.id, {
+      channel: "telephone",
+      provider: "easybell",
+      externalAccountId: "+4921612775888",
+      status: "pending",
+      settings: {
+        mode: "new_number_provider",
+        orderedNumber: "+4921612775888",
+        sipConfigured: false,
+      },
+    });
+    const conversation = await store.findOrCreateConversation({
+      tenantId: tenant.id,
+      channel: "telephone",
+      publicConversationId: "call-1",
+      externalUserId: "+491700000000",
+    });
+    await store.addMessage({
+      tenantId: tenant.id,
+      conversationId: conversation.id,
+      channel: "telephone",
+      direction: "inbound",
+      role: "user",
+      content: "Hallo",
+      trace: {
+        provider: "easybell_voice_edge",
+        from: "+491700000000",
+        to: "+4921612775888",
+      },
+    });
+
+    const dashboardResponse = await app.inject({
+      method: "GET",
+      url: `/admin/tenants/${tenant.id}/dashboard`,
+      headers: memberHeaders,
+    });
+    expect(dashboardResponse.statusCode).toBe(200);
+    const telephoneDashboardConnection = dashboardResponse
+      .json<{
+        channelConnections: Array<{
+          channel: string;
+          status: string;
+          liveTraffic?: {
+            status: string;
+            recentConversationCount: number;
+            latestCaller?: string | null;
+          };
+        }>;
+      }>()
+      .channelConnections.find(
+        (connection) => connection.channel === "telephone",
+      );
+    expect(telephoneDashboardConnection).toMatchObject({
+      status: "pending",
+      liveTraffic: {
+        status: "active",
+        recentConversationCount: 1,
+        latestCaller: "+491700000000",
+      },
+    });
+
+    const channelResponse = await app.inject({
+      method: "GET",
+      url: `/admin/tenants/${tenant.id}/channel-connections`,
+      headers: { "x-admin-token": "test-token" },
+    });
+    expect(channelResponse.statusCode).toBe(200);
+    const telephoneSetupConnection = channelResponse
+      .json<Array<{ channel: string; liveTraffic?: unknown }>>()
+      .find((connection) => connection.channel === "telephone");
+    expect(telephoneSetupConnection).not.toHaveProperty("liveTraffic");
+
+    await app.close();
+  });
+
   it("scores production readiness from tenant, channel, quality, and ops signals", async () => {
     const previousEnv = {
       CHANNEL_CREDENTIAL_MASTER_KEY: process.env.CHANNEL_CREDENTIAL_MASTER_KEY,

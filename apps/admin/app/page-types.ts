@@ -403,6 +403,14 @@ export type ChannelConnection = {
   credentialConfigured: boolean;
   settings: Record<string, unknown>;
   updatedAt?: string;
+  liveTraffic?: {
+    status: "active" | "idle";
+    recentConversationCount: number;
+    latestCallAt?: string | null;
+    latestConversationId?: string | null;
+    latestConversationPublicId?: string | null;
+    latestCaller?: string | null;
+  };
 };
 
 export type TelephoneSetupMode = "new_number" | "forwarding" | "sip_byoc";
