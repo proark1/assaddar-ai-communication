@@ -28,7 +28,7 @@
     "test": "pnpm -r --if-present test",
     "test:coverage": "pnpm -r --if-present test:coverage",
     "typecheck": "pnpm -r --if-present typecheck",
-    "prepare": "husky"
+    "prepare": "husky || true"
   },
   "lint-staged": {
     "*.{ts,tsx,js,mjs}": [
