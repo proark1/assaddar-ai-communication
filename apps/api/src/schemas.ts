@@ -241,6 +241,11 @@ export const UpdateHandoffSchema = z.object({
     .enum(["new", "contacted", "qualified", "proposal", "won", "lost"])
     .optional(),
   note: z.string().max(1000).optional(),
+  // The answer the employee gave the customer when resolving this handoff. When
+  // present (or, as a fallback, the resolving note), it is captured as a
+  // `human_reply` knowledge suggestion so the brain can learn from staff answers
+  // after review. See Repository.updateHandoff.
+  resolutionAnswer: z.string().max(4000).optional(),
 });
 
 export const TestAssistantSchema = z.object({

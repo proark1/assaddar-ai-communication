@@ -3633,6 +3633,36 @@ export default function DashboardPage() {
     }
   }
 
+  async function draftKnowledgeSuggestionAnswer(item: KnowledgeSuggestion) {
+    if (!canManageKnowledge()) {
+      setStatus("Your role cannot draft knowledge answers.");
+      return;
+    }
+    if (!selectedTenant) {
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const updated = await apiFetch<KnowledgeSuggestion>(
+        `/admin/tenants/${selectedTenant.id}/knowledge/suggestions/${item.id}/draft`,
+        {
+          method: "POST",
+          body: JSON.stringify({}),
+        },
+      );
+      await refreshKnowledgeSuggestions(selectedTenant.id);
+      // Open the editor prefilled with the AI draft so it is reviewed and edited
+      // before it can be approved into the shared brain.
+      startSuggestionEdit(updated);
+      setStatus("Draft answer generated — review and edit before approving.");
+    } catch (error) {
+      setStatus(readableError(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function updateHandoff(
     handoff: Handoff,
     statusValue: Handoff["status"],
@@ -4710,6 +4740,21 @@ export default function DashboardPage() {
                       </>
                     ) : (
                       <>
+                        {!item.suggestedAnswer && (
+                          <button
+                            className="secondaryButton"
+                            type="button"
+                            disabled={
+                              busy ||
+                              !canEditKnowledge ||
+                              !(item.suggestedQuestion || item.suggestedTitle)
+                            }
+                            onClick={() => draftKnowledgeSuggestionAnswer(item)}
+                          >
+                            <Sparkles size={15} />
+                            Draft answer
+                          </button>
+                        )}
                         <button
                           className="primaryButton"
                           type="button"

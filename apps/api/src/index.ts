@@ -2,6 +2,7 @@ import { config } from "dotenv";
 import * as Sentry from "@sentry/node";
 import {
   createEmbeddingProvider,
+  createGeminiDraftAnswerGenerator,
   createGeminiGroundedAnswerGenerator,
 } from "@assaddar/core";
 import {
@@ -45,6 +46,7 @@ async function main() {
   );
   const embeddingProvider = createEmbeddingProvider(process.env);
   const groundedGenerator = createGeminiGroundedAnswerGenerator(process.env);
+  const draftGenerator = createGeminiDraftAnswerGenerator(process.env);
   const serverOptions: BuildServerOptions = {
     store,
     adminToken: env.ADMIN_API_TOKEN,
@@ -142,6 +144,9 @@ async function main() {
   }
   if (groundedGenerator) {
     serverOptions.groundedGenerator = groundedGenerator;
+  }
+  if (draftGenerator) {
+    serverOptions.draftGenerator = draftGenerator;
   }
 
   const app = await buildServer(serverOptions);

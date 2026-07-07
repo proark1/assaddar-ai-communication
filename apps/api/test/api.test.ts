@@ -1672,6 +1672,39 @@ class MemoryPlatformStore
     return suggestion;
   }
 
+  async getKnowledgeSuggestion(tenantId: string, suggestionId: string) {
+    return (
+      this.knowledgeSuggestions.find(
+        (item) => item.tenantId === tenantId && item.id === suggestionId,
+      ) ?? null
+    );
+  }
+
+  async saveKnowledgeSuggestionDraft(
+    tenantId: string,
+    suggestionId: string,
+    input: { answer: string; model?: string | null },
+  ) {
+    const suggestion = this.knowledgeSuggestions.find(
+      (item) => item.tenantId === tenantId && item.id === suggestionId,
+    );
+    if (!suggestion) {
+      throw new Error("Knowledge suggestion not found.");
+    }
+    if (suggestion.status !== "pending") {
+      throw new Error("Only pending suggestions can be drafted.");
+    }
+    suggestion.suggestedAnswer = input.answer.trim();
+    suggestion.suggestedMetadata = {
+      ...suggestion.suggestedMetadata,
+      draftedByAI: true,
+      draftModel: input.model ?? null,
+      needsHumanAnswer: false,
+    };
+    suggestion.updatedAt = new Date();
+    return suggestion;
+  }
+
   async approveKnowledgeSuggestion(
     tenantId: string,
     suggestionId: string,
@@ -2221,6 +2254,7 @@ class MemoryPlatformStore
         | "lost"
         | undefined;
       note?: string | undefined;
+      resolutionAnswer?: string | undefined;
     },
   ) {
     const handoff = this.handoffs.find(
@@ -2248,6 +2282,53 @@ class MemoryPlatformStore
         ];
       }
     }
+
+    // Mirror Repository.updateHandoff: capture the employee's resolution answer
+    // as a `human_reply` suggestion (deduped per handoff, learning reasons only).
+    const resolutionAnswer =
+      input.resolutionAnswer?.trim() ||
+      (handoff.status === "resolved" ? input.note?.trim() : "") ||
+      "";
+    const question = String(handoff.requesterMessage ?? "").trim();
+    const learningReason = ![
+      "lead_capture",
+      "readiness_assessment",
+      "contact_request",
+    ].includes(handoff.reason);
+    const alreadyCaptured = this.knowledgeSuggestions.some(
+      (suggestion) =>
+        suggestion.tenantId === tenantId &&
+        suggestion.sourceType === "human_reply" &&
+        (suggestion.suggestedMetadata as { handoffId?: string })?.handoffId ===
+          handoff.id,
+    );
+    if (
+      handoff.status === "resolved" &&
+      resolutionAnswer.length >= 2 &&
+      question.length >= 12 &&
+      learningReason &&
+      !alreadyCaptured
+    ) {
+      await this.createKnowledgeSuggestion(tenantId, {
+        sourceType: "human_reply",
+        sourceConversationId: handoff.conversationId ?? null,
+        suggestedQuestion: question,
+        suggestedTitle: question,
+        suggestedAnswer: resolutionAnswer,
+        suggestedTags: ["learned", "human_reply", handoff.channel],
+        suggestedMetadata: {
+          handoffId: handoff.id,
+          handoffReason: handoff.reason,
+          channel: handoff.channel,
+          answeredBy: handoff.assignedTo ?? null,
+          answeredFromNote: Boolean(
+            !input.resolutionAnswer?.trim() && input.note?.trim(),
+          ),
+        },
+        confidence: 0.8,
+      });
+    }
+
     return handoff;
   }
 
@@ -3271,6 +3352,210 @@ describe("API", () => {
     expect(approvedChatResponse.json<{ reply: string }>().reply).toContain(
       "emergency appointments",
     );
+
+    await app.close();
+  });
+
+  it("learns from an employee answer when a handoff is resolved", async () => {
+    const store = new MemoryPlatformStore();
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+    const { app, memberHeaders: adminHeaders } = await buildServerWithMember(
+      store,
+      tenant.id,
+    );
+    const question = "Do you deliver to rural postal codes on weekends?";
+
+    // The brain has no approved answer yet, so the question escalates to a human.
+    const unansweredResponse = await app.inject({
+      method: "POST",
+      url: "/widget/chat",
+      payload: { assistantId: tenant.publicId, message: question },
+    });
+    expect(unansweredResponse.statusCode).toBe(200);
+    expect(unansweredResponse.json<{ status: string }>().status).toBe(
+      "handoff",
+    );
+
+    const handoffsResponse = await app.inject({
+      method: "GET",
+      url: `/admin/tenants/${tenant.id}/handoffs`,
+      headers: adminHeaders,
+    });
+    const handoff = handoffsResponse.json<Array<{ id: string }>>()[0];
+    if (!handoff) {
+      throw new Error("Expected a handoff for the unanswered question.");
+    }
+
+    // The employee resolves it with the answer they gave the customer.
+    const resolveResponse = await app.inject({
+      method: "PATCH",
+      url: `/admin/tenants/${tenant.id}/handoffs/${handoff.id}`,
+      headers: adminHeaders,
+      payload: {
+        status: "resolved",
+        assignedTo: "Dana",
+        resolutionAnswer:
+          "Yes, weekend delivery reaches every rural postal code for a small surcharge.",
+      },
+    });
+    expect(resolveResponse.statusCode).toBe(200);
+
+    // That answer becomes a pending human_reply suggestion for review.
+    const suggestionsResponse = await app.inject({
+      method: "GET",
+      url: `/admin/tenants/${tenant.id}/knowledge/suggestions?status=pending`,
+      headers: adminHeaders,
+    });
+    expect(suggestionsResponse.statusCode).toBe(200);
+    const learned = suggestionsResponse
+      .json<
+        Array<{
+          id: string;
+          sourceType: string;
+          suggestedQuestion: string;
+          suggestedAnswer: string;
+          status: string;
+        }>
+      >()
+      .find((suggestion) => suggestion.sourceType === "human_reply");
+    if (!learned) {
+      throw new Error("Expected a human_reply suggestion from the resolution.");
+    }
+    expect(learned).toMatchObject({
+      sourceType: "human_reply",
+      suggestedQuestion: question,
+      status: "pending",
+    });
+    expect(learned.suggestedAnswer).toContain("weekend delivery");
+
+    // Resolving again must not create a duplicate suggestion for the same handoff.
+    await app.inject({
+      method: "PATCH",
+      url: `/admin/tenants/${tenant.id}/handoffs/${handoff.id}`,
+      headers: adminHeaders,
+      payload: { status: "resolved", resolutionAnswer: "Same answer again." },
+    });
+    const afterSecondResolve = await app.inject({
+      method: "GET",
+      url: `/admin/tenants/${tenant.id}/knowledge/suggestions?status=pending`,
+      headers: adminHeaders,
+    });
+    expect(
+      afterSecondResolve
+        .json<Array<{ sourceType: string }>>()
+        .filter((suggestion) => suggestion.sourceType === "human_reply"),
+    ).toHaveLength(1);
+
+    // Once approved, the shared brain answers the same question on any channel.
+    const approveResponse = await app.inject({
+      method: "POST",
+      url: `/admin/tenants/${tenant.id}/knowledge/suggestions/${learned.id}/approve`,
+      headers: adminHeaders,
+      payload: {},
+    });
+    expect(approveResponse.statusCode).toBe(200);
+
+    const answeredResponse = await app.inject({
+      method: "POST",
+      url: "/widget/chat",
+      payload: { assistantId: tenant.publicId, message: question },
+    });
+    expect(answeredResponse.statusCode).toBe(200);
+    expect(answeredResponse.json<{ status: string }>().status).toBe("answered");
+
+    await app.close();
+  });
+
+  it("drafts an AI answer for review on an unanswered suggestion", async () => {
+    const store = new MemoryPlatformStore();
+    const tenant = await store.createTenant({
+      name: "Beispiel Bäckerei",
+      slug: "beispiel",
+    });
+    const authUserId = crypto.randomUUID();
+    let receivedQuestion = "";
+    let receivedBusiness = "";
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+      supabaseAuth: memberSupabaseAuth(authUserId),
+      draftGenerator: async (input) => {
+        receivedQuestion = input.question;
+        receivedBusiness = input.businessContext ?? "";
+        return "Ja, wir liefern am Wochenende — [genaue Kosten bestätigen].";
+      },
+    });
+    await store.upsertTenantUser(tenant.id, {
+      email: "member@example.com",
+      name: "Member User",
+      role: "tenant_owner",
+      authUserId,
+    });
+    const memberHeaders = { authorization: `Bearer ${MEMBER_BEARER}` };
+    const question = "Liefern Sie am Wochenende in ländliche Gebiete?";
+
+    const suggestion = await store.createKnowledgeSuggestion(tenant.id, {
+      sourceType: "unanswered_question",
+      suggestedQuestion: question,
+      suggestedTitle: question,
+      suggestedTags: ["unanswered"],
+      suggestedMetadata: { needsHumanAnswer: true },
+      confidence: 0.45,
+    });
+
+    const draftResponse = await app.inject({
+      method: "POST",
+      url: `/admin/tenants/${tenant.id}/knowledge/suggestions/${suggestion.id}/draft`,
+      headers: memberHeaders,
+    });
+    expect(draftResponse.statusCode).toBe(200);
+    const drafted = draftResponse.json<{
+      suggestedAnswer: string;
+      suggestedMetadata: { draftedByAI?: boolean; needsHumanAnswer?: boolean };
+    }>();
+    expect(drafted.suggestedAnswer).toContain("Wochenende");
+    expect(drafted.suggestedMetadata.draftedByAI).toBe(true);
+    expect(drafted.suggestedMetadata.needsHumanAnswer).toBe(false);
+    // The model was asked about the real question, with business context.
+    expect(receivedQuestion).toBe(question);
+    expect(receivedBusiness).toBe("Beispiel Bäckerei");
+
+    // Drafting again is refused now that it has an answer (protects the draft
+    // and any human edits from being silently overwritten).
+    const secondDraft = await app.inject({
+      method: "POST",
+      url: `/admin/tenants/${tenant.id}/knowledge/suggestions/${suggestion.id}/draft`,
+      headers: memberHeaders,
+    });
+    expect(secondDraft.statusCode).toBe(409);
+
+    await app.close();
+  });
+
+  it("reports 503 for drafting when no draft generator is configured", async () => {
+    const store = new MemoryPlatformStore();
+    const tenant = await store.createTenant({ name: "Tenant", slug: "tenant" });
+    const { app, memberHeaders } = await buildServerWithMember(
+      store,
+      tenant.id,
+    );
+    const suggestion = await store.createKnowledgeSuggestion(tenant.id, {
+      sourceType: "unanswered_question",
+      suggestedQuestion: "Do you gift wrap orders?",
+      suggestedTitle: "Do you gift wrap orders?",
+      confidence: 0.45,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/admin/tenants/${tenant.id}/knowledge/suggestions/${suggestion.id}/draft`,
+      headers: memberHeaders,
+    });
+    expect(response.statusCode).toBe(503);
 
     await app.close();
   });

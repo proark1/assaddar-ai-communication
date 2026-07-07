@@ -133,6 +133,13 @@ const DELIVERY_RETRY_INTERVAL_MS = parsePositiveIntEnv(
   60 * 1000,
 );
 
+// Default: sweep unanswered handoffs into learning suggestions every 10 minutes.
+// Non-destructive (only inserts pending review items), so it runs unconditionally.
+const SUGGESTION_SCAN_INTERVAL_MS = parsePositiveIntEnv(
+  process.env.SUGGESTION_SCAN_INTERVAL_MS,
+  10 * 60 * 1000,
+);
+
 // Retention deletion is DESTRUCTIVE, so it is gated behind an explicit flag and
 // defaults to OFF. The repeatable job is only scheduled when this is enabled;
 // even if the job somehow runs, the handler re-checks the flag before deleting.
@@ -311,6 +318,35 @@ const worker = new Worker(
           throw error;
         }
       }
+      case "suggestions.scan": {
+        // Periodic sweep: turn unanswered-question handoffs into pending
+        // knowledge suggestions across all tenants so answer gaps surface in the
+        // review queue without anyone hitting the manual scan endpoint. Purely
+        // additive (suggestions still need human approval to reach the brain).
+        const tenants = await repository.listTenants();
+        let created = 0;
+        let scanned = 0;
+        for (const tenant of tenants) {
+          try {
+            const result = await repository.scanKnowledgeSuggestions(tenant.id);
+            created += result.created.length;
+            scanned += result.scanned;
+            if (result.created.length > 0) {
+              console.log(
+                `[suggestions.scan] tenant ${tenant.id}: created ` +
+                  `${result.created.length} learning suggestion(s)`,
+              );
+            }
+          } catch (error) {
+            // Keep going for other tenants; surface the failure for this one.
+            console.error(
+              `[suggestions.scan] failed for tenant ${tenant.id}`,
+              error,
+            );
+          }
+        }
+        return { status: "ok", created, scanned, tenants: tenants.length };
+      }
     }
   },
   {
@@ -361,6 +397,15 @@ async function scheduleMaintenanceJobs() {
   );
   console.log(
     `Scheduled deliveries.retry every ${DELIVERY_RETRY_INTERVAL_MS}ms`,
+  );
+
+  await queue.upsertJobScheduler(
+    "suggestions-scan",
+    { every: SUGGESTION_SCAN_INTERVAL_MS },
+    { name: "suggestions.scan", data: {} },
+  );
+  console.log(
+    `Scheduled suggestions.scan every ${SUGGESTION_SCAN_INTERVAL_MS}ms`,
   );
 
   if (RETENTION_CLEANUP_ENABLED) {

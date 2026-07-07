@@ -32,6 +32,8 @@ export const RetentionCleanupJobSchema = z.object({}).passthrough();
 
 export const DeliveryRetryJobSchema = z.object({}).passthrough();
 
+export const SuggestionScanJobSchema = z.object({}).passthrough();
+
 export type WorkerJobName =
   | "file.parse"
   | "embeddings.generate"
@@ -39,7 +41,8 @@ export type WorkerJobName =
   | "usage.meter"
   | "embeddings.backfill"
   | "retention.cleanup"
-  | "deliveries.retry";
+  | "deliveries.retry"
+  | "suggestions.scan";
 
 export const jobSchemas = {
   "file.parse": FileParsingJobSchema,
@@ -49,4 +52,5 @@ export const jobSchemas = {
   "embeddings.backfill": EmbeddingBackfillJobSchema,
   "retention.cleanup": RetentionCleanupJobSchema,
   "deliveries.retry": DeliveryRetryJobSchema,
+  "suggestions.scan": SuggestionScanJobSchema,
 } satisfies Record<WorkerJobName, z.ZodTypeAny>;

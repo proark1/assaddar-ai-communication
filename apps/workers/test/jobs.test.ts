@@ -5,6 +5,7 @@ import {
   FileParsingJobSchema,
   jobSchemas,
   RetentionCleanupJobSchema,
+  SuggestionScanJobSchema,
   UsageMeteringJobSchema,
   WebhookProcessingJobSchema,
 } from "../src/jobs";
@@ -21,6 +22,7 @@ describe("jobSchemas", () => {
         "embeddings.generate",
         "file.parse",
         "retention.cleanup",
+        "suggestions.scan",
         "usage.meter",
         "webhook.process",
       ].sort(),
@@ -115,6 +117,10 @@ describe("jobSchemas", () => {
 
     it("RetentionCleanupJobSchema parses an empty object", () => {
       expect(RetentionCleanupJobSchema.parse({})).toEqual({});
+    });
+
+    it("SuggestionScanJobSchema parses an empty object", () => {
+      expect(SuggestionScanJobSchema.parse({})).toEqual({});
     });
 
     it("maintenance schemas passthrough unknown keys", () => {

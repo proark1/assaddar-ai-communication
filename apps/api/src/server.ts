@@ -13,6 +13,7 @@ import {
   type AnswerDataStore,
   type AnswerResult,
   type Channel,
+  type DraftAnswerGenerator,
   type GroundedAnswerGenerator,
   type HandoffStore,
 } from "@assaddar/core";
@@ -314,6 +315,22 @@ export type PlatformStore = AnswerDataStore &
     scanKnowledgeSuggestions(
       tenantId: string,
       input?: ScanKnowledgeSuggestionsInput,
+    ): Promise<unknown>;
+    getKnowledgeSuggestion(
+      tenantId: string,
+      suggestionId: string,
+    ): Promise<{
+      id: string;
+      status: string;
+      suggestedQuestion?: string | null;
+      suggestedTitle?: string | null;
+      suggestedAnswer?: string | null;
+      suggestedMetadata?: Record<string, unknown>;
+    } | null>;
+    saveKnowledgeSuggestionDraft(
+      tenantId: string,
+      suggestionId: string,
+      input: { answer: string; model?: string | null },
     ): Promise<unknown>;
     approveKnowledgeSuggestion(
       tenantId: string,
@@ -656,6 +673,12 @@ export type BuildServerOptions = {
    * knowledge; omitted keeps the deterministic extractive answer path.
    */
   groundedGenerator?: GroundedAnswerGenerator;
+  /**
+   * Optional ungrounded draft writer used to propose a candidate answer for an
+   * unanswered-question suggestion. Its output is for human review only and is
+   * never sent to a customer. Omitted disables the `/draft` endpoint.
+   */
+  draftGenerator?: DraftAnswerGenerator;
   supabaseAuth?: SupabaseAuthProvider;
 };
 
@@ -2193,6 +2216,81 @@ export async function buildServer(
         ...body,
         reviewedByUserId,
       });
+    },
+  );
+
+  app.post(
+    "/admin/tenants/:tenantId/knowledge/suggestions/:suggestionId/draft",
+    { preHandler: requireTenantAccess(options, "tenant_admin") },
+    async (request, reply) => {
+      const { tenantId, suggestionId } = ParamsKnowledgeSuggestionSchema.parse(
+        request.params,
+      );
+      if (!options.draftGenerator) {
+        return reply
+          .status(503)
+          .send({ error: "AI answer drafting is not configured." });
+      }
+      const suggestion = await options.store.getKnowledgeSuggestion(
+        tenantId,
+        suggestionId,
+      );
+      if (!suggestion) {
+        return reply
+          .status(404)
+          .send({ error: "Knowledge suggestion not found." });
+      }
+      if (suggestion.status !== "pending") {
+        return reply
+          .status(409)
+          .send({ error: "Only pending suggestions can be drafted." });
+      }
+      if (suggestion.suggestedAnswer?.trim()) {
+        return reply
+          .status(409)
+          .send({ error: "This suggestion already has an answer." });
+      }
+      const question = (
+        suggestion.suggestedQuestion ??
+        suggestion.suggestedTitle ??
+        ""
+      ).trim();
+      if (!question) {
+        return reply
+          .status(422)
+          .send({ error: "This suggestion has no question to draft from." });
+      }
+
+      const tenant = await options.store.getTenant(tenantId);
+      let draft: string | null;
+      try {
+        draft = await options.draftGenerator({
+          question,
+          ...(tenant?.name ? { businessContext: tenant.name } : {}),
+        });
+      } catch (error) {
+        request.log.error(
+          { err: error },
+          "knowledge suggestion draft generation failed",
+        );
+        return reply
+          .status(502)
+          .send({ error: "Draft generation failed. Please try again." });
+      }
+      if (!draft) {
+        return reply.status(422).send({
+          error: "The model could not propose a draft for this question.",
+        });
+      }
+
+      return options.store.saveKnowledgeSuggestionDraft(
+        tenantId,
+        suggestionId,
+        {
+          answer: draft,
+          model: process.env.GEMINI_TEXT_MODEL ?? null,
+        },
+      );
     },
   );
 

@@ -119,6 +119,30 @@ export type GroundedAnswerGenerator = (
   input: GroundedAnswerInput,
 ) => Promise<string | null>;
 
+/**
+ * Input for drafting a CANDIDATE answer to a question the brain could not
+ * answer. Unlike {@link GroundedAnswerInput} this is not restricted to approved
+ * knowledge — the draft is written for a human reviewer, never sent to a
+ * customer, and must be approved before it becomes live knowledge.
+ */
+export type DraftAnswerInput = {
+  question: string;
+  locale?: string;
+  /** Short description of the business so the draft is on-topic (e.g. name). */
+  businessContext?: string;
+  /** Optional related approved knowledge to anchor the draft where possible. */
+  relatedKnowledge?: Array<{ title?: string; content: string }>;
+};
+
+/**
+ * Produce a draft answer for human review, or `null` when nothing useful can be
+ * proposed. Callers must treat the result as unverified until a reviewer
+ * approves it.
+ */
+export type DraftAnswerGenerator = (
+  input: DraftAnswerInput,
+) => Promise<string | null>;
+
 export type AnswerDataStore = {
   getTenantPolicy(tenantId: string): Promise<TenantPolicy>;
   searchKnowledge(

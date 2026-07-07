@@ -2944,6 +2944,92 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     throw new Error("Failed to create knowledge suggestion.");
   }
 
+  async getKnowledgeSuggestion(
+    tenantId: string,
+    suggestionId: string,
+  ): Promise<KnowledgeSuggestionRecord | null> {
+    assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<KnowledgeSuggestionRecord | null>(
+        tenantId,
+        (repo) => repo.getKnowledgeSuggestion(tenantId, suggestionId),
+      );
+    }
+    const [suggestion] = await this.db
+      .select()
+      .from(knowledgeSuggestions)
+      .where(
+        and(
+          eq(knowledgeSuggestions.tenantId, tenantId),
+          eq(knowledgeSuggestions.id, suggestionId),
+        ),
+      )
+      .limit(1);
+    return suggestion ?? null;
+  }
+
+  /**
+   * Store an AI-drafted candidate answer on a pending suggestion for review. The
+   * draft is marked so the reviewer knows it is unverified; it only becomes live
+   * knowledge if a human approves it via {@link approveKnowledgeSuggestion}.
+   */
+  async saveKnowledgeSuggestionDraft(
+    tenantId: string,
+    suggestionId: string,
+    input: { answer: string; model?: string | null | undefined },
+  ): Promise<KnowledgeSuggestionRecord> {
+    assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<KnowledgeSuggestionRecord>(tenantId, (repo) =>
+        repo.saveKnowledgeSuggestionDraft(tenantId, suggestionId, input),
+      );
+    }
+    const answer = input.answer.trim();
+    if (!answer) {
+      throw new Error("A draft answer is required.");
+    }
+    const existing = await this.getKnowledgeSuggestion(tenantId, suggestionId);
+    if (!existing) {
+      throw new Error("Knowledge suggestion not found.");
+    }
+    if (existing.status !== "pending") {
+      throw new Error("Only pending suggestions can be drafted.");
+    }
+
+    const [updated] = await this.db
+      .update(knowledgeSuggestions)
+      .set({
+        suggestedAnswer: answer,
+        suggestedMetadata: {
+          ...existing.suggestedMetadata,
+          draftedByAI: true,
+          draftModel: input.model ?? null,
+          needsHumanAnswer: false,
+        },
+        updatedAt: sql`now()`,
+      })
+      .where(
+        and(
+          eq(knowledgeSuggestions.tenantId, tenantId),
+          eq(knowledgeSuggestions.id, suggestionId),
+        ),
+      )
+      .returning();
+    if (!updated) {
+      throw new Error("Failed to save knowledge suggestion draft.");
+    }
+
+    await this.audit(
+      tenantId,
+      "knowledge_suggestion.drafted",
+      "knowledge_suggestion",
+      suggestionId,
+      { model: input.model ?? null },
+    );
+
+    return updated;
+  }
+
   async approveKnowledgeSuggestion(
     tenantId: string,
     suggestionId: string,
