@@ -111,7 +111,9 @@ liability incrementally.
 
 - [ ] #7 Labelled counters: `message_delivery_total{channel,provider,status}`, `answer_outcome_total{status}`
 - [ ] #19 Request-sequencing guard on the three admin list fetchers
-- [ ] #18 Split `page.tsx` by feature domain into route segments/child components (<~500 lines each)
+- [~] #18 Monolith split — **in progress**: `page.tsx` 10,674→10,497 (new `page-constants.ts` + seams) and `server.ts` 7,357→6,970 (new `notifications.ts`), both now **under budget**. Further decomposition (smaller components/route groups, thin margins) remains. `repository.ts` (6,343/6,200) is still over — that overage is the concurrent "brain learning" feature, left to its author.
+
+**Budget-gate status.** After #18: `page.tsx` ✅ and `server.ts` ✅ under budget; the Quality-budgets CI gate now fails **only** on `repository.ts`. It goes green once that file is trimmed under 6,200 by the brain-learning author.
 
 ---
 
