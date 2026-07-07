@@ -1427,3 +1427,19 @@ export function normalizeTabKey(value: string | null): TabKey | undefined {
 export function isHandoffFilter(value: string): value is HandoffFilter {
   return ["open", "in_progress", "resolved", "all"].includes(value);
 }
+
+export function isForbiddenAccessError(error: unknown) {
+  return /forbidden|403/i.test(readableError(error));
+}
+
+export function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error("Read failed"));
+    reader.onload = () => {
+      const result = typeof reader.result === "string" ? reader.result : "";
+      resolve(result.split(",")[1] ?? result);
+    };
+    reader.readAsDataURL(file);
+  });
+}

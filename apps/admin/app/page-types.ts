@@ -553,3 +553,5 @@ export type AdminDeepLink = {
   conversationId?: string;
   inviteToken?: string;
 };
+
+export type AuthMode = "login" | "signup" | "admin_token";
