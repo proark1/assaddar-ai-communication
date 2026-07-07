@@ -124,13 +124,30 @@ jobs:
               services+=("$service")
             fi
           done
+          deploy_service() {
+            local service="$1"
+            local attempts=3
+            local attempt=1
+            while true; do
+              echo "Deploying Railway service: $service (attempt $attempt/$attempts)"
+              if "$HOME/.railway/bin/railway" up \
+                --project "$RAILWAY_PROJECT_ID" \
+                --environment "$RAILWAY_ENVIRONMENT" \
+                --service "$service" \
+                --ci; then
+                return 0
+              fi
+              if [ "$attempt" -ge "$attempts" ]; then
+                echo "Deploy of $service failed after $attempts attempts" >&2
+                return 1
+              fi
+              attempt=$((attempt + 1))
+              echo "Transient deploy failure for $service; retrying in 30s..."
+              sleep 30
+            done
+          }
           for service in "${services[@]}"; do
-            echo "Deploying Railway service: $service"
-            "$HOME/.railway/bin/railway" up \
-              --project "$RAILWAY_PROJECT_ID" \
-              --environment "$RAILWAY_ENVIRONMENT" \
-              --service "$service" \
-              --ci
+            deploy_service "$service"
           done
 
   deploy-voice-edge:

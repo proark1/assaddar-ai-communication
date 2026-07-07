@@ -4,7 +4,7 @@ WORKDIR /app
 
 RUN corepack enable && corepack prepare pnpm@10.28.1 --activate
 
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json vitest.config.ts ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json vitest.config.ts .npmrc ./
 COPY apps ./apps
 COPY packages ./packages
 COPY scripts ./scripts
@@ -21,7 +21,7 @@ WORKDIR /app
 
 RUN corepack enable && corepack prepare pnpm@10.28.1 --activate
 
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json vitest.config.ts ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json vitest.config.ts .npmrc ./
 COPY apps ./apps
 COPY packages ./packages
 COPY scripts ./scripts
