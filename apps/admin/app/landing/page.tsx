@@ -101,7 +101,7 @@ export default function LandingPage() {
           </p>
           <div className="landingHeroActions">
             <Link className="primaryButton linkButton" href="/">
-              Open the admin
+              Open admin
               <ArrowRight size={16} />
             </Link>
             <a className="secondaryButton linkButton" href="#platform">

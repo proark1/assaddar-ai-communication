@@ -219,6 +219,7 @@ input,
 select,
 textarea {
   width: 100%;
+  min-height: 44px;
   min-width: 0;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -342,7 +343,11 @@ textarea {
 .secondaryButton:disabled,
 .dangerButton:disabled,
 .iconButton:disabled,
-.tenantButton:disabled {
+.tenantButton:disabled,
+.textToggle:disabled,
+.plainListButton:disabled,
+.segmented button:disabled,
+.platformTabs button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
 }
@@ -354,12 +359,16 @@ textarea {
 
 .textToggle {
   justify-content: flex-start;
-  min-height: auto;
+  min-height: 44px;
   border: 0;
   background: transparent;
   color: var(--accent);
-  padding: 0;
+  padding: 0 2px;
   font-size: 13px;
+}
+
+.textToggle:hover:not(:disabled) {
+  color: var(--accent-hover);
 }
 
 .spin {
@@ -714,6 +723,13 @@ textarea {
   min-width: 0;
 }
 
+.launchHealthGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
 .settingsSection,
 #knowledge-manager,
 #connect-channels,
@@ -743,10 +759,12 @@ textarea {
 }
 
 .metricButton {
+  position: relative;
   width: 100%;
   min-height: 74px;
   color: var(--text);
   cursor: pointer;
+  padding-right: 34px;
   text-align: left;
   transition:
     border-color 140ms ease,
@@ -758,6 +776,24 @@ textarea {
   border-color: rgba(47, 111, 115, 0.34);
   box-shadow: 0 14px 30px -22px rgba(22, 25, 30, 0.58);
   transform: translateY(-1px);
+}
+
+.metricButton::after,
+.primaryCommand::after,
+.actionItem::after,
+.leadActionItem::after,
+.channelLaunchMap button::after,
+.setupList button::after,
+.plainListButton::after {
+  content: ">";
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 900;
+  opacity: 0.64;
+  transform: translateY(-50%);
 }
 
 .metricCard svg {
@@ -1104,8 +1140,10 @@ textarea {
 }
 
 .setupList button {
+  position: relative;
   justify-content: flex-start;
   color: var(--text);
+  padding-right: 34px;
   text-align: left;
 }
 
@@ -1148,6 +1186,7 @@ textarea {
 }
 
 .plainListButton {
+  position: relative;
   display: grid;
   justify-items: start;
   width: 100%;
@@ -1155,7 +1194,7 @@ textarea {
   border: 1px solid var(--line);
   background: var(--surface-muted);
   color: var(--text);
-  padding: 10px;
+  padding: 10px 34px 10px 10px;
   text-align: left;
 }
 
@@ -1397,11 +1436,11 @@ textarea {
 
 .segmented button,
 .platformTabs button {
-  min-height: 34px;
+  min-height: 44px;
   border: 1px solid var(--line);
   background: var(--surface);
   color: var(--text-soft);
-  padding: 0 10px;
+  padding: 0 12px;
   font-size: 12px;
 }
 
@@ -2325,11 +2364,16 @@ textarea {
   margin-top: 2px;
 }
 
+.adminAccessToggle {
+  margin-top: -12px;
+}
+
 .authStatus {
   max-width: 100%;
   white-space: normal;
 }
 
+.authProductLink,
 .sidebarProductLink {
   display: inline-flex;
   align-items: center;
@@ -2338,6 +2382,16 @@ textarea {
   text-decoration: none;
   font-size: 13px;
   font-weight: 900;
+}
+
+.authProductLink {
+  min-height: 44px;
+  width: fit-content;
+}
+
+.authProductLink:hover,
+.sidebarProductLink:hover {
+  color: var(--accent-hover);
 }
 
 .progressTrack.large {
@@ -2508,6 +2562,7 @@ textarea {
 }
 
 .primaryCommand {
+  position: relative;
   display: grid;
   gap: 7px;
   justify-items: start;
@@ -2515,7 +2570,7 @@ textarea {
   border-radius: 8px;
   background: var(--amber-bg);
   color: var(--text);
-  padding: 14px;
+  padding: 14px 36px 14px 14px;
   text-align: left;
   cursor: pointer;
 }
@@ -2970,6 +3025,7 @@ textarea {
 }
 
 .leadActionItem {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 6px 10px;
@@ -2979,7 +3035,7 @@ textarea {
   border-radius: 8px;
   background: var(--surface);
   color: var(--text);
-  padding: 10px;
+  padding: 10px 34px 10px 10px;
   text-align: left;
   cursor: pointer;
 }
@@ -3277,6 +3333,57 @@ textarea {
   line-height: 1.35;
 }
 
+.channelSetupDetails {
+  display: grid;
+  gap: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.channelSetupDetails summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  color: var(--text-soft);
+  padding: 0 12px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 900;
+  list-style: none;
+}
+
+.channelSetupDetails summary::-webkit-details-marker {
+  display: none;
+}
+
+.channelSetupDetails summary::after {
+  content: ">";
+  color: var(--accent);
+  font-weight: 900;
+  transition: transform 140ms ease;
+}
+
+.channelSetupDetails[open] summary::after {
+  transform: rotate(90deg);
+}
+
+.channelSetupDetails summary small {
+  min-width: 0;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.channelSetupDetails > :not(summary) {
+  margin-top: 12px;
+}
+
 .channelTutorial {
   display: grid;
   gap: 6px;
@@ -3497,7 +3604,7 @@ textarea {
   border-radius: 8px;
   background: var(--surface-muted);
   color: var(--text);
-  padding: 12px 12px 12px 44px;
+  padding: 12px 34px 12px 44px;
   text-align: left;
 }
 
@@ -4293,6 +4400,7 @@ textarea {
 }
 
 .actionItem {
+  position: relative;
   display: grid;
   gap: 5px;
   justify-items: start;
@@ -4301,7 +4409,7 @@ textarea {
   border-radius: 8px;
   background: var(--surface-muted);
   color: var(--text);
-  padding: 12px;
+  padding: 12px 34px 12px 12px;
   text-align: left;
   cursor: pointer;
 }
@@ -5432,6 +5540,7 @@ textarea {
   .providerOptionGrid,
   .providerGuideGrid,
   .handoffCopilotGrid,
+  .launchHealthGrid,
   .portalModuleGrid,
   .playbookStepGrid {
     grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -5494,6 +5603,7 @@ textarea {
   .inboxGrid,
   .quickStartGrid,
   .operationalGrid,
+  .launchHealthGrid,
   .leadActionGrid,
   .scoreGuideGrid,
   .loopStepGrid,
@@ -5598,10 +5708,6 @@ textarea {
     min-height: 44px;
   }
 
-  .homeIntro .quickActionGrid {
-    display: none;
-  }
-
   .authPanel {
     order: -1;
   }
@@ -5627,6 +5733,7 @@ textarea {
   .compactMetrics,
   .todayGrid,
   .operationalGrid,
+  .launchHealthGrid,
   .onboardingWorkspace,
   .selfServiceGrid,
   .authShell,
@@ -5693,22 +5800,34 @@ textarea {
   }
 
   .landingNav {
-    align-items: flex-start;
-    flex-direction: column;
+    align-items: center;
+    flex-direction: row;
   }
 
   .landingNav nav {
-    justify-content: flex-start;
+    margin-left: auto;
+    justify-content: flex-end;
   }
 
   .landingNav a {
     display: inline-flex;
-    min-height: 32px;
+    min-height: 44px;
     align-items: center;
   }
 
+  .landingNav nav a:not(.landingNavCta) {
+    display: none;
+  }
+
+  .landingNavCta {
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    background: var(--surface-raised);
+    padding: 0 12px;
+  }
+
   .landingBand[id] {
-    scroll-margin-top: 150px;
+    scroll-margin-top: 82px;
   }
 
   .landingHero {
