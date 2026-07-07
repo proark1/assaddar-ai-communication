@@ -1104,6 +1104,12 @@ export const messageDeliveries = pgTable(
     index("message_deliveries_provider_message_idx").on(
       table.providerMessageId,
     ),
+    // Partial index for the cross-tenant delivery-retry worker sweep, which
+    // filters failed rows and orders by updated_at with no tenant predicate.
+    // See migration 0015.
+    index("message_deliveries_retry_idx")
+      .on(table.updatedAt)
+      .where(sql`${table.status} = 'failed'`),
   ],
 );
 
