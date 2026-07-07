@@ -22,7 +22,7 @@ import formBody from "@fastify/formbody";
 import rateLimit from "@fastify/rate-limit";
 import Fastify from "fastify";
 import type { FastifyReply, FastifyRequest } from "fastify";
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { Readable } from "node:stream";
 import { z } from "zod";
 
@@ -169,11 +169,9 @@ function ensureValidVoiceEdgeSignature(
       request.log.error(
         "VOICE_EDGE_SECRET is not set; rejecting /voice/turn rather than accepting an unauthenticated turn.",
       );
-      reply
-        .code(403)
-        .send({
-          error: "Voice edge signature verification is not configured.",
-        });
+      reply.code(403).send({
+        error: "Voice edge signature verification is not configured.",
+      });
       return false;
     }
     request.log.warn(
@@ -477,6 +475,45 @@ app.post("/twilio/voice", async (request, reply) => {
     conversationInput.externalUserId = event.externalUserId;
   }
 
+  // Dedupe Twilio retries/replays. Twilio signatures carry no nonce, so a
+  // retried POST for the same call turn would otherwise re-run the paid
+  // engine.answer and duplicate stored messages. Key on CallSid + a hash of the
+  // recognized speech so genuine later turns in the same call still process.
+  // Guarded so any dedup failure degrades to normal processing.
+  let webhookEventId: string | null = null;
+  const callSid = event.externalConversationId;
+  if (callSid) {
+    try {
+      const providerEventId = `${callSid}:${createHash("sha256")
+        .update(event.text)
+        .digest("hex")
+        .slice(0, 24)}`;
+      const recorded = await store.recordChannelWebhookEvent({
+        tenantId: tenant.id,
+        channel: "telephone",
+        providerEventId,
+        eventType: "voice.turn.inbound",
+        payload: { provider: "twilio", callSid },
+      });
+      if (recorded.duplicate && recorded.event.status === "processed") {
+        return reply
+          .type("text/xml")
+          .send(
+            createTwiMLGather(
+              "Entschuldigung, das habe ich nicht ganz verstanden. Bitte wiederholen Sie kurz Ihre Frage.",
+              voiceOptions,
+            ),
+          );
+      }
+      webhookEventId = recorded.event.id;
+    } catch (error) {
+      request.log.warn(
+        { err: error },
+        "Telephone webhook dedup check failed; processing without dedup.",
+      );
+    }
+  }
+
   const conversation = await store.findOrCreateConversation(conversationInput);
 
   await store.addMessage({
@@ -533,6 +570,17 @@ app.post("/twilio/voice", async (request, reply) => {
       from: event.externalUserId ?? null,
     },
   });
+
+  if (webhookEventId) {
+    await store
+      .markChannelWebhookEventProcessed(webhookEventId)
+      .catch((error) => {
+        request.log.warn(
+          { err: error },
+          "Failed to mark telephone webhook event processed.",
+        );
+      });
+  }
 
   return reply.type("text/xml").send(createTwiMLSay(answer.text, voiceOptions));
 });
