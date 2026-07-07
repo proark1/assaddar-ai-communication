@@ -2882,7 +2882,7 @@ export async function buildServer(
       const handoffId = getStringProperty(handoff, "id");
 
       if (automation.ownerLeadEmailEnabled) {
-        await notifyLead(options, {
+        const leadOutcome = await notifyLead(options, {
           tenantId: tenant.id,
           tenantName: tenant.name,
           type: "lead_capture",
@@ -2892,17 +2892,29 @@ export async function buildServer(
           ...(handoffId ? { handoffId } : {}),
           ...(body.pageUrl ? { pageUrl: body.pageUrl } : {}),
         });
+        reportNotificationOutcome(
+          request.log,
+          metrics,
+          "lead_capture",
+          leadOutcome,
+        );
       }
 
       if (automation.visitorConfirmationEmailEnabled) {
         const bookingUrl = getBookingUrl(theme);
-        await notifyVisitorConfirmation(options, {
+        const visitorOutcome = await notifyVisitorConfirmation(options, {
           tenantName: tenant.name,
           type: "lead_capture",
           fields: body.fields,
           ...(body.pageUrl ? { pageUrl: body.pageUrl } : {}),
           ...(bookingUrl ? { bookingUrl } : {}),
         });
+        reportNotificationOutcome(
+          request.log,
+          metrics,
+          "visitor_confirmation",
+          visitorOutcome,
+        );
       }
 
       await options.store.logUsage({
@@ -3006,7 +3018,7 @@ export async function buildServer(
       });
 
       if (automation.ownerLeadEmailEnabled) {
-        await notifyLead(options, {
+        const leadOutcome = await notifyLead(options, {
           tenantId: tenant.id,
           tenantName: tenant.name,
           type: "readiness_assessment",
@@ -3017,11 +3029,17 @@ export async function buildServer(
           score,
           ...(body.pageUrl ? { pageUrl: body.pageUrl } : {}),
         });
+        reportNotificationOutcome(
+          request.log,
+          metrics,
+          "readiness_lead",
+          leadOutcome,
+        );
       }
 
       if (automation.visitorConfirmationEmailEnabled) {
         const bookingUrl = getBookingUrl(theme);
-        await notifyVisitorConfirmation(options, {
+        const visitorOutcome = await notifyVisitorConfirmation(options, {
           tenantName: tenant.name,
           type: "readiness_assessment",
           fields: body.answers,
@@ -3029,6 +3047,12 @@ export async function buildServer(
           ...(body.pageUrl ? { pageUrl: body.pageUrl } : {}),
           ...(bookingUrl ? { bookingUrl } : {}),
         });
+        reportNotificationOutcome(
+          request.log,
+          metrics,
+          "readiness_visitor_confirmation",
+          visitorOutcome,
+        );
       }
 
       return reply.code(201).send({
@@ -3133,15 +3157,35 @@ export async function buildServer(
         channel,
         request.body,
       );
-      const tenant = query.assistantId
-        ? await options.store.getTenantByPublicId(query.assistantId)
-        : providerAccountId
-          ? await options.store.getTenantByChannelConnection(
-              channel,
-              adapter.provider,
-              providerAccountId,
-            )
+      // Resolve the tenant from the *signed* provider account id, never the
+      // attacker-controllable ?assistantId query param. The X-Hub-Signature only
+      // proves Meta sent this payload — not which tenant owns it. When a
+      // providerAccountId is present we route solely by the channel connection it
+      // maps to (tenant_not_mapped if none), so a ?assistantId pointing at a
+      // different tenant can no longer redirect another tenant's inbound events.
+      // ?assistantId is honoured only for local/dev payloads that carry no
+      // providerAccountId.
+      const tenant = providerAccountId
+        ? await options.store.getTenantByChannelConnection(
+            channel,
+            adapter.provider,
+            providerAccountId,
+          )
+        : query.assistantId
+          ? await options.store.getTenantByPublicId(query.assistantId)
           : null;
+
+      if (tenant && providerAccountId && query.assistantId) {
+        const requested = await options.store.getTenantByPublicId(
+          query.assistantId,
+        );
+        if (!requested || requested.id !== tenant.id) {
+          request.log.warn(
+            { channel, providerAccountId },
+            "Ignoring Meta webhook ?assistantId that does not match the signed channel connection (possible cross-tenant injection attempt)",
+          );
+        }
+      }
 
       if (!tenant) {
         return reply.code(202).send({
@@ -6026,6 +6070,46 @@ function usageTotal(usageByStatus: unknown[], eventTypes: string[]): number {
     }
     return total + (numberValue(record.total) ?? 0);
   }, 0);
+}
+
+const BENIGN_NOTIFICATION_REASONS = new Set([
+  "not_configured",
+  "smtp_not_configured",
+  "visitor_email_missing",
+]);
+
+/**
+ * Surface the outcome of a best-effort lead/visitor notification. These sends
+ * previously had their result discarded, so a downed webhook/SMTP silently
+ * stopped owner lead alerts while the widget still returned success on the
+ * revenue-critical capture path. A "not configured" outcome is expected and only
+ * logged at debug; a genuine send failure is logged at error and funnelled
+ * through captureException so operators get a signal (and a Sentry event).
+ */
+function reportNotificationOutcome(
+  log: FastifyRequest["log"],
+  metrics: MetricsRegistry,
+  kind: string,
+  outcome: { sent: boolean; reason?: string; results?: unknown },
+): void {
+  if (outcome.sent) {
+    return;
+  }
+  if (outcome.reason && BENIGN_NOTIFICATION_REASONS.has(outcome.reason)) {
+    log.debug(
+      { kind, reason: outcome.reason },
+      "Lead notification skipped (channel not configured)",
+    );
+    return;
+  }
+  log.error(
+    { kind, reason: outcome.reason, results: outcome.results },
+    "Lead notification failed to send",
+  );
+  captureException(log, metrics, new Error(`${kind} notification failed`), {
+    kind,
+    reason: outcome.reason,
+  });
 }
 
 async function notifyLead(
