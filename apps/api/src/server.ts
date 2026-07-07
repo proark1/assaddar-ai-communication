@@ -23,6 +23,7 @@ import Fastify, {
   type FastifyReply,
   type FastifyRequest,
 } from "fastify";
+import Redis from "ioredis";
 import { Buffer } from "node:buffer";
 import { createHash, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
 import { lookup } from "node:dns/promises";
@@ -841,9 +842,30 @@ export async function buildServer(
   });
 
   const globalRateLimitMax = Number(process.env.RATE_LIMIT_MAX ?? 120);
+  // Without a shared store the in-memory limiter is per-instance, so the
+  // effective limit is N x configured across replicas and counters reset on
+  // redeploy — weakening auth brute-force protection under scale-out. When
+  // REDIS_URL is set, back the limiter (global + per-route) with Redis. Fail
+  // fast and never queue so a Redis outage degrades to no limiting (skipOnError)
+  // rather than blocking requests on a dead connection.
+  let rateLimitRedis: Redis | null = null;
+  if (process.env.REDIS_URL) {
+    rateLimitRedis = new Redis(process.env.REDIS_URL, {
+      connectTimeout: 500,
+      maxRetriesPerRequest: 1,
+      enableOfflineQueue: false,
+    });
+    rateLimitRedis.on("error", (error) => {
+      app.log.warn({ err: error }, "Rate-limit Redis connection error");
+    });
+    app.addHook("onClose", async () => {
+      await rateLimitRedis?.quit().catch(() => {});
+    });
+  }
   await app.register(rateLimit, {
     max: Number.isFinite(globalRateLimitMax) ? globalRateLimitMax : 120,
     timeWindow: process.env.RATE_LIMIT_WINDOW ?? "1 minute",
+    ...(rateLimitRedis ? { redis: rateLimitRedis, skipOnError: true } : {}),
   });
 
   // Periodically drop expired sessions so the table does not grow unbounded.
