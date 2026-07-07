@@ -3692,8 +3692,9 @@ export default function DashboardPage() {
           }
           conversations={analytics?.conversations ?? 0}
           messages={analytics?.messages ?? 0}
+          calls={analytics?.voice?.calls ?? 0}
           contacts={knownContactCount}
-          leads={leadHandoffs.length}
+          leads={analytics?.leads ?? leadHandoffs.length}
           knowledge={analytics?.approvedKnowledge ?? knowledge.length}
           openHandoffs={analytics?.openHandoffs ?? openHandoffs.length}
           unanswered={unansweredCount}

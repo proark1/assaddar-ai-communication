@@ -5,6 +5,7 @@ import { ToastStack } from "../app/ToastStack";
 import { DeleteKnowledgeModal } from "../app/DeleteKnowledgeModal";
 import ErrorBoundary from "../app/error";
 import { AnalyticsPanel } from "../app/AnalyticsPanel";
+import { DashboardMetrics } from "../app/DashboardMetrics";
 import type { KnowledgeItem, Toast } from "../app/page-types";
 
 describe("ToastStack", () => {
@@ -67,6 +68,42 @@ describe("DeleteKnowledgeModal", () => {
       />,
     );
     expect(screen.getByRole("button", { name: "Delete" })).toBeDisabled();
+  });
+});
+
+describe("DashboardMetrics", () => {
+  const props = {
+    loading: false,
+    conversations: 47,
+    messages: 127,
+    calls: 9,
+    contacts: 8,
+    leads: 5,
+    knowledge: 31,
+    openHandoffs: 39,
+    unanswered: 38,
+  };
+
+  it("surfaces calls as a dedicated card alongside the other counts", () => {
+    render(<DashboardMetrics {...props} />);
+
+    // Calls are tracked and shown explicitly (they also live inside
+    // conversations/messages as the telephone channel).
+    expect(screen.getByText("Calls")).toBeInTheDocument();
+    expect(screen.getByText("9")).toBeInTheDocument();
+    // Leads come from the privacy-safe aggregate, coherent with the others.
+    expect(screen.getByText("Leads")).toBeInTheDocument();
+    expect(screen.getByText("5")).toBeInTheDocument();
+    expect(screen.getByText("47")).toBeInTheDocument();
+    expect(screen.getByText("127")).toBeInTheDocument();
+  });
+
+  it("renders skeleton placeholders while loading", () => {
+    const { container } = render(
+      <DashboardMetrics {...props} loading={true} />,
+    );
+    expect(container.querySelector('[aria-busy="true"]')).toBeInTheDocument();
+    expect(screen.queryByText("Calls")).not.toBeInTheDocument();
   });
 });
 
