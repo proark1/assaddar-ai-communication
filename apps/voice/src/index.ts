@@ -69,6 +69,13 @@ const twilioVoiceName = process.env.TWILIO_VOICE_NAME ?? "alice";
 const twilioAuthToken = process.env.TWILIO_AUTH_TOKEN;
 const voiceEdgeSecret = process.env.VOICE_EDGE_SECRET;
 
+// Webhook signature verification may only be skipped in explicit local/dev/test
+// runs. Any other environment (production or an unset NODE_ENV) must fail closed
+// so a missing secret can never turn a webhook into an unauthenticated entry
+// point that lets anyone drive the AI and incur billable model calls.
+const allowUnsignedWebhooks =
+  process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test";
+
 if (process.env.NODE_ENV === "production" && !voiceEdgeSecret) {
   throw new Error(
     "VOICE_EDGE_SECRET is required in production to authenticate /voice/turn.",
@@ -112,8 +119,17 @@ function ensureValidTwilioSignature(
   reply: { code(statusCode: number): { send(payload: unknown): unknown } },
 ): boolean {
   if (!twilioAuthToken) {
+    if (!allowUnsignedWebhooks) {
+      request.log.error(
+        "TWILIO_AUTH_TOKEN is not set; rejecting Twilio webhook rather than accepting an unauthenticated call.",
+      );
+      reply
+        .code(403)
+        .send({ error: "Twilio signature verification is not configured." });
+      return false;
+    }
     request.log.warn(
-      "TWILIO_AUTH_TOKEN is not set; skipping Twilio webhook signature verification.",
+      "TWILIO_AUTH_TOKEN is not set; skipping Twilio webhook signature verification (dev/test only).",
     );
     return true;
   }
@@ -149,8 +165,19 @@ function ensureValidVoiceEdgeSignature(
   reply: FastifyReply,
 ): boolean {
   if (!voiceEdgeSecret) {
+    if (!allowUnsignedWebhooks) {
+      request.log.error(
+        "VOICE_EDGE_SECRET is not set; rejecting /voice/turn rather than accepting an unauthenticated turn.",
+      );
+      reply
+        .code(403)
+        .send({
+          error: "Voice edge signature verification is not configured.",
+        });
+      return false;
+    }
     request.log.warn(
-      "VOICE_EDGE_SECRET is not set; skipping /voice/turn signature verification.",
+      "VOICE_EDGE_SECRET is not set; skipping /voice/turn signature verification (dev/test only).",
     );
     return true;
   }
