@@ -26,8 +26,11 @@ type Config struct {
 	VoiceTurnURL  string
 	VoiceSecret   string
 	AssistantID   string
-	Gemini        GeminiConfig
-	DefaultLocale string
+	Gemini            GeminiConfig
+	DefaultLocale     string
+	SIPAllowedSources []net.IPNet
+	MaxSessions       int
+	MaxCallDuration   time.Duration
 }
 
 type EasybellConfig struct {
@@ -77,12 +80,54 @@ func Load(getenv func(string) string) (Config, error) {
 			TTSModel: envDefault(getenv, "GEMINI_TTS_MODEL", "gemini-3.1-flash-tts-preview"),
 			TTSVoice: envDefault(getenv, "GEMINI_TTS_VOICE", "Kore"),
 		},
-		DefaultLocale: envDefault(getenv, "VOICE_LOCALE", "de-DE"),
+		DefaultLocale:   envDefault(getenv, "VOICE_LOCALE", "de-DE"),
+		MaxSessions:     envIntDefault(getenv, "VOICE_EDGE_MAX_SESSIONS", 0),
+		MaxCallDuration: time.Duration(envIntDefault(getenv, "VOICE_EDGE_MAX_CALL_DURATION_MS", 1800000)) * time.Millisecond,
 	}
+	sources, err := parseIPNetworks(getenv("VOICE_EDGE_SIP_ALLOWED_SOURCES"))
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.SIPAllowedSources = sources
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+// parseIPNetworks parses a comma-separated list of IPs or CIDRs into networks.
+// An empty value yields nil (SIP source filtering disabled — accept all). Bare
+// IPs become a host-sized network (/32 for IPv4, /128 for IPv6).
+func parseIPNetworks(raw string) ([]net.IPNet, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	var networks []net.IPNet
+	for _, entry := range strings.Split(raw, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		if strings.Contains(entry, "/") {
+			_, network, err := net.ParseCIDR(entry)
+			if err != nil {
+				return nil, fmt.Errorf("VOICE_EDGE_SIP_ALLOWED_SOURCES: invalid CIDR %q: %w", entry, err)
+			}
+			networks = append(networks, *network)
+			continue
+		}
+		ip := net.ParseIP(entry)
+		if ip == nil {
+			return nil, fmt.Errorf("VOICE_EDGE_SIP_ALLOWED_SOURCES: invalid IP %q", entry)
+		}
+		bits := 32
+		if ip.To4() == nil {
+			bits = 128
+		}
+		networks = append(networks, net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)})
+	}
+	return networks, nil
 }
 
 func (cfg Config) Validate() error {

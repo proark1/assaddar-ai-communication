@@ -166,6 +166,15 @@ func (server *Server) handleMessage(ctx context.Context, message sip.Message, re
 		return
 	}
 
+	if !server.sourceAllowed(remote) {
+		server.logger.Warn(
+			"dropped sip request from disallowed source",
+			"source", remote.String(),
+			"method", message.Method(),
+		)
+		return
+	}
+
 	switch message.Method() {
 	case "INVITE":
 		server.handleInvite(ctx, message, remote)
@@ -219,6 +228,16 @@ func (server *Server) handleInvite(ctx context.Context, request sip.Message, rem
 		return
 	}
 
+	if server.cfg.MaxSessions > 0 && server.activeSessionCount() >= server.cfg.MaxSessions {
+		server.logger.Warn(
+			"rejecting invite: max concurrent sessions reached",
+			"callId", callID,
+			"maxSessions", server.cfg.MaxSessions,
+		)
+		server.sendResponse(request, remote, 486, "Busy Here", "")
+		return
+	}
+
 	ringing := sip.ResponseFor(request, 180, "Ringing", "")
 	server.sendMessage(ringing, remote)
 
@@ -257,6 +276,7 @@ func (server *Server) handleInvite(ctx context.Context, request sip.Message, rem
 		}
 	}()
 	go server.answerAfterDelay(callCtx, session, request, remote)
+	go server.expireOverdueSession(callCtx, session.CallID, server.cfg.MaxCallDuration)
 
 	server.logger.Info(
 		"accepted inbound invite",
@@ -1113,6 +1133,59 @@ func (server *Server) endSession(callID string) {
 		server.logger.Warn("failed to close rtp session", "callId", callID, "error", err)
 	}
 	server.logger.Info("ended call session", "callId", callID)
+}
+
+func (server *Server) activeSessionCount() int {
+	server.sessionsMu.Lock()
+	defer server.sessionsMu.Unlock()
+	return len(server.sessions)
+}
+
+// sourceAllowed reports whether a SIP request from remote may be processed. With
+// no allowlist configured it accepts everything (unchanged default); when
+// VOICE_EDGE_SIP_ALLOWED_SOURCES is set, only requests from those IPs/CIDRs are
+// accepted, so a stranger who reaches the SIP port cannot originate calls or
+// tear down other callers' sessions.
+func (server *Server) sourceAllowed(remote *net.UDPAddr) bool {
+	if len(server.cfg.SIPAllowedSources) == 0 {
+		return true
+	}
+	if remote == nil {
+		return false
+	}
+	for i := range server.cfg.SIPAllowedSources {
+		if server.cfg.SIPAllowedSources[i].Contains(remote.IP) {
+			return true
+		}
+	}
+	return false
+}
+
+// expireOverdueSession force-ends a call that has run past the configured hard
+// cap, so a stuck, silent, or attacker-originated call cannot hold a session,
+// its RTP goroutine, and a leased media port indefinitely. Disabled when
+// timeout <= 0. The context is the call's own context, so a normally-ended call
+// cancels this timer.
+func (server *Server) expireOverdueSession(ctx context.Context, callID string, timeout time.Duration) {
+	if timeout <= 0 {
+		return
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return
+	case <-timer.C:
+	}
+	if server.getSession(callID) == nil {
+		return
+	}
+	server.logger.Warn(
+		"ending call session past max duration",
+		"callId", callID,
+		"maxDurationMs", timeout.Milliseconds(),
+	)
+	server.endSession(callID)
 }
 
 func (server *Server) contactHeader(assistantID string) string {
