@@ -190,7 +190,7 @@ export function readableError(error: unknown) {
   const raw = error instanceof Error ? error.message : "Something went wrong.";
 
   if (/Failed to fetch|NetworkError|Load failed/i.test(raw)) {
-    return "API unreachable. Check the API base or deploy status.";
+    return "API unreachable. Check the API endpoint or deploy status.";
   }
   if (/unauthorized|401|invalid token/i.test(raw)) {
     return "Login rejected. Check the email, password, or admin token.";

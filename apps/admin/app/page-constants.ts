@@ -127,11 +127,10 @@ export const channelExperienceDetails: Record<
   },
 };
 
-export const authModeOrder: AuthMode[] = ["login", "signup", "admin_token"];
-export const authModeTabIds: Record<AuthMode, string> = {
+export const authModeOrder = ["login", "signup"] as const satisfies AuthMode[];
+export const authModeTabIds: Record<(typeof authModeOrder)[number], string> = {
   login: "auth-login-tab",
   signup: "auth-signup-tab",
-  admin_token: "auth-admin-token-tab",
 };
 
 export const sampleQuestions = APP_CONFIG.sampleQuestions;

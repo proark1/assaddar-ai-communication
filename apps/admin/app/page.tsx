@@ -800,6 +800,24 @@ export default function DashboardPage() {
     channels: "Website chat, telephone AI, WhatsApp, Messenger, and Instagram.",
     settings: "Business profile, widget install, automation rules, and tests.",
   };
+  type CommandTone = "urgent" | "warn" | "info";
+  type CommandItem = {
+    tone: CommandTone;
+    title: string;
+    detail: string;
+    tab: TabKey;
+    impact: string;
+    reward: string;
+    source: string;
+    action?: () => void;
+  };
+  type ScoreGuide = {
+    label: string;
+    score: number;
+    action: string;
+    tab: TabKey;
+    sectionId?: string | undefined;
+  };
   const nextActions = [
     openLeads.length
       ? {
@@ -810,6 +828,10 @@ export default function DashboardPage() {
           impact: `Protect ${openLeads.length} active opportunity${openLeads.length === 1 ? "" : "ies"}.`,
           reward: "+Lead momentum",
           source: "Lead loop",
+          action: () => {
+            setActiveTab("leads");
+            openLeadDetail(openLeads[0]!);
+          },
         }
       : null,
     staleLeads.length
@@ -821,6 +843,10 @@ export default function DashboardPage() {
           impact: "Recover deals before they go cold.",
           reward: "+Response discipline",
           source: "Lead loop",
+          action: () => {
+            setActiveTab("leads");
+            openLeadDetail(staleLeads[0]!);
+          },
         }
       : null,
     unansweredQuestions.length
@@ -832,6 +858,10 @@ export default function DashboardPage() {
           impact: "Turn real customer friction into reusable answers.",
           reward: "+Answer quality",
           source: "Knowledge loop",
+          action: () => {
+            draftFaqFromUnanswered(unansweredQuestions[0]!);
+            openWorkspaceSection("knowledge", "knowledge-manager");
+          },
         }
       : null,
     missingKnowledgeChecks.length
@@ -846,6 +876,7 @@ export default function DashboardPage() {
           impact: "Cover the topics buyers ask before they book.",
           reward: "+Coverage",
           source: "Knowledge loop",
+          action: () => openWorkspaceSection("knowledge", "knowledge-manager"),
         }
       : null,
     !installCheck?.installed
@@ -857,6 +888,7 @@ export default function DashboardPage() {
           impact: "Confirm visitors can actually reach the assistant.",
           reward: "+Launch readiness",
           source: "Launch loop",
+          action: () => openWorkspaceSection("settings", "widget-settings"),
         }
       : null,
     !leadCaptureEnabled
@@ -868,6 +900,7 @@ export default function DashboardPage() {
           impact: "Give high-intent visitors a way to convert.",
           reward: "+Conversion path",
           source: "Widget loop",
+          action: () => openWorkspaceSection("settings", "widget-settings"),
         }
       : null,
     !telephoneConnection?.externalAccountId
@@ -879,6 +912,8 @@ export default function DashboardPage() {
           impact: "Bring phone conversations into the same workflow.",
           reward: "+Channel coverage",
           source: "Channel loop",
+          action: () =>
+            openWorkspaceSection("channels", "telephone-channel-setup"),
         }
       : null,
     !automationSettings.visitorConfirmationEmailEnabled
@@ -890,6 +925,7 @@ export default function DashboardPage() {
           impact: "Close the loop immediately after a visitor converts.",
           reward: "+Trust",
           source: "Automation loop",
+          action: () => openWorkspaceSection("settings", "automation-settings"),
         }
       : null,
     conversations.length === 0
@@ -902,17 +938,10 @@ export default function DashboardPage() {
           impact: "Prove the end-to-end visitor journey.",
           reward: "+Launch confidence",
           source: "Test loop",
+          action: () => openWorkspaceSection("settings", "test-settings"),
         }
       : null,
-  ].filter(Boolean) as Array<{
-    tone: "urgent" | "warn" | "info";
-    title: string;
-    detail: string;
-    tab: TabKey;
-    impact: string;
-    reward: string;
-    source: string;
-  }>;
+  ].filter(Boolean) as CommandItem[];
 
   const setupSteps = [
     {
@@ -920,48 +949,56 @@ export default function DashboardPage() {
       done: Boolean(adminToken || adminSession),
       action: "Sign in",
       tab: "settings" as TabKey,
+      sectionId: "business-settings",
     },
     {
       label: "API connection",
       done: tenants.length > 0,
       action: "Connect",
       tab: "settings" as TabKey,
+      sectionId: "business-settings",
     },
     {
       label: "Tenant",
       done: Boolean(selectedTenant),
       action: "Select tenant",
       tab: "settings" as TabKey,
+      sectionId: "business-settings",
     },
     {
       label: "Business profile",
       done: Boolean(selectedTenant?.defaultLocale || selectedTenant?.theme),
       action: "Save settings",
       tab: "settings" as TabKey,
+      sectionId: "business-settings",
     },
     {
       label: "Knowledge",
       done: knowledge.length > 0,
       action: "Add FAQ",
       tab: "knowledge" as TabKey,
+      sectionId: "knowledge-manager",
     },
     {
       label: "Test answer",
       done: Boolean(testAnswer),
       action: "Run test",
       tab: "settings" as TabKey,
+      sectionId: "test-settings",
     },
     {
       label: "Widget",
       done: Boolean(installCheck?.installed),
       action: "Verify install",
       tab: "settings" as TabKey,
+      sectionId: "widget-settings",
     },
     {
       label: "Channels",
       done: connectedChannelCount > 1,
       action: "Connect phone or Meta",
       tab: "channels" as TabKey,
+      sectionId: "connect-channels",
     },
     {
       label: "Automation",
@@ -971,6 +1008,7 @@ export default function DashboardPage() {
       ),
       action: "Review rules",
       tab: "settings" as TabKey,
+      sectionId: "automation-settings",
     },
   ];
   const completedSteps = setupSteps.filter((step) => step.done).length;
@@ -998,23 +1036,6 @@ export default function DashboardPage() {
       Math.min(100, leadScoreSignal) * 0.24,
   );
   type ProductLevel = { name: string; threshold: number; detail: string };
-  type CommandTone = "urgent" | "warn" | "info";
-  type CommandItem = {
-    tone: CommandTone;
-    title: string;
-    detail: string;
-    tab: TabKey;
-    impact: string;
-    reward: string;
-    source: string;
-  };
-  type ScoreGuide = {
-    label: string;
-    score: number;
-    action: string;
-    tab: TabKey;
-  };
-
   const productLevels: ProductLevel[] = [
     {
       name: "Launch Ready",
@@ -1058,6 +1079,7 @@ export default function DashboardPage() {
           ? "Keep the install test green."
           : (setupSteps.find((step) => !step.done)?.action ?? "Review setup"),
       tab: "settings" as TabKey,
+      sectionId: "business-settings",
     },
     {
       label: "Answer quality",
@@ -1067,6 +1089,7 @@ export default function DashboardPage() {
           ? "Draft the next approved FAQ."
           : "Test fresh buyer questions weekly.",
       tab: "knowledge" as TabKey,
+      sectionId: "knowledge-manager",
     },
     {
       label: "Lead momentum",
@@ -1078,6 +1101,8 @@ export default function DashboardPage() {
       tab: (openLeads.length || staleLeads.length
         ? "leads"
         : "settings") as TabKey,
+      sectionId:
+        openLeads.length || staleLeads.length ? undefined : "test-settings",
     },
     {
       label: "Channel coverage",
@@ -1087,6 +1112,7 @@ export default function DashboardPage() {
           ? "Monitor delivery and handoffs."
           : "Connect the next customer channel.",
       tab: "channels" as TabKey,
+      sectionId: "connect-channels",
     },
   ];
   const weakestScoreGuide = [...scoreGuides].sort(
@@ -1110,6 +1136,10 @@ export default function DashboardPage() {
     impact: suggestion.actionLabel,
     reward: "+Automation",
     source: titleCase(suggestion.category),
+    action: () =>
+      suggestion.category === "whatsapp"
+        ? openWorkspaceSection("channels", "connect-channels")
+        : setActiveTab("leads"),
   }));
   const commandQueue = [...nextActions, ...workflowCommandItems]
     .map((item) => ({
@@ -3667,7 +3697,9 @@ export default function DashboardPage() {
           knowledge={analytics?.approvedKnowledge ?? knowledge.length}
           openHandoffs={analytics?.openHandoffs ?? openHandoffs.length}
           unanswered={unansweredCount}
-          onOpenAnswers={() => setActiveTab("knowledge")}
+          onOpenAnswers={() =>
+            openWorkspaceSection("knowledge", "knowledge-manager")
+          }
           onOpenInbox={() => setActiveTab("leads")}
         />
         <AnalyticsPanel analytics={analytics} />
@@ -3698,7 +3730,7 @@ export default function DashboardPage() {
               data-done={step.done ? "true" : "false"}
               key={step.label}
               type="button"
-              onClick={() => setActiveTab(step.tab)}
+              onClick={() => openWorkspaceSection(step.tab, step.sectionId)}
             >
               {step.done ? (
                 <CheckCircle2 size={17} />
@@ -3869,7 +3901,7 @@ export default function DashboardPage() {
             className="primaryCommand"
             data-tone={primaryCommand.tone}
             type="button"
-            onClick={() => setActiveTab(primaryCommand.tab)}
+            onClick={() => runCommandAction(primaryCommand)}
           >
             <span>{primaryCommand.source}</span>
             <strong>{primaryCommand.title}</strong>
@@ -3888,7 +3920,7 @@ export default function DashboardPage() {
               data-tone={action.tone}
               key={`${action.source}-${action.title}`}
               type="button"
-              onClick={() => setActiveTab(action.tab)}
+              onClick={() => runCommandAction(action)}
             >
               <span>{action.source}</span>
               <strong>{action.title}</strong>
@@ -3901,7 +3933,12 @@ export default function DashboardPage() {
           <button
             className="weakestGuide"
             type="button"
-            onClick={() => setActiveTab(weakestScoreGuide.tab)}
+            onClick={() =>
+              openWorkspaceSection(
+                weakestScoreGuide.tab,
+                weakestScoreGuide.sectionId,
+              )
+            }
           >
             <span>Best score lift</span>
             <strong>{weakestScoreGuide.label}</strong>
@@ -3962,6 +3999,19 @@ export default function DashboardPage() {
       return "knowledge";
     }
     return "settings";
+  }
+
+  function readinessActionSection(checkId: string) {
+    if (checkId.startsWith("provider.") || checkId.startsWith("voice.")) {
+      return "telephone-channel-setup";
+    }
+    if (checkId.startsWith("ai.")) {
+      return "knowledge-manager";
+    }
+    if (checkId.startsWith("handoff.")) {
+      return undefined;
+    }
+    return "business-settings";
   }
 
   function renderProductionReadiness() {
@@ -4033,7 +4083,12 @@ export default function DashboardPage() {
                 data-tone={check.status === "fail" ? "urgent" : "warn"}
                 key={check.id}
                 type="button"
-                onClick={() => setActiveTab(readinessActionTab(check.id))}
+                onClick={() =>
+                  openWorkspaceSection(
+                    readinessActionTab(check.id),
+                    readinessActionSection(check.id),
+                  )
+                }
               >
                 <span>{check.status}</span>
                 <strong>{check.title}</strong>
@@ -4077,8 +4132,11 @@ export default function DashboardPage() {
                 key={suggestion.id}
                 type="button"
                 onClick={() =>
-                  setActiveTab(
+                  openWorkspaceSection(
                     suggestion.category === "whatsapp" ? "channels" : "leads",
+                    suggestion.category === "whatsapp"
+                      ? "connect-channels"
+                      : undefined,
                   )
                 }
               >
@@ -4088,9 +4146,16 @@ export default function DashboardPage() {
               </button>
             ))
           ) : (
-            <div className="emptyState compact">
-              No automation recommendations yet.
-            </div>
+            <button
+              className="plainListButton"
+              type="button"
+              onClick={() =>
+                openWorkspaceSection("settings", "automation-settings")
+              }
+            >
+              <strong>No automation recommendations yet</strong>
+              <span>Review automation rules.</span>
+            </button>
           )}
         </div>
       </section>
@@ -4100,14 +4165,16 @@ export default function DashboardPage() {
   function renderOverview() {
     return (
       <div className="workspaceStack">
-        {renderMetrics()}
-        {renderTodayPanel()}
-        {renderProductionReadiness()}
-        {renderProgressionPanel()}
         {renderCommandQueue()}
-        {renderOperationalHealth()}
-        <div className="overviewGrid">
+        {renderTodayPanel()}
+        {renderMetrics()}
+        <div className="launchHealthGrid" aria-label="Launch health">
+          {renderProductionReadiness()}
           {renderSetupChecklist()}
+          {renderOperationalHealth()}
+        </div>
+        {renderProgressionPanel()}
+        <div className="overviewGrid">
           {renderWorkflowSuggestions()}
 
           <section className="panel">
@@ -4160,7 +4227,10 @@ export default function DashboardPage() {
                     className="plainListButton"
                     key={handoff.id}
                     type="button"
-                    onClick={() => setActiveTab("leads")}
+                    onClick={() => {
+                      setActiveTab("leads");
+                      openLeadDetail(handoff);
+                    }}
                   >
                     <strong>{handoff.reason}</strong>
                     <span>{handoff.requesterMessage}</span>
@@ -4171,7 +4241,16 @@ export default function DashboardPage() {
                   Handoffs are hidden for this session.
                 </div>
               ) : (
-                <div className="emptyState compact">No open handoffs.</div>
+                <button
+                  className="plainListButton"
+                  type="button"
+                  onClick={() =>
+                    openWorkspaceSection("settings", "test-settings")
+                  }
+                >
+                  <strong>No open handoffs</strong>
+                  <span>Test a low-confidence question.</span>
+                </button>
               )}
             </div>
           </section>
@@ -4205,7 +4284,16 @@ export default function DashboardPage() {
                   Conversation list hidden for this session.
                 </div>
               ) : (
-                <div className="emptyState compact">No conversations yet.</div>
+                <button
+                  className="plainListButton"
+                  type="button"
+                  onClick={() =>
+                    openWorkspaceSection("settings", "test-settings")
+                  }
+                >
+                  <strong>No conversations yet</strong>
+                  <span>Send a test message.</span>
+                </button>
               )}
             </div>
           </section>
@@ -4464,7 +4552,7 @@ export default function DashboardPage() {
         <div className="panelHeader">
           <div className="panelTitle">
             <Sparkles size={18} />
-            <h2>Brain suggestions</h2>
+            <h2>Suggested answers</h2>
           </div>
           <div className="rowActions">
             <span className="countPill">{knowledgeSuggestions.length}</span>
@@ -4480,9 +4568,15 @@ export default function DashboardPage() {
           </div>
         </div>
         {!knowledgeSuggestions.length ? (
-          <div className="emptyState compact">
-            No pending learning suggestions.
-          </div>
+          <button
+            className="plainListButton"
+            type="button"
+            disabled={busy || !canEditKnowledge}
+            onClick={scanInteractionsForKnowledge}
+          >
+            <strong>No suggested answers yet</strong>
+            <span>Scan recent conversations.</span>
+          </button>
         ) : (
           <div className="suggestionStack">
             {knowledgeSuggestions.map((item) => {
@@ -4954,7 +5048,7 @@ export default function DashboardPage() {
             <div className="panelHeader">
               <div className="panelTitle">
                 <AlertCircle size={18} />
-                <h2>Knowledge autopilot</h2>
+                <h2>Knowledge gaps</h2>
               </div>
               <span className="countPill">{unansweredQuestions.length}</span>
             </div>
@@ -4986,9 +5080,16 @@ export default function DashboardPage() {
                 })}
               </div>
             ) : (
-              <div className="emptyState compact">
-                No repeated knowledge gaps detected.
-              </div>
+              <button
+                className="plainListButton"
+                type="button"
+                onClick={() =>
+                  openWorkspaceSection("settings", "test-settings")
+                }
+              >
+                <strong>No repeated knowledge gaps detected</strong>
+                <span>Run a test question.</span>
+              </button>
             )}
             <div className="divider" />
             <div className="suggestionStack">
@@ -5077,7 +5178,7 @@ export default function DashboardPage() {
         <div className="panelHeader">
           <div className="panelTitle">
             <Sparkles size={18} />
-            <h2>Lead action center</h2>
+            <h2>Work now</h2>
           </div>
           <span className="countPill">
             {dueLeads.length + hotLeads.length + waitingLeads.length}
@@ -5244,7 +5345,7 @@ export default function DashboardPage() {
           <div className="panelHeader">
             <div className="panelTitle">
               <UserCheck size={18} />
-              <h2>Lead capture inbox</h2>
+              <h2>Captured leads</h2>
             </div>
             <span className="countPill">{leadHandoffs.length}</span>
           </div>
@@ -5343,12 +5444,21 @@ export default function DashboardPage() {
                   </article>
                 );
               })
-            ) : (
+            ) : personalDataAccessDenied ? (
               <div className="emptyState">
-                {personalDataAccessDenied
-                  ? "Lead details are hidden for this session."
-                  : "No leads yet. Enable lead capture in the widget settings and publish the widget on the website."}
+                Lead details are hidden for this session.
               </div>
+            ) : (
+              <button
+                className="plainListButton"
+                type="button"
+                onClick={() =>
+                  openWorkspaceSection("settings", "widget-settings")
+                }
+              >
+                <strong>No leads yet</strong>
+                <span>Enable lead capture in widget settings.</span>
+              </button>
             )}
           </div>
         </section>
@@ -5829,7 +5939,7 @@ export default function DashboardPage() {
         <div className="panelHeader">
           <div className="panelTitle">
             <Inbox size={18} />
-            <h2>Conversation inbox</h2>
+            <h2>Customer conversations</h2>
           </div>
           <div className="segmented">
             {(["all", "needs_human", "recent"] as InboxFilter[]).map(
@@ -5895,12 +6005,21 @@ export default function DashboardPage() {
                     ) : null}
                   </button>
                 ))
-              ) : (
+              ) : personalDataAccessDenied ? (
                 <div className="emptyState compact">
-                  {personalDataAccessDenied
-                    ? "Conversation list hidden for this session."
-                    : "No conversations."}
+                  Conversation list hidden for this session.
                 </div>
+              ) : (
+                <button
+                  className="plainListButton"
+                  type="button"
+                  onClick={() =>
+                    openWorkspaceSection("settings", "test-settings")
+                  }
+                >
+                  <strong>No conversations yet</strong>
+                  <span>Send a test message.</span>
+                </button>
               )}
             </div>
             {inboxHasMore ? (
@@ -6213,12 +6332,19 @@ export default function DashboardPage() {
                 </article>
               );
             })
-          ) : (
+          ) : personalDataAccessDenied ? (
             <div className="emptyState">
-              {personalDataAccessDenied
-                ? "Handoff requests are hidden for this session."
-                : "No handoff requests in this view."}
+              Handoff requests are hidden for this session.
             </div>
+          ) : (
+            <button
+              className="plainListButton"
+              type="button"
+              onClick={() => openWorkspaceSection("settings", "test-settings")}
+            >
+              <strong>No handoff requests in this view</strong>
+              <span>Test a question that should reach a human.</span>
+            </button>
           )}
         </div>
         {handoffsHasMore ? (
@@ -7246,173 +7372,189 @@ export default function DashboardPage() {
                       <strong>{channelNextAction(connection)}</strong>
                     </div>
 
-                    <ol className="channelTutorial">
-                      {details.tutorial.map((step) => (
-                        <li key={`${connectionKey}-${step}`}>{step}</li>
-                      ))}
-                    </ol>
+                    <details
+                      className="channelSetupDetails"
+                      open={isWebsite || connection.status !== "connected"}
+                    >
+                      <summary>
+                        <span>Setup details</span>
+                        <small>{channelNextAction(connection)}</small>
+                      </summary>
 
-                    <div className="channelStepList">
-                      {getChannelSetupSteps(connection, webhook).map((step) => (
+                      <ol className="channelTutorial">
+                        {details.tutorial.map((step) => (
+                          <li key={`${connectionKey}-${step}`}>{step}</li>
+                        ))}
+                      </ol>
+
+                      <div className="channelStepList">
+                        {getChannelSetupSteps(connection, webhook).map(
+                          (step) => (
+                            <article
+                              data-done={step.done ? "true" : "false"}
+                              key={`${connectionKey}-${step.label}`}
+                            >
+                              {step.done ? (
+                                <CheckCircle2 size={16} />
+                              ) : (
+                                <AlertCircle size={16} />
+                              )}
+                              <div>
+                                <strong>{step.label}</strong>
+                                <span>{step.detail}</span>
+                              </div>
+                            </article>
+                          ),
+                        )}
+                      </div>
+
+                      <div className="channelStatusRows">
                         <article
-                          data-done={step.done ? "true" : "false"}
-                          key={`${connectionKey}-${step.label}`}
+                          data-ready={
+                            channelCredentialReady(connection)
+                              ? "true"
+                              : "false"
+                          }
                         >
-                          {step.done ? (
-                            <CheckCircle2 size={16} />
-                          ) : (
-                            <AlertCircle size={16} />
-                          )}
-                          <div>
-                            <strong>{step.label}</strong>
-                            <span>{step.detail}</span>
-                          </div>
+                          <span>{channelCredentialLabel(connection)}</span>
+                          <strong>{channelCredentialStatus(connection)}</strong>
                         </article>
-                      ))}
-                    </div>
-
-                    <div className="channelStatusRows">
-                      <article
-                        data-ready={
-                          channelCredentialReady(connection) ? "true" : "false"
-                        }
-                      >
-                        <span>{channelCredentialLabel(connection)}</span>
-                        <strong>{channelCredentialStatus(connection)}</strong>
-                      </article>
-                      <article
-                        data-ready={
-                          connection.externalAccountId || isWebsite
-                            ? "true"
-                            : "false"
-                        }
-                      >
-                        <span>{channelAccountLabel(connection.channel)}</span>
-                        <strong>
-                          {connection.externalAccountId || isWebsite
-                            ? "Set"
-                            : "Missing"}
-                        </strong>
-                      </article>
-                    </div>
-
-                    {isWebsite ? (
-                      <button
-                        className="secondaryButton full"
-                        type="button"
-                        onClick={() => setActiveTab("settings")}
-                      >
-                        <Code2 size={15} />
-                        Open widget setup
-                      </button>
-                    ) : (
-                      <label className="field">
-                        <span>{channelAccountLabel(connection.channel)}</span>
-                        <input
-                          value={draftValue}
-                          placeholder={channelAccountPlaceholder(
-                            connection.channel,
-                          )}
-                          disabled={!canEditChannels}
-                          onChange={(event) =>
-                            setChannelAccountDrafts((current) => ({
-                              ...current,
-                              [connection.channel]: event.target.value,
-                            }))
-                          }
-                        />
-                      </label>
-                    )}
-
-                    {webhook ? (
-                      <div className="webhookBox">
-                        <span>Webhook URL</span>
-                        <code>{webhook}</code>
-                        <button
-                          className="secondaryButton"
-                          type="button"
-                          onClick={() =>
-                            copyText(webhook, `${connection.label} webhook`)
+                        <article
+                          data-ready={
+                            connection.externalAccountId || isWebsite
+                              ? "true"
+                              : "false"
                           }
                         >
-                          <Copy size={15} />
-                          Copy
-                        </button>
+                          <span>{channelAccountLabel(connection.channel)}</span>
+                          <strong>
+                            {connection.externalAccountId || isWebsite
+                              ? "Set"
+                              : "Missing"}
+                          </strong>
+                        </article>
                       </div>
-                    ) : null}
 
-                    <div className="channelHint">
-                      {channelSetupHint(connection)}
-                    </div>
-
-                    {isWebsite ? (
-                      <a
-                        className="channelGuideLink"
-                        href="#widget-settings"
-                        onClick={(event) => {
-                          event.preventDefault();
-                          openSettingsSection("widget-settings");
-                        }}
-                      >
-                        <Code2 size={15} />
-                        <span>Implementation guide</span>
-                        <small>Widget setup</small>
-                      </a>
-                    ) : implementationGuide ? (
-                      <a
-                        className="channelGuideLink"
-                        href={implementationGuide.url}
-                        rel="noreferrer"
-                        target="_blank"
-                      >
-                        <ExternalLink size={15} />
-                        <span>Implementation guide</span>
-                        <small>{implementationGuide.label}</small>
-                      </a>
-                    ) : null}
-
-                    {!isWebsite ? (
-                      <div className="rowActions">
+                      {isWebsite ? (
                         <button
-                          className="primaryButton"
+                          className="secondaryButton full"
                           type="button"
-                          disabled={busy || !canEditChannels}
                           onClick={() =>
-                            saveChannelConnection(connection, {
-                              externalAccountId: draftValue,
-                              status: "connected",
-                            })
+                            openWorkspaceSection("settings", "widget-settings")
                           }
                         >
-                          <Save size={15} />
-                          Save connected
+                          <Code2 size={15} />
+                          Open widget setup
                         </button>
-                        <button
-                          className="secondaryButton"
-                          type="button"
-                          disabled={busy || !canEditChannels}
-                          onClick={() =>
-                            saveChannelConnection(connection, {
-                              status: "pending",
-                            })
-                          }
-                        >
-                          Pending
-                        </button>
-                        <button
-                          className="dangerButton"
-                          type="button"
-                          disabled={busy || !canEditChannels}
-                          onClick={() =>
-                            saveChannelConnection(connection, {
-                              status: "disabled",
-                            })
-                          }
-                        >
-                          Disable
-                        </button>
+                      ) : (
+                        <label className="field">
+                          <span>{channelAccountLabel(connection.channel)}</span>
+                          <input
+                            value={draftValue}
+                            placeholder={channelAccountPlaceholder(
+                              connection.channel,
+                            )}
+                            disabled={!canEditChannels}
+                            onChange={(event) =>
+                              setChannelAccountDrafts((current) => ({
+                                ...current,
+                                [connection.channel]: event.target.value,
+                              }))
+                            }
+                          />
+                        </label>
+                      )}
+
+                      {webhook ? (
+                        <div className="webhookBox">
+                          <span>Webhook URL</span>
+                          <code>{webhook}</code>
+                          <button
+                            className="secondaryButton"
+                            type="button"
+                            onClick={() =>
+                              copyText(webhook, `${connection.label} webhook`)
+                            }
+                          >
+                            <Copy size={15} />
+                            Copy
+                          </button>
+                        </div>
+                      ) : null}
+
+                      <div className="channelHint">
+                        {channelSetupHint(connection)}
                       </div>
-                    ) : null}
+
+                      {isWebsite ? (
+                        <a
+                          className="channelGuideLink"
+                          href="#widget-settings"
+                          onClick={(event) => {
+                            event.preventDefault();
+                            openSettingsSection("widget-settings");
+                          }}
+                        >
+                          <Code2 size={15} />
+                          <span>Implementation guide</span>
+                          <small>Widget setup</small>
+                        </a>
+                      ) : implementationGuide ? (
+                        <a
+                          className="channelGuideLink"
+                          href={implementationGuide.url}
+                          rel="noreferrer"
+                          target="_blank"
+                        >
+                          <ExternalLink size={15} />
+                          <span>Implementation guide</span>
+                          <small>{implementationGuide.label}</small>
+                        </a>
+                      ) : null}
+
+                      {!isWebsite ? (
+                        <div className="rowActions">
+                          <button
+                            className="primaryButton"
+                            type="button"
+                            disabled={busy || !canEditChannels}
+                            onClick={() =>
+                              saveChannelConnection(connection, {
+                                externalAccountId: draftValue,
+                                status: "connected",
+                              })
+                            }
+                          >
+                            <Save size={15} />
+                            Save connected
+                          </button>
+                          <button
+                            className="secondaryButton"
+                            type="button"
+                            disabled={busy || !canEditChannels}
+                            onClick={() =>
+                              saveChannelConnection(connection, {
+                                status: "pending",
+                              })
+                            }
+                          >
+                            Pending
+                          </button>
+                          <button
+                            className="dangerButton"
+                            type="button"
+                            disabled={busy || !canEditChannels}
+                            onClick={() =>
+                              saveChannelConnection(connection, {
+                                status: "disabled",
+                              })
+                            }
+                          >
+                            Disable
+                          </button>
+                        </div>
+                      ) : null}
+                    </details>
                   </article>
                 );
               })}
@@ -9382,14 +9524,14 @@ export default function DashboardPage() {
             </div>
           </div>
           <label className="field">
-            <span>API base</span>
+            <span>API endpoint</span>
             <input
               value={apiBase}
               onChange={(event) => setApiBase(event.target.value)}
             />
           </label>
           <label className="field">
-            <span>Bootstrap token</span>
+            <span>Admin token</span>
             <div className="inputIcon">
               <KeyRound size={16} />
               <input
@@ -9590,8 +9732,11 @@ export default function DashboardPage() {
     );
   }
 
-  function openSettingsSection(sectionId: string) {
-    setActiveTab("settings");
+  function openWorkspaceSection(tab: TabKey, sectionId?: string) {
+    setActiveTab(tab);
+    if (!sectionId) {
+      return;
+    }
     window.setTimeout(() => {
       document
         .getElementById(sectionId)
@@ -9599,13 +9744,20 @@ export default function DashboardPage() {
     }, 0);
   }
 
+  function openSettingsSection(sectionId: string) {
+    openWorkspaceSection("settings", sectionId);
+  }
+
   function openChannelsSection(sectionId: string) {
-    setActiveTab("channels");
-    window.setTimeout(() => {
-      document
-        .getElementById(sectionId)
-        ?.scrollIntoView({ behavior: "smooth", block: "start" });
-    }, 0);
+    openWorkspaceSection("channels", sectionId);
+  }
+
+  function runCommandAction(action: CommandItem) {
+    if (action.action) {
+      action.action();
+      return;
+    }
+    openWorkspaceSection(action.tab);
   }
 
   async function switchToProjectMemberLogin() {
@@ -9670,15 +9822,30 @@ export default function DashboardPage() {
               <UserCheck size={16} />
               Inbox
             </button>
-            <button type="button" onClick={() => setActiveTab("knowledge")}>
+            <button
+              type="button"
+              onClick={() =>
+                openWorkspaceSection("knowledge", "knowledge-manager")
+              }
+            >
               <Database size={16} />
               Answers
             </button>
-            <button type="button" onClick={() => setActiveTab("channels")}>
+            <button
+              type="button"
+              onClick={() =>
+                openWorkspaceSection("channels", "connect-channels")
+              }
+            >
               <Globe2 size={16} />
               Channels
             </button>
-            <button type="button" onClick={() => setActiveTab("settings")}>
+            <button
+              type="button"
+              onClick={() =>
+                openWorkspaceSection("settings", "business-settings")
+              }
+            >
               <Settings size={16} />
               Setup
             </button>
@@ -9917,7 +10084,7 @@ export default function DashboardPage() {
     return renderSettingsWorkspace();
   }
 
-  function selectAuthMode(nextMode: AuthMode) {
+  function selectAuthMode(nextMode: (typeof authModeOrder)[number]) {
     setAuthMode(nextMode);
     window.setTimeout(() => {
       document.getElementById(authModeTabIds[nextMode])?.focus();
@@ -9925,7 +10092,10 @@ export default function DashboardPage() {
   }
 
   function handleAuthModeKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    const currentIndex = authModeOrder.indexOf(authMode);
+    const currentIndex = Math.max(
+      authModeOrder.indexOf(authMode as (typeof authModeOrder)[number]),
+      0,
+    );
     if (event.key === "ArrowRight" || event.key === "ArrowDown") {
       event.preventDefault();
       selectAuthMode(
@@ -9949,7 +10119,7 @@ export default function DashboardPage() {
     }
     if (event.key === "End") {
       event.preventDefault();
-      selectAuthMode(authModeOrder[authModeOrder.length - 1] ?? "admin_token");
+      selectAuthMode(authModeOrder[authModeOrder.length - 1] ?? "signup");
     }
   }
 
@@ -9980,7 +10150,7 @@ export default function DashboardPage() {
           </div>
           <a className="secondaryButton linkButton" href="/landing">
             <ExternalLink size={16} />
-            View product page
+            Learn about the product
           </a>
         </section>
         <section className="authPanel">
@@ -10064,54 +10234,48 @@ export default function DashboardPage() {
             <>
               <div
                 className="segmented authModeSwitch"
-                role="tablist"
+                role="group"
                 aria-label="Authentication mode"
                 onKeyDown={handleAuthModeKeyDown}
               >
                 <button
                   id="auth-login-tab"
-                  role="tab"
-                  aria-controls="auth-login-panel"
-                  aria-selected={authMode === "login"}
+                  aria-pressed={authMode === "login"}
                   data-active={authMode === "login" ? "true" : "false"}
-                  tabIndex={authMode === "login" ? 0 : -1}
                   type="button"
                   onClick={() => setAuthMode("login")}
                 >
-                  User login
+                  Login
                 </button>
                 <button
                   id="auth-signup-tab"
-                  role="tab"
-                  aria-controls="auth-signup-panel"
-                  aria-selected={authMode === "signup"}
+                  aria-pressed={authMode === "signup"}
                   data-active={authMode === "signup" ? "true" : "false"}
-                  tabIndex={authMode === "signup" ? 0 : -1}
                   type="button"
                   onClick={() => setAuthMode("signup")}
                 >
-                  Register
-                </button>
-                <button
-                  id="auth-admin-token-tab"
-                  role="tab"
-                  aria-controls="auth-admin-token-panel"
-                  aria-selected={authMode === "admin_token"}
-                  data-active={authMode === "admin_token" ? "true" : "false"}
-                  tabIndex={authMode === "admin_token" ? 0 : -1}
-                  type="button"
-                  onClick={() => setAuthMode("admin_token")}
-                >
-                  Bootstrap token
+                  Create account
                 </button>
               </div>
+              <button
+                id="auth-admin-token-toggle"
+                className="textToggle adminAccessToggle"
+                type="button"
+                onClick={() =>
+                  setAuthMode((current) =>
+                    current === "admin_token" ? "login" : "admin_token",
+                  )
+                }
+              >
+                {authMode === "admin_token"
+                  ? "Use email login"
+                  : "Advanced admin access"}
+              </button>
 
               {authMode === "login" ? (
                 <form
                   className="authForm"
                   id="auth-login-panel"
-                  role="tabpanel"
-                  aria-labelledby="auth-login-tab"
                   onSubmit={loginWithPassword}
                 >
                   <label className="field">
@@ -10164,7 +10328,7 @@ export default function DashboardPage() {
                   </label>
                   {showAdvancedConnection ? (
                     <label className="field">
-                      <span>API base</span>
+                      <span>API endpoint</span>
                       <input
                         value={apiBase}
                         onChange={(event) => setApiBase(event.target.value)}
@@ -10186,7 +10350,9 @@ export default function DashboardPage() {
                       setShowAdvancedConnection((current) => !current)
                     }
                   >
-                    {showAdvancedConnection ? "Hide advanced" : "Advanced"}
+                    {showAdvancedConnection
+                      ? "Hide API settings"
+                      : "API settings"}
                   </button>
                   {status ? (
                     <span className="status authStatus" data-tone={statusKind}>
@@ -10203,8 +10369,6 @@ export default function DashboardPage() {
                 <form
                   className="authForm"
                   id="auth-signup-panel"
-                  role="tabpanel"
-                  aria-labelledby="auth-signup-tab"
                   onSubmit={signUpWithPassword}
                 >
                   <label className="field">
@@ -10266,7 +10430,7 @@ export default function DashboardPage() {
                   </label>
                   {showAdvancedConnection ? (
                     <label className="field">
-                      <span>API base</span>
+                      <span>API endpoint</span>
                       <input
                         value={apiBase}
                         onChange={(event) => setApiBase(event.target.value)}
@@ -10288,7 +10452,9 @@ export default function DashboardPage() {
                       setShowAdvancedConnection((current) => !current)
                     }
                   >
-                    {showAdvancedConnection ? "Hide advanced" : "Advanced"}
+                    {showAdvancedConnection
+                      ? "Hide API settings"
+                      : "API settings"}
                   </button>
                   {status ? (
                     <span className="status authStatus" data-tone={statusKind}>
@@ -10305,8 +10471,7 @@ export default function DashboardPage() {
                 <form
                   className="authForm"
                   id="auth-admin-token-panel"
-                  role="tabpanel"
-                  aria-labelledby="auth-admin-token-tab"
+                  aria-labelledby="auth-admin-token-toggle"
                   onSubmit={(event) => {
                     event.preventDefault();
                     void refreshTenants();
@@ -10350,7 +10515,7 @@ export default function DashboardPage() {
                   </label>
                   {showAdvancedConnection ? (
                     <label className="field">
-                      <span>API base</span>
+                      <span>API endpoint</span>
                       <input
                         value={apiBase}
                         onChange={(event) => setApiBase(event.target.value)}
@@ -10372,7 +10537,9 @@ export default function DashboardPage() {
                       setShowAdvancedConnection((current) => !current)
                     }
                   >
-                    {showAdvancedConnection ? "Hide advanced" : "Advanced"}
+                    {showAdvancedConnection
+                      ? "Hide API settings"
+                      : "API settings"}
                   </button>
                   {status ? (
                     <span className="status authStatus" data-tone={statusKind}>
@@ -10386,6 +10553,10 @@ export default function DashboardPage() {
                   ) : null}
                 </form>
               )}
+              <a className="authProductLink" href="/landing">
+                <ExternalLink size={15} />
+                Learn about the product
+              </a>
             </>
           )}
         </section>

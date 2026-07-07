@@ -95,7 +95,7 @@ export function AdminSidebar({
 
         <div className="sidebarSection">
           <label className="field">
-            <span>Bootstrap token</span>
+            <span>Admin token</span>
             <div className="inputIcon">
               <KeyRound size={16} />
               <input
@@ -114,12 +114,12 @@ export function AdminSidebar({
               onShowAdvancedConnectionChange(!showAdvancedConnection)
             }
           >
-            {showAdvancedConnection ? "Hide advanced" : "Advanced"}
+            {showAdvancedConnection ? "Hide API settings" : "API settings"}
           </button>
 
           {showAdvancedConnection ? (
             <label className="field">
-              <span>API base</span>
+              <span>API endpoint</span>
               <input
                 value={apiBase}
                 onChange={(event) => onApiBaseChange(event.target.value)}
