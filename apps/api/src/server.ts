@@ -1544,7 +1544,16 @@ export async function buildServer(
 
   app.post(
     "/admin/tenants/:tenantId/telephone/twilio/purchase",
-    { preHandler: requireTenantAccess(options, "tenant_admin") },
+    {
+      preHandler: requireTenantAccess(options, "tenant_admin"),
+      config: {
+        // Buying a number spends real money and creates a recurring charge. Cap
+        // purchases per source so a buggy or compromised admin client cannot
+        // rapidly buy many numbers. (Global once a shared rate-limit store is
+        // configured; per-instance otherwise.)
+        rateLimit: { max: 5, timeWindow: "10 minutes" },
+      },
+    },
     async (request, reply) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       const tenant = await options.store.getTenant(tenantId);
@@ -1560,6 +1569,38 @@ export async function buildServer(
 
       const body = PurchaseTwilioNumberSchema.parse(request.body);
       const webhookUrl = buildTelephoneVoiceWebhookUrl(options, tenant);
+
+      // Idempotency: a retried purchase (e.g. after a client timeout where the
+      // first request actually succeeded) must not buy — and pay for — the same
+      // number twice. If this tenant already has a Twilio telephone connection
+      // for this exact number, return it instead of calling Twilio again.
+      const existingConnections =
+        await options.store.listChannelConnections(tenantId);
+      const alreadyOwned = existingConnections
+        .map((connection) => asRecord(connection))
+        .find(
+          (connection) =>
+            connection.channel === "telephone" &&
+            connection.provider === "twilio" &&
+            connection.externalAccountId === body.phoneNumber,
+        );
+      if (alreadyOwned) {
+        const settings = asRecord(alreadyOwned.settings);
+        return reply.code(200).send({
+          connection: alreadyOwned,
+          number: {
+            sid: settings.providerNumberSid ?? null,
+            phoneNumber: settings.phoneNumber ?? alreadyOwned.externalAccountId,
+          },
+          webhookUrl,
+          idempotent: true,
+          compliance: buildTelephoneComplianceNotice(
+            countryFromE164Number(body.phoneNumber),
+            body.numberType,
+          ),
+        });
+      }
+
       try {
         const purchased = await twilioApiRequest<TwilioIncomingPhoneNumber>(
           credentials,
