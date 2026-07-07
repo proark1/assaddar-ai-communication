@@ -501,7 +501,11 @@ export const channelWebhookEvents = pgTable(
   },
   (table) => [
     index("channel_webhook_events_tenant_idx").on(table.tenantId),
-    uniqueIndex("channel_webhook_events_provider_event_idx").on(
+    // Idempotency is tenant-scoped: a provider_event_id colliding across tenants
+    // must not let one tenant's event be swallowed as another's duplicate. See
+    // migration 0016.
+    uniqueIndex("channel_webhook_events_tenant_event_idx").on(
+      table.tenantId,
       table.channel,
       table.providerEventId,
     ),

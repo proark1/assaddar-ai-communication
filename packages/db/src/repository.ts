@@ -1930,6 +1930,7 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       .values(values)
       .onConflictDoNothing({
         target: [
+          channelWebhookEvents.tenantId,
           channelWebhookEvents.channel,
           channelWebhookEvents.providerEventId,
         ],
@@ -1949,6 +1950,9 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       .from(channelWebhookEvents)
       .where(
         and(
+          input.tenantId
+            ? eq(channelWebhookEvents.tenantId, input.tenantId)
+            : isNull(channelWebhookEvents.tenantId),
           eq(channelWebhookEvents.channel, input.channel),
           eq(channelWebhookEvents.providerEventId, input.providerEventId),
         ),
@@ -4650,6 +4654,10 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
         | "lost"
         | undefined;
       note?: string | undefined;
+      // Answer the employee gave the customer while resolving. Captured as a
+      // `human_reply` learning suggestion (subject to review) so the shared
+      // brain improves from staff answers across every channel.
+      resolutionAnswer?: string | undefined;
     },
   ): Promise<HandoffRecord> {
     assertTenantId(tenantId);
@@ -4735,7 +4743,90 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       },
     );
 
+    // Learn from the employee's answer. Prefer an explicit resolutionAnswer;
+    // otherwise treat the note supplied while resolving as the answer. Only when
+    // the handoff ends up resolved. Best-effort: a failure here must never break
+    // resolving the handoff, and the suggestion still needs human approval
+    // before it reaches the brain.
+    const resolutionAnswer =
+      input.resolutionAnswer?.trim() ||
+      (handoff.status === "resolved" ? input.note?.trim() : "") ||
+      "";
+    if (handoff.status === "resolved" && resolutionAnswer) {
+      try {
+        await this.captureHumanReplyFromHandoff(
+          tenantId,
+          handoff,
+          resolutionAnswer,
+          Boolean(!input.resolutionAnswer?.trim() && input.note?.trim()),
+        );
+      } catch (error) {
+        console.warn(
+          `[knowledge-learning] failed to capture human reply for handoff ${handoff.id}`,
+          error,
+        );
+      }
+    }
+
     return handoff;
+  }
+
+  /**
+   * Turn an employee's resolution answer into a `human_reply` knowledge
+   * suggestion pairing the original customer question with the staff answer.
+   * Deduped per handoff so repeated edits don't stack duplicates. The suggestion
+   * lands in the review queue (status "pending") — it never becomes live
+   * knowledge without a human approving it, which keeps the refusal guardrail
+   * intact.
+   */
+  private async captureHumanReplyFromHandoff(
+    tenantId: string,
+    handoff: HandoffRecord,
+    answer: string,
+    answeredFromNote: boolean,
+  ): Promise<void> {
+    if (!isLearningHandoffReason(handoff.reason)) {
+      return;
+    }
+    const question = normalizeKnowledgeText(handoff.requesterMessage);
+    const normalizedAnswer = normalizeKnowledgeText(answer);
+    if (!isMeaningfulQuestion(question) || normalizedAnswer.length < 2) {
+      return;
+    }
+
+    const [existing] = await this.db
+      .select({ id: knowledgeSuggestions.id })
+      .from(knowledgeSuggestions)
+      .where(
+        and(
+          eq(knowledgeSuggestions.tenantId, tenantId),
+          eq(knowledgeSuggestions.sourceType, "human_reply"),
+          sql`${knowledgeSuggestions.suggestedMetadata}->>'handoffId' = ${handoff.id}`,
+        ),
+      )
+      .limit(1);
+    if (existing) {
+      return;
+    }
+
+    await this.createKnowledgeSuggestion(tenantId, {
+      sourceType: "human_reply",
+      sourceConversationId: handoff.conversationId ?? null,
+      suggestedQuestion: question,
+      suggestedTitle: question,
+      suggestedAnswer: normalizedAnswer,
+      suggestedTags: ["learned", "human_reply", handoff.channel].filter(
+        Boolean,
+      ),
+      suggestedMetadata: {
+        handoffId: handoff.id,
+        handoffReason: handoff.reason,
+        channel: handoff.channel,
+        answeredBy: handoff.assignedTo ?? null,
+        answeredFromNote,
+      },
+      confidence: 0.8,
+    });
   }
 
   async createHandoff(input: HandoffInput): Promise<HandoffRecord> {
