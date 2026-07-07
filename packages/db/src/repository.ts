@@ -548,6 +548,10 @@ export type TenantAnalyticsResult = {
   approvedKnowledge: number;
   openHandoffs: number;
   totalHandoffs: number;
+  // Captured lead / readiness-assessment handoffs. Surfaced as an aggregate so
+  // the privacy-restricted platform-admin view can show a coherent lead count
+  // without loading individual handoff content (the R4 boundary).
+  leads: number;
   contacts: number;
   lastConversationAt: Date | null;
   lastMessageAt: Date | null;
@@ -5102,6 +5106,7 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       [knowledgeStats],
       [openHandoffStats],
       [totalHandoffStats],
+      [leadStats],
       [contactStats],
       usageByStatus,
       deliveryStatusRows,
@@ -5153,6 +5158,23 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
         })
         .from(handoffRequests)
         .where(eq(handoffRequests.tenantId, tenantId)),
+      // Lead-capture / readiness-assessment handoffs = captured leads. Mirrors
+      // the admin client's `leadHandoffs` filter so the aggregate lead count
+      // matches what a content-privileged member would derive from the list.
+      this.db
+        .select({
+          total: sql<number>`count(*)::int`,
+        })
+        .from(handoffRequests)
+        .where(
+          and(
+            eq(handoffRequests.tenantId, tenantId),
+            inArray(handoffRequests.reason, [
+              "lead_capture",
+              "readiness_assessment",
+            ]),
+          ),
+        ),
       this.db
         .select({
           total: sql<number>`count(*)::int`,
@@ -5278,6 +5300,7 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       approvedKnowledge: knowledgeStats?.total ?? 0,
       openHandoffs: openHandoffStats?.total ?? 0,
       totalHandoffs: totalHandoffStats?.total ?? 0,
+      leads: leadStats?.total ?? 0,
       contacts: contactStats?.total ?? 0,
       lastConversationAt: conversationStats?.lastAt ?? null,
       lastMessageAt: messageStats?.lastAt ?? null,

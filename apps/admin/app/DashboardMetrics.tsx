@@ -5,6 +5,7 @@ import {
   Database,
   Inbox,
   MessageSquare,
+  PhoneCall,
   UserCheck,
 } from "lucide-react";
 
@@ -12,6 +13,7 @@ type DashboardMetricsProps = {
   loading: boolean;
   conversations: number;
   messages: number;
+  calls: number;
   contacts: number;
   leads: number;
   knowledge: number;
@@ -25,6 +27,7 @@ export function DashboardMetrics({
   loading,
   conversations,
   messages,
+  calls,
   contacts,
   leads,
   knowledge,
@@ -36,7 +39,7 @@ export function DashboardMetrics({
   if (loading) {
     return (
       <section className="metricsGrid" aria-busy="true" aria-hidden="true">
-        {Array.from({ length: 7 }).map((_, index) => (
+        {Array.from({ length: 8 }).map((_, index) => (
           <article className="metricCard skeletonCard" key={index}>
             <span className="skeleton skeletonIcon" />
             <span className="skeleton skeletonLabel" />
@@ -62,6 +65,13 @@ export function DashboardMetrics({
         onClick={onOpenInbox}
       >
         {messages}
+      </MetricCard>
+      <MetricCard
+        icon={<PhoneCall size={18} />}
+        label="Calls"
+        onClick={onOpenInbox}
+      >
+        {calls}
       </MetricCard>
       <MetricCard
         icon={<UserCheck size={18} />}

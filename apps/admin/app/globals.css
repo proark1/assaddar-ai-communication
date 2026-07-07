@@ -584,6 +584,35 @@ textarea {
   color: var(--danger);
 }
 
+.privacyNotice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 18px;
+  padding: 12px 14px;
+  border: 1px solid var(--accent-bg);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  background: var(--accent-bg);
+  color: var(--accent-hover);
+}
+
+.privacyNotice svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--accent);
+}
+
+.privacyNotice p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.privacyNotice strong {
+  font-weight: 800;
+}
+
 .tabBar {
   position: sticky;
   top: 0;

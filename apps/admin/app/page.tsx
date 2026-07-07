@@ -406,6 +406,12 @@ export default function DashboardPage() {
     null,
   );
   const [analytics, setAnalytics] = useState<TenantAnalytics | null>(null);
+  // True when the signed-in identity may read aggregate counts but is blocked
+  // from tenant content (conversations, inbox, leads, contacts) by the R4
+  // privacy boundary — i.e. the platform bootstrap token / platform_owner with
+  // no tenant membership. Drives the "aggregate-only" notice instead of showing
+  // the raw 403 as an error.
+  const [contentRestricted, setContentRestricted] = useState(false);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [unifiedInbox, setUnifiedInbox] = useState<UnifiedInboxItem[]>([]);
   const [contacts, setContacts] = useState<ContactProfile[]>([]);
@@ -1709,7 +1715,11 @@ export default function DashboardPage() {
     }).then(async (response) => {
       if (!response.ok) {
         const body = await response.text();
-        throw new Error(body || `${response.status} ${response.statusText}`);
+        const error = new Error(
+          body || `${response.status} ${response.statusText}`,
+        ) as Error & { status?: number };
+        error.status = response.status;
+        throw error;
       }
 
       if (response.status === 204) {
@@ -1728,6 +1738,27 @@ export default function DashboardPage() {
     }
 
     return request;
+  }
+
+  /** HTTP status attached to an apiFetch error, if any. */
+  function httpStatusOf(error: unknown): number | undefined {
+    return error && typeof error === "object" && "status" in error
+      ? (error as { status?: number }).status
+      : undefined;
+  }
+
+  /**
+   * Report a workspace load error. A 403 on a tenant GET means the R4 privacy
+   * boundary (the platform admin may see aggregates but not content) — surface
+   * that as the expected "aggregate-only" mode rather than a hard error.
+   */
+  function reportWorkspaceError(error: unknown) {
+    if (httpStatusOf(error) === 403) {
+      setContentRestricted(true);
+      setStatus("Aggregate view — tenant content hidden by privacy policy");
+      return;
+    }
+    setStatus(readableError(error));
   }
 
   async function refreshTenants() {
@@ -2012,6 +2043,7 @@ export default function DashboardPage() {
       setTenantUsers([]);
       setTenantInvites([]);
       setChannelAccountDrafts({});
+      setContentRestricted(false);
       setWorkspaceLoading(false);
       return;
     }
@@ -2029,6 +2061,7 @@ export default function DashboardPage() {
         return;
       }
 
+      setContentRestricted(false);
       setKnowledge(bootstrap.knowledge);
       setAnalytics(bootstrap.analytics);
       setConversations(bootstrap.conversations);
@@ -2077,7 +2110,28 @@ export default function DashboardPage() {
         setSelectedConversationId("");
       }
     } catch (error) {
-      if (workspaceRefreshId.current === refreshId) {
+      if (workspaceRefreshId.current !== refreshId) {
+        return;
+      }
+      if (httpStatusOf(error) === 403) {
+        // Platform admin / platform_owner without a tenant membership: the R4
+        // boundary blocks the content bootstrap. Drop any stale content and
+        // load the privacy-safe aggregate so the overview counts still render.
+        setContentRestricted(true);
+        setConversations([]);
+        setUnifiedInbox([]);
+        setContacts([]);
+        setHandoffs([]);
+        setUnansweredQuestions([]);
+        setSelectedConversationId("");
+        setInboxHasMore(false);
+        setContactsHasMore(false);
+        setHandoffsHasMore(false);
+        await refreshAnalytics(tenantId);
+        if (workspaceRefreshId.current === refreshId) {
+          setStatus("Aggregate view — tenant content hidden by privacy policy");
+        }
+      } else {
         setStatus(readableError(error));
       }
     } finally {
@@ -2197,7 +2251,7 @@ export default function DashboardPage() {
         setSelectedConversationId("");
       }
     } catch (error) {
-      setStatus(readableError(error));
+      reportWorkspaceError(error);
     }
   }
 
@@ -2273,7 +2327,7 @@ export default function DashboardPage() {
       );
       setConversationMessages(items);
     } catch (error) {
-      setStatus(readableError(error));
+      reportWorkspaceError(error);
     }
   }
 
@@ -2299,7 +2353,7 @@ export default function DashboardPage() {
       );
       setHandoffsHasMore(items.length === listPageSize);
     } catch (error) {
-      setStatus(readableError(error));
+      reportWorkspaceError(error);
     }
   }
 
@@ -3728,8 +3782,9 @@ export default function DashboardPage() {
           }
           conversations={analytics?.conversations ?? 0}
           messages={analytics?.messages ?? 0}
+          calls={analytics?.voice?.calls ?? 0}
           contacts={knownContactCount}
-          leads={leadHandoffs.length}
+          leads={analytics?.leads ?? leadHandoffs.length}
           knowledge={analytics?.approvedKnowledge ?? knowledge.length}
           openHandoffs={analytics?.openHandoffs ?? openHandoffs.length}
           unanswered={unansweredCount}
@@ -10395,6 +10450,19 @@ export default function DashboardPage() {
             {status || "Ready"}
           </span>
         </header>
+
+        {contentRestricted ? (
+          <div className="privacyNotice" role="note">
+            <ShieldCheck size={18} />
+            <p>
+              <strong>Aggregate view.</strong> You&rsquo;re signed in as the
+              platform owner, so individual conversations, leads, and contacts
+              are hidden by your privacy policy. The counts above are live
+              aggregates across this tenant&mdash;including phone calls. To read
+              message content, sign in as a workspace member of this tenant.
+            </p>
+          </div>
+        ) : null}
 
         <nav className="tabBar" aria-label="Workspace tabs">
           {tabs.map((tab) => {
