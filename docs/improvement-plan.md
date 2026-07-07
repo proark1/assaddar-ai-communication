@@ -77,12 +77,19 @@ Phase 2 (`#14` retry path + template support), not with a `lastInboundAt` tweak.
 Network- and replay-driven abuse and double-spend; make dedup/rate-limiting
 tenant- and instance-safe. Shared Redis + one migration pass.
 
-- [ ] #3 SIP source-pinning + BYE/CANCEL dialog validation + bind to private interface
-- [ ] #9 Voice session caps + max-duration/RTP-inactivity timeout
-- [ ] #14 Telephone webhook dedup via `recordChannelWebhookEvent` on `CallSid`
-- [ ] #13 Add `tenant_id` to the webhook dedup unique index + onConflict target + lookup
-- [ ] #11 Twilio purchase idempotency key + strict per-route rate limit
-- [ ] #6 Shared Redis store for `@fastify/rate-limit` (auth + widget routes)
+- [~] #3 SIP hardening — **partial**: opt-in source allowlist (`VOICE_EDGE_SIP_ALLOWED_SOURCES`) done; BYE/CANCEL dialog validation deferred (needs a Go build/test loop — see note)
+- [~] #9 Voice resource control — **partial**: session cap (`VOICE_EDGE_MAX_SESSIONS`) + max-call-duration timeout (`VOICE_EDGE_MAX_CALL_DURATION_MS`, default 30 min) done; RTP-inactivity timeout deferred
+- [x] #14 Telephone webhook dedup via `recordChannelWebhookEvent` on `CallSid` + speech hash — `apps/voice/src/index.ts`
+- [x] #13 Tenant-scoped webhook dedup index + onConflict target + lookup — migration `0016`
+- [x] #11 Twilio purchase strict per-route rate limit + idempotent retry — `apps/api/src/server.ts`
+- [x] #6 Shared Redis store for `@fastify/rate-limit` when `REDIS_URL` set — `apps/api/src/server.ts`
+
+**Deferred in #3/#9 (needs a Go toolchain to build+test safely).** BYE/CANCEL
+dialog validation (match Call-ID + our To-tag before teardown) and RTP-inactivity
+detection are intricate SIP/RTP protocol changes with no automated call test; a
+silent bug would break live calls. They were not shipped blind. Operational
+mitigation meanwhile: set `VOICE_EDGE_SIP_ALLOWED_SOURCES` to easybell's IPs and
+firewall the SIP port to a private interface.
 
 Also sweep here: RLS DB-backstop default-on in prod; SSRF DNS-rebinding pin;
 server-derived billed unit price; and the WhatsApp 24h window on the
