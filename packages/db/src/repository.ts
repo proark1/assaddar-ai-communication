@@ -62,7 +62,10 @@ import {
 } from "./schema";
 import { assertTenantId } from "./tenant-scope";
 import {
+  billingStatusFromStripe,
+  buildDocumentSuggestionSections,
   channelIdentifierKey,
+  clampConfidence,
   contactIdentifierContainmentValues,
   createPublicAssistantId,
   createPublicConversationId,
@@ -70,18 +73,28 @@ import {
   deriveQualityMetrics,
   extractTemplateVariables,
   hasSharedIdentifier,
+  isLearningHandoffReason,
+  isMeaningfulQuestion,
   isPhoneIdentityChannel,
   mergeIdentifierMaps,
   mergeIdentifierValues,
   normalizeContactInput,
   normalizeEmail,
+  normalizeFullTextQuery,
+  normalizeKnowledgeText,
+  normalizeListStatus,
   normalizeOptionalText,
   normalizePhone,
   normalizeRoleName,
   normalizeTemplateName,
+  readAttempts,
+  readStringOrNull,
+  rejectSecretSettings,
+  resolvePagination,
   retentionCutoff,
   roleDescription,
   setTenantSession,
+  telephoneNumberValues,
   titleCase,
 } from "./repository-helpers";
 import type { ChannelCredentialCipher } from "./secrets";
@@ -267,158 +280,6 @@ export type PaginationOptions = {
   q?: string | undefined;
   status?: string | undefined;
 };
-
-const DEFAULT_LIST_LIMIT = 100;
-const MAX_LIST_LIMIT = 100;
-
-/**
- * Clamp pagination options to safe bounds. `limit` is clamped to
- * [1, MAX_LIST_LIMIT] and defaults to DEFAULT_LIST_LIMIT; `offset` is clamped
- * to >= 0 and defaults to 0. This guards against negative/huge values from
- * untrusted query params while keeping the default page identical to before.
- */
-function resolvePagination(options?: PaginationOptions): {
-  limit: number;
-  offset: number;
-} {
-  const rawLimit = options?.limit;
-  const limit =
-    typeof rawLimit === "number" && Number.isFinite(rawLimit)
-      ? Math.min(Math.max(Math.trunc(rawLimit), 1), MAX_LIST_LIMIT)
-      : DEFAULT_LIST_LIMIT;
-  const rawOffset = options?.offset;
-  const offset =
-    typeof rawOffset === "number" && Number.isFinite(rawOffset)
-      ? Math.max(Math.trunc(rawOffset), 0)
-      : 0;
-  return { limit, offset };
-}
-
-function readStringOrNull(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 ? value : null;
-}
-
-function readAttempts(value: unknown): number {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return Math.max(0, Math.trunc(value));
-  }
-  if (typeof value === "string") {
-    const parsed = Number.parseInt(value, 10);
-    return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
-  }
-  return 0;
-}
-
-function normalizeFullTextQuery(
-  options?: PaginationOptions,
-): string | undefined {
-  const value = options?.q?.trim();
-  return value ? value : undefined;
-}
-
-function normalizeListStatus(options?: PaginationOptions): string | undefined {
-  const value = options?.status?.trim();
-  return value && value !== "all" ? value : undefined;
-}
-
-function clampConfidence(value: number): number {
-  if (!Number.isFinite(value)) {
-    return 0;
-  }
-  return Math.max(0, Math.min(1, value));
-}
-
-function normalizeKnowledgeText(value: string): string {
-  return value
-    .replace(/\r\n/g, "\n")
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .replace(/[ \t]{2,}/g, " ")
-    .trim();
-}
-
-function isMeaningfulQuestion(value: string): boolean {
-  const normalized = normalizeKnowledgeText(value);
-  if (normalized.length < 12 || normalized.length > 500) {
-    return false;
-  }
-  const words = normalized.split(/\s+/).filter(Boolean);
-  return words.length >= 3;
-}
-
-function buildDocumentSuggestionSections(
-  text: string,
-  fileName: string,
-  maxSuggestions = 8,
-): Array<{ title: string; content: string; sectionIndex: number }> {
-  const normalized = normalizeKnowledgeText(text);
-  if (!normalized) {
-    return [];
-  }
-  const requested = Math.min(Math.max(Math.trunc(maxSuggestions), 1), 20);
-  const paragraphs = normalized
-    .split(/\n\s*\n/g)
-    .map((paragraph) => normalizeKnowledgeText(paragraph))
-    .filter((paragraph) => paragraph.length >= 60);
-
-  const sections: Array<{
-    title: string;
-    content: string;
-    sectionIndex: number;
-  }> = [];
-  let buffer: string[] = [];
-  let sectionIndex = 1;
-  const flush = () => {
-    const content = normalizeKnowledgeText(buffer.join("\n\n"));
-    buffer = [];
-    if (!content || content.length < 80) {
-      return;
-    }
-    sections.push({
-      title: buildDocumentSectionTitle(content, fileName, sectionIndex),
-      content: content.slice(0, 4000),
-      sectionIndex,
-    });
-    sectionIndex += 1;
-  };
-
-  for (const paragraph of paragraphs.length ? paragraphs : [normalized]) {
-    const currentLength = buffer.join("\n\n").length;
-    if (currentLength > 0 && currentLength + paragraph.length > 1800) {
-      flush();
-    }
-    buffer.push(paragraph);
-    if (sections.length >= requested) {
-      break;
-    }
-  }
-  if (sections.length < requested) {
-    flush();
-  }
-  return sections.slice(0, requested);
-}
-
-function buildDocumentSectionTitle(
-  content: string,
-  fileName: string,
-  sectionIndex: number,
-): string {
-  const firstLine =
-    content
-      .split("\n")
-      .map((line) => line.trim())
-      .find((line) => line.length >= 8 && line.length <= 120) ??
-    `${fileName} section ${sectionIndex}`;
-  return firstLine.replace(/[:.;,\s]+$/g, "").slice(0, 160);
-}
-
-function isLearningHandoffReason(reason: string): boolean {
-  return !new Set([
-    "lead_capture",
-    "readiness_assessment",
-    "contact_request",
-  ]).has(reason);
-}
 
 export type ConversationRecord = typeof conversations.$inferSelect;
 
@@ -720,75 +581,6 @@ export type OnboardingState = {
     | null;
   assignedNumber: TelephoneNumberInventoryRecord | null;
 };
-
-const secretLikeSettingsKeyPattern =
-  /token|secret|password|api[_-]?key|apikey|authorization|credential|private[_-]?key/i;
-
-function rejectSecretSettings<T extends Record<string, unknown>>(
-  settings: T,
-): T {
-  assertNoSecretSettings(settings);
-  return settings;
-}
-
-function assertNoSecretSettings(value: unknown, path: string[] = []) {
-  if (!value || typeof value !== "object") {
-    return;
-  }
-  if (Array.isArray(value)) {
-    value.forEach((item, index) =>
-      assertNoSecretSettings(item, [...path, String(index)]),
-    );
-    return;
-  }
-  for (const [key, entry] of Object.entries(value)) {
-    if (secretLikeSettingsKeyPattern.test(key)) {
-      throw new Error(
-        `Channel connection settings must not contain secret-like key "${[
-          ...path,
-          key,
-        ].join(".")}". Store provider credentials in a secret manager.`,
-      );
-    }
-    assertNoSecretSettings(entry, [...path, key]);
-  }
-}
-
-function telephoneNumberValues(input: Partial<TelephoneNumberInventoryInput>) {
-  return {
-    ...(input.provider ? { provider: input.provider } : {}),
-    ...(input.phoneNumber ? { phoneNumber: input.phoneNumber.trim() } : {}),
-    ...(input.country ? { country: input.country.trim().toUpperCase() } : {}),
-    ...(input.locality !== undefined
-      ? { locality: input.locality?.trim() || null }
-      : {}),
-    ...(input.numberType ? { numberType: input.numberType } : {}),
-    ...(input.sipTarget !== undefined
-      ? { sipTarget: input.sipTarget?.trim() || null }
-      : {}),
-    ...(input.assistantId !== undefined
-      ? { assistantId: input.assistantId?.trim() || null }
-      : {}),
-    ...(input.status ? { status: input.status } : {}),
-    ...(input.assignedTenantId !== undefined
-      ? { assignedTenantId: input.assignedTenantId ?? null }
-      : {}),
-    ...(input.metadata ? { metadata: input.metadata } : {}),
-  } satisfies Partial<typeof telephoneNumberInventory.$inferInsert>;
-}
-
-function billingStatusFromStripe(status: string) {
-  if (status === "active" || status === "trialing") {
-    return "active";
-  }
-  if (status === "past_due" || status === "unpaid" || status === "incomplete") {
-    return "past_due";
-  }
-  if (status === "canceled" || status === "incomplete_expired") {
-    return "canceled";
-  }
-  return "incomplete";
-}
 
 export type ContactProfileInput = {
   displayName?: string | null | undefined;
