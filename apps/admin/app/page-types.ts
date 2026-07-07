@@ -160,6 +160,7 @@ export type TenantAnalytics = {
   approvedKnowledge: number;
   openHandoffs: number;
   totalHandoffs: number;
+  leads?: number;
   lastConversationAt?: string | null;
   lastMessageAt?: string | null;
   usageByStatus: Array<{
