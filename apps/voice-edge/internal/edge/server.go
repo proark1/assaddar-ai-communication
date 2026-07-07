@@ -185,8 +185,8 @@ func (server *Server) handleInvite(ctx context.Context, request sip.Message, rem
 		server.sendResponse(request, remote, 400, "Bad Request", "")
 		return
 	}
-	if existing := server.getSession(callID); existing != nil {
-		switch existing.Phase {
+	if existing, phase := server.getSessionAndPhase(callID); existing != nil {
+		switch phase {
 		case "ringing", "early-media":
 			server.sendMessage(sip.ResponseFor(request, 180, "Ringing", existing.ToTag), remote)
 			server.sendProgress(request, remote, existing)
@@ -343,13 +343,13 @@ func (server *Server) expireUnackedSession(ctx context.Context, callID string, t
 		return
 	case <-timer.C:
 	}
-	session := server.getSession(callID)
+	session, phase := server.getSessionAndPhase(callID)
 	if session == nil {
 		return
 	}
-	switch session.Phase {
+	switch phase {
 	case "ringing", "early-media", "answered":
-		server.logger.Warn("ending call session without ack", "callId", callID, "phase", session.Phase, "timeoutMs", timeout.Milliseconds())
+		server.logger.Warn("ending call session without ack", "callId", callID, "phase", phase, "timeoutMs", timeout.Milliseconds())
 		server.endSession(callID)
 	}
 }
@@ -1075,6 +1075,21 @@ func (server *Server) getSession(callID string) *CallSession {
 	server.sessionsMu.Lock()
 	defer server.sessionsMu.Unlock()
 	return server.sessions[callID]
+}
+
+// getSessionAndPhase returns the session pointer together with its Phase, both
+// read under sessionsMu. Phase is written under the same lock (markSessionPhase),
+// so reading it here — rather than dereferencing session.Phase afterwards —
+// removes the data race on the call-teardown control path. Returns (nil, "")
+// when the call id is unknown.
+func (server *Server) getSessionAndPhase(callID string) (*CallSession, string) {
+	server.sessionsMu.Lock()
+	defer server.sessionsMu.Unlock()
+	session := server.sessions[callID]
+	if session == nil {
+		return nil, ""
+	}
+	return session, session.Phase
 }
 
 func (server *Server) markSessionPhase(callID string, phase string) {
