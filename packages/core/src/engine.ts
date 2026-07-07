@@ -80,6 +80,15 @@ export type AnswerEngineOptions = {
    * when retrieval is already confident instead of asking a model to rewrite it.
    */
   preferDirectTelephoneAnswers?: boolean;
+  /**
+   * Minimum cosine similarity (score = 1 - cosine_distance, in [0,1]) a semantic
+   * embedding match must reach to be eligible for retrieval. Semantic scores sit
+   * on a different scale from keyword token-overlap, and unrelated text routinely
+   * scores above the keyword `confidenceThreshold` (~0.18); without a dedicated,
+   * higher floor the low-confidence refusal guardrail is effectively disabled
+   * once embeddings are enabled. Defaults to 0.4 — tune against real knowledge.
+   */
+  semanticMinSimilarity?: number;
 };
 
 export class AnswerEngine {
@@ -91,6 +100,7 @@ export class AnswerEngine {
   private readonly groundedGenerator: AnswerEngineOptions["groundedGenerator"];
   private readonly onGroundedGenerationError: AnswerEngineOptions["onGroundedGenerationError"];
   private readonly preferDirectTelephoneAnswers: boolean;
+  private readonly semanticMinSimilarity: number;
 
   constructor(options: AnswerEngineOptions) {
     this.dataStore = options.dataStore;
@@ -102,6 +112,7 @@ export class AnswerEngine {
     this.onGroundedGenerationError = options.onGroundedGenerationError;
     this.preferDirectTelephoneAnswers =
       options.preferDirectTelephoneAnswers ?? false;
+    this.semanticMinSimilarity = options.semanticMinSimilarity ?? 0.4;
   }
 
   async answer(input: InboundMessage): Promise<AnswerResult> {
@@ -363,10 +374,17 @@ export class AnswerEngine {
       if (!embedding || embedding.length === 0) {
         return [];
       }
-      return await this.dataStore.searchKnowledgeByEmbedding(
+      const semantic = await this.dataStore.searchKnowledgeByEmbedding(
         tenantId,
         embedding,
         this.retrievalLimit,
+      );
+      // A semantic hit must clear a dedicated, higher similarity floor. The
+      // keyword `confidenceThreshold` is far too low for raw cosine scores, so
+      // reusing it here would let unrelated chunks pass the low-confidence
+      // guardrail and be handed to the grounded generator as "approved" context.
+      return semantic.filter(
+        (chunk) => chunk.score >= this.semanticMinSimilarity,
       );
     } catch (error) {
       // Semantic search is best-effort and still falls back to keyword
