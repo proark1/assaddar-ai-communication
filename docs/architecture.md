@@ -79,7 +79,8 @@ conversations, contacts, handoffs, delivery state, billing, and operator
 workflows. OneBrain should own durable cross-app knowledge, intake records,
 privacy-aware memory, access policy, and long-term retrieval.
 
-The first integration path is background-only:
+The first integration path was background sync; runtime answering can now be
+enabled explicitly:
 
 - `packages/core` exposes a typed OneBrain service client and `BrainProvider`
   contract.
@@ -88,8 +89,11 @@ The first integration path is background-only:
   `POST /api/service/intake` with `app_id=communication`.
 - `onebrain_sync_records` stores per-tenant source refs and content hashes so
   unchanged records are not sent repeatedly.
-- Live widget/social/voice answers still use the local Project Brain and answer
-  engine unless a tenant is explicitly moved to a remote answer provider later.
+- `apps/api` and `apps/voice` can ask OneBrain first for live
+  widget/social/voice answers when `ONEBRAIN_ANSWER_ENABLED=true`.
+- If OneBrain answering is disabled, missing credentials, returns an empty
+  answer, or fails, the service falls back to the local Project Brain and
+  records the fallback reason in the answer trace.
 
 This keeps the service boundary API-based. The repositories do not share
 database schemas or vector tables.

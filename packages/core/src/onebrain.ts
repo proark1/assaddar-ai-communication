@@ -137,6 +137,11 @@ const OneBrainAskResponseSchema = z.object({
   chunks_used: z.number().int().nonnegative().default(0),
 });
 
+const OneBrainLegacyCaptureResponseSchema = z.object({
+  captured: z.string(),
+  chunks: z.number().int().nonnegative().default(0),
+});
+
 const OneBrainCapabilitiesResponseSchema = z.object({
   tenant_id: z.string(),
   account_id: z.string().default(""),
@@ -202,9 +207,16 @@ export class OneBrainServiceClient {
     if (input.sourceRef) {
       body.source_ref = input.sourceRef;
     }
-    return OneBrainIntakeResponseSchema.parse(
-      await this.requestJson("POST", "/api/service/intake", body),
-    );
+    try {
+      return OneBrainIntakeResponseSchema.parse(
+        await this.requestJson("POST", "/api/service/intake", body),
+      );
+    } catch (error) {
+      if (!(error instanceof OneBrainServiceError) || error.status !== 404) {
+        throw error;
+      }
+      return this.captureLegacy(input);
+    }
   }
 
   async ask(input: BrainAskInput): Promise<BrainAskResult> {
@@ -234,6 +246,55 @@ export class OneBrainServiceClient {
       body.space_id = spaceId;
     }
     return body;
+  }
+
+  private async captureLegacy(
+    input: BrainIntakeInput,
+  ): Promise<OneBrainIntakeResponse> {
+    const scope = this.scopeBody(input.scope, ONEBRAIN_KNOWLEDGE_PURPOSE);
+    const result = OneBrainLegacyCaptureResponseSchema.parse(
+      await this.requestJson("POST", "/api/service/capture", {
+        text: input.content,
+        title: input.title ?? "Captured communication",
+        ...scope,
+      }),
+    );
+    const accountId =
+      stringOrEmpty(scope.account_id) ||
+      this.accountId ||
+      input.scope.accountId ||
+      input.scope.tenantId;
+    const spaceId =
+      stringOrEmpty(scope.space_id) ||
+      this.spaceId ||
+      input.scope.spaceId ||
+      "";
+    return {
+      record: {
+        id: result.captured,
+        tenant_id: accountId,
+        account_id: accountId,
+        space_id: spaceId,
+        app_id: stringOrEmpty(scope.app_id) || this.appId,
+        purpose: stringOrEmpty(scope.purpose) || ONEBRAIN_KNOWLEDGE_PURPOSE,
+        source: input.source ?? ONEBRAIN_SOURCE,
+        source_ref: input.sourceRef ?? "",
+        record_type: input.recordType ?? "document",
+        intent: input.intent ?? "knowledge_update",
+        classification: "internal",
+        confidence: 1,
+        status: "captured",
+        title: input.title ?? "Captured communication",
+        summary: `Captured ${result.chunks} chunk(s) through legacy capture.`,
+        extracted_facts: {},
+        metadata: {
+          ...(input.metadata ?? {}),
+          legacyCapture: true,
+          chunks: result.chunks,
+        },
+        created_at: "",
+      },
+    };
   }
 
   private async requestJson(
@@ -327,4 +388,8 @@ function readOneBrainTimeoutMs(value: string | undefined, fallback: number) {
 function emptyToUndefined(value: string | undefined) {
   const trimmed = value?.trim();
   return trimmed || undefined;
+}
+
+function stringOrEmpty(value: unknown) {
+  return typeof value === "string" ? value : "";
 }

@@ -155,7 +155,7 @@ The default test suite covers:
 
 `pnpm smoke:api` uses `.env`, starts the API if it is not already running, loads the seeded `demo-business` tenant, fetches widget config, and sends a real widget chat request. It writes a conversation/message/usage event to the configured database, so run `pnpm db:seed` first.
 
-`pnpm smoke:onebrain` validates OneBrain service credentials by calling capabilities. It is read-only unless `ONEBRAIN_SMOKE_INTAKE=true` is set.
+`pnpm smoke:onebrain` validates OneBrain service credentials by calling capabilities. It is read-only unless `ONEBRAIN_SMOKE_INTAKE=true` is set. Live API and voice answers ask OneBrain first only when `ONEBRAIN_ANSWER_ENABLED=true`; otherwise they use the local Project Brain.
 
 GitHub Actions runs `pnpm test`, `pnpm typecheck`, and `pnpm build` on pushes to `main` and pull requests.
 

@@ -145,6 +145,61 @@ describe("OneBrainServiceClient", () => {
     });
   });
 
+  it("falls back to legacy capture when intake is unavailable", async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const client = new OneBrainServiceClient({
+      baseUrl: "https://onebrain.example",
+      serviceKey: "obk_test",
+      fetchImpl: async (url, init) => {
+        calls.push({ url: String(url), init: init ?? {} });
+        if (String(url).endsWith("/api/service/intake")) {
+          return new Response('{"detail":"Not Found"}', { status: 404 });
+        }
+        return new Response(
+          JSON.stringify({
+            captured: "doc_legacy",
+            chunks: 2,
+          }),
+        );
+      },
+    });
+
+    const result = await client.intake({
+      scope: {
+        tenantId: "t1",
+        accountId: "acme",
+        spaceId: "sp_customer_service",
+      },
+      title: "Hours",
+      content: "Open 09:00-17:00.",
+    });
+
+    expect(calls.map((call) => call.url)).toEqual([
+      "https://onebrain.example/api/service/intake",
+      "https://onebrain.example/api/service/capture",
+    ]);
+    expect(JSON.parse(String(calls[1]?.init.body))).toMatchObject({
+      account_id: "acme",
+      space_id: "sp_customer_service",
+      app_id: ONEBRAIN_COMMUNICATION_APP_ID,
+      purpose: ONEBRAIN_KNOWLEDGE_PURPOSE,
+      title: "Hours",
+      text: "Open 09:00-17:00.",
+    });
+    expect(result).toMatchObject({
+      record: {
+        id: "doc_legacy",
+        account_id: "acme",
+        space_id: "sp_customer_service",
+        status: "captured",
+        metadata: {
+          legacyCapture: true,
+          chunks: 2,
+        },
+      },
+    });
+  });
+
   it("throws a typed error for non-2xx responses", async () => {
     const client = new OneBrainServiceClient({
       baseUrl: "https://onebrain.example",

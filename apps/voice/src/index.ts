@@ -8,10 +8,14 @@ import {
   verifyTwilioSignature,
 } from "@assaddar/channels";
 import {
+  answerWithOneBrainFallback,
   createAnswerEngine,
   createEmbeddingProvider,
   createGeminiGroundedAnswerGenerator,
+  createOneBrainProvider,
   InboundMessageSchema,
+  type InboundMessage,
+  type OneBrainRuntimeAnswerSettings,
 } from "@assaddar/core";
 import {
   createDbClient,
@@ -240,6 +244,19 @@ const store = new TenantRepository(
 );
 const embeddingProvider = createEmbeddingProvider(process.env);
 const groundedGenerator = createGeminiGroundedAnswerGenerator(process.env);
+const oneBrainProvider = createOneBrainProvider(process.env);
+const oneBrainAnswerEnabled =
+  (process.env.ONEBRAIN_ANSWER_ENABLED ?? "").toLowerCase() === "true";
+const oneBrainAnswerSettings: OneBrainRuntimeAnswerSettings | undefined =
+  oneBrainAnswerEnabled ||
+  process.env.ONEBRAIN_API_BASE_URL ||
+  process.env.ONEBRAIN_SERVICE_KEY
+    ? {
+        enabled: oneBrainAnswerEnabled,
+        provider: oneBrainProvider,
+        env: process.env,
+      }
+    : undefined;
 const engine = createAnswerEngine({
   dataStore: store,
   handoffStore: store,
@@ -267,6 +284,28 @@ app.get("/health", async () => ({
   ok: true,
   service: "assaddar-ai-communication-voice",
 }));
+
+async function answerTenantMessage(input: {
+  tenant: {
+    id: string;
+    publicId?: string | null;
+    slug?: string | null;
+  };
+  message: InboundMessage;
+  request: FastifyRequest;
+}) {
+  return answerWithOneBrainFallback({
+    tenant: input.tenant,
+    message: input.message,
+    oneBrain: oneBrainAnswerSettings,
+    localAnswer: () => engine.answer(input.message),
+    onOneBrainError: (error) =>
+      input.request.log.warn(
+        { err: error, tenantId: input.tenant.id },
+        "OneBrain answer failed; falling back to local Project Brain",
+      ),
+  });
+}
 
 app.post(
   "/voice/turn",
@@ -335,22 +374,25 @@ app.post(
       },
     });
 
-    const answer = await engine.answer(
-      InboundMessageSchema.parse({
-        tenantId: tenant.id,
-        conversationId: conversation.id,
-        channel: "telephone",
-        externalUserId: body.from,
-        text: body.text,
-        locale: body.locale ?? tenant.defaultLocale,
-        metadata: {
-          provider: body.provider,
-          callId: body.callId ?? null,
-          to: body.to ?? null,
-          ...(body.metadata ?? {}),
-        },
-      }),
-    );
+    const inboundMessage = InboundMessageSchema.parse({
+      tenantId: tenant.id,
+      conversationId: conversation.id,
+      channel: "telephone",
+      externalUserId: body.from,
+      text: body.text,
+      locale: body.locale ?? tenant.defaultLocale,
+      metadata: {
+        provider: body.provider,
+        callId: body.callId ?? null,
+        to: body.to ?? null,
+        ...(body.metadata ?? {}),
+      },
+    });
+    const answer = await answerTenantMessage({
+      tenant,
+      message: inboundMessage,
+      request,
+    });
 
     await store.addMessage({
       tenantId: tenant.id,
@@ -525,19 +567,22 @@ app.post("/twilio/voice", async (request, reply) => {
     content: event.text,
   });
 
-  const answer = await engine.answer(
-    InboundMessageSchema.parse({
-      tenantId: tenant.id,
-      conversationId: conversation.id,
-      channel: "telephone",
-      externalUserId: event.externalUserId,
-      text: event.text,
-      locale: tenant.defaultLocale,
-      metadata: {
-        provider: "twilio",
-      },
-    }),
-  );
+  const inboundMessage = InboundMessageSchema.parse({
+    tenantId: tenant.id,
+    conversationId: conversation.id,
+    channel: "telephone",
+    externalUserId: event.externalUserId,
+    text: event.text,
+    locale: tenant.defaultLocale,
+    metadata: {
+      provider: "twilio",
+    },
+  });
+  const answer = await answerTenantMessage({
+    tenant,
+    message: inboundMessage,
+    request,
+  });
 
   await store.addMessage({
     tenantId: tenant.id,

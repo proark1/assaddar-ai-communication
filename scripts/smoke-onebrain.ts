@@ -1,4 +1,4 @@
-import { runOneBrainSmoke } from "@assaddar/core";
+import { runOneBrainSmoke } from "../packages/core/src/onebrain-smoke.ts";
 
 try {
   const result = await runOneBrainSmoke(process.env);
