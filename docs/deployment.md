@@ -142,17 +142,15 @@ ONEBRAIN_ANSWER_ENABLED=true
 ONEBRAIN_SYNC_ENABLED=true
 ONEBRAIN_SYNC_INTERVAL_MS=3600000
 ONEBRAIN_KNOWLEDGE_EXPORT_LIMIT=50
+ONEBRAIN_SMOKE_INTAKE=false
 ```
 
-Defaults:
+Fixed OneBrain service scope:
 
-- `ONEBRAIN_APP_ID=communication`
-- `ONEBRAIN_ANSWER_PURPOSE=customer_service_answer` by default. Use another
-  purpose only if the OneBrain communication app installation and service key
-  explicitly allow it.
-- `ONEBRAIN_KNOWLEDGE_PURPOSE=customer_service_inbox` by default. Use another
-  purpose only if the OneBrain communication app installation and service key
-  explicitly allow it.
+- OneBrain app id is fixed to `communication`.
+- Runtime answers use purpose `customer_service_answer`.
+- Approved-knowledge sync and smoke intake use purpose
+  `customer_service_inbox`.
 - `ONEBRAIN_ACCOUNT_ID` is optional; when omitted, each tenant slug is used as
   the OneBrain account id.
 
@@ -164,10 +162,10 @@ browser code.
 Rollout checklist:
 
 1. Provision the OneBrain account and customer-service space.
-2. Mint a communication service key with access to
-   `customer_service_answer` and `customer_service_inbox`.
+2. Mint a communication service key for app `communication` with read access to
+   `customer_service_answer` and write access to `customer_service_inbox`.
 3. Set `ONEBRAIN_API_BASE_URL`, `ONEBRAIN_SERVICE_KEY`,
-   `ONEBRAIN_SPACE_ID`, and any app/purpose overrides while keeping
+   `ONEBRAIN_SPACE_ID`, and optionally `ONEBRAIN_ACCOUNT_ID` while keeping
    `ONEBRAIN_ANSWER_ENABLED=false` and `ONEBRAIN_SYNC_ENABLED=false`.
 4. Apply communication database migrations.
 5. Run a read-only credential check:

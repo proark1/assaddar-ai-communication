@@ -2,9 +2,9 @@ import { z } from "zod";
 
 export const ONEBRAIN_COMMUNICATION_APP_ID = "communication";
 export const ONEBRAIN_SOURCE = "communication";
-export const ONEBRAIN_KNOWLEDGE_PURPOSE = "customer_service_inbox";
 export const ONEBRAIN_CUSTOMER_SERVICE_ANSWER_PURPOSE =
   "customer_service_answer";
+export const ONEBRAIN_KNOWLEDGE_PURPOSE = "customer_service_inbox";
 
 export type OneBrainRecordType =
   | "message"
@@ -64,7 +64,6 @@ export type OneBrainServiceEnv = {
   ONEBRAIN_API_BASE_URL?: string;
   ONEBRAIN_SERVICE_KEY?: string;
   ONEBRAIN_TIMEOUT_MS?: string;
-  ONEBRAIN_APP_ID?: string;
   ONEBRAIN_ACCOUNT_ID?: string;
   ONEBRAIN_SPACE_ID?: string;
 };
@@ -73,7 +72,6 @@ export type OneBrainClientOptions = {
   baseUrl: string;
   serviceKey: string;
   timeoutMs?: number;
-  appId?: string;
   accountId?: string;
   spaceId?: string;
   fetchImpl?: typeof fetch;
@@ -137,11 +135,6 @@ const OneBrainAskResponseSchema = z.object({
   chunks_used: z.number().int().nonnegative().default(0),
 });
 
-const OneBrainLegacyCaptureResponseSchema = z.object({
-  captured: z.string(),
-  chunks: z.number().int().nonnegative().default(0),
-});
-
 const OneBrainCapabilitiesResponseSchema = z.object({
   tenant_id: z.string(),
   account_id: z.string().default(""),
@@ -167,11 +160,17 @@ export class OneBrainServiceError extends Error {
   }
 }
 
+export class OneBrainConfigurationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OneBrainConfigurationError";
+  }
+}
+
 export class OneBrainServiceClient {
   private readonly baseUrl: string;
   private readonly serviceKey: string;
   private readonly timeoutMs: number;
-  private readonly appId: string;
   private readonly accountId: string | undefined;
   private readonly spaceId: string | undefined;
   private readonly fetchImpl: typeof fetch;
@@ -180,7 +179,6 @@ export class OneBrainServiceClient {
     this.baseUrl = options.baseUrl.replace(/\/+$/, "");
     this.serviceKey = options.serviceKey;
     this.timeoutMs = options.timeoutMs ?? 10_000;
-    this.appId = options.appId ?? ONEBRAIN_COMMUNICATION_APP_ID;
     this.accountId = emptyToUndefined(options.accountId);
     this.spaceId = emptyToUndefined(options.spaceId);
     this.fetchImpl = options.fetchImpl ?? fetch;
@@ -207,16 +205,9 @@ export class OneBrainServiceClient {
     if (input.sourceRef) {
       body.source_ref = input.sourceRef;
     }
-    try {
-      return OneBrainIntakeResponseSchema.parse(
-        await this.requestJson("POST", "/api/service/intake", body),
-      );
-    } catch (error) {
-      if (!(error instanceof OneBrainServiceError) || error.status !== 404) {
-        throw error;
-      }
-      return this.captureLegacy(input);
-    }
+    return OneBrainIntakeResponseSchema.parse(
+      await this.requestJson("POST", "/api/service/intake", body),
+    );
   }
 
   async ask(input: BrainAskInput): Promise<BrainAskResult> {
@@ -236,65 +227,26 @@ export class OneBrainServiceClient {
   }
 
   private scopeBody(scope: BrainScope, defaultPurpose: string) {
-    const body: Record<string, unknown> = {
-      account_id: scope.accountId || this.accountId,
-      app_id: scope.appId ?? this.appId,
-      purpose: scope.purpose ?? defaultPurpose,
-    };
-    const spaceId = scope.spaceId ?? this.spaceId;
-    if (spaceId) {
-      body.space_id = spaceId;
+    const accountId = emptyToUndefined(scope.accountId) ?? this.accountId;
+    const spaceId = emptyToUndefined(scope.spaceId) ?? this.spaceId;
+    const missing = [
+      ["account_id", accountId],
+      ["space_id", spaceId],
+    ]
+      .filter(([, value]) => !value)
+      .map(([name]) => name);
+    if (!accountId || !spaceId) {
+      throw new OneBrainConfigurationError(
+        `Missing OneBrain service scope: ${missing.join(", ")}`,
+      );
     }
-    return body;
-  }
-
-  private async captureLegacy(
-    input: BrainIntakeInput,
-  ): Promise<OneBrainIntakeResponse> {
-    const scope = this.scopeBody(input.scope, ONEBRAIN_KNOWLEDGE_PURPOSE);
-    const result = OneBrainLegacyCaptureResponseSchema.parse(
-      await this.requestJson("POST", "/api/service/capture", {
-        text: input.content,
-        title: input.title ?? "Captured communication",
-        ...scope,
-      }),
-    );
-    const accountId =
-      stringOrEmpty(scope.account_id) ||
-      this.accountId ||
-      input.scope.accountId ||
-      input.scope.tenantId;
-    const spaceId =
-      stringOrEmpty(scope.space_id) ||
-      this.spaceId ||
-      input.scope.spaceId ||
-      "";
-    return {
-      record: {
-        id: result.captured,
-        tenant_id: accountId,
-        account_id: accountId,
-        space_id: spaceId,
-        app_id: stringOrEmpty(scope.app_id) || this.appId,
-        purpose: stringOrEmpty(scope.purpose) || ONEBRAIN_KNOWLEDGE_PURPOSE,
-        source: input.source ?? ONEBRAIN_SOURCE,
-        source_ref: input.sourceRef ?? "",
-        record_type: input.recordType ?? "document",
-        intent: input.intent ?? "knowledge_update",
-        classification: "internal",
-        confidence: 1,
-        status: "captured",
-        title: input.title ?? "Captured communication",
-        summary: `Captured ${result.chunks} chunk(s) through legacy capture.`,
-        extracted_facts: {},
-        metadata: {
-          ...(input.metadata ?? {}),
-          legacyCapture: true,
-          chunks: result.chunks,
-        },
-        created_at: "",
-      },
+    const body: Record<string, unknown> = {
+      account_id: accountId,
+      space_id: spaceId,
+      app_id: ONEBRAIN_COMMUNICATION_APP_ID,
+      purpose: defaultPurpose,
     };
+    return body;
   }
 
   private async requestJson(
@@ -305,8 +257,8 @@ export class OneBrainServiceClient {
     const init: RequestInit = {
       method,
       headers: {
-        accept: "application/json",
-        authorization: `Bearer ${this.serviceKey}`,
+        Accept: "application/json",
+        Authorization: `Bearer ${this.serviceKey}`,
       },
       signal: AbortSignal.timeout(this.timeoutMs),
     };
@@ -346,7 +298,8 @@ export function createOneBrainProvider(
 ): OneBrainProvider | null {
   const baseUrl = env.ONEBRAIN_API_BASE_URL?.trim();
   const serviceKey = env.ONEBRAIN_SERVICE_KEY?.trim();
-  if (!baseUrl || !serviceKey) {
+  const spaceId = emptyToUndefined(env.ONEBRAIN_SPACE_ID);
+  if (!baseUrl || !serviceKey || !spaceId) {
     return null;
   }
 
@@ -354,16 +307,11 @@ export function createOneBrainProvider(
     baseUrl,
     serviceKey,
     timeoutMs: readOneBrainTimeoutMs(env.ONEBRAIN_TIMEOUT_MS, 10_000),
-    appId:
-      emptyToUndefined(env.ONEBRAIN_APP_ID) ?? ONEBRAIN_COMMUNICATION_APP_ID,
+    spaceId,
   };
   const accountId = emptyToUndefined(env.ONEBRAIN_ACCOUNT_ID);
-  const spaceId = emptyToUndefined(env.ONEBRAIN_SPACE_ID);
   if (accountId) {
     clientOptions.accountId = accountId;
-  }
-  if (spaceId) {
-    clientOptions.spaceId = spaceId;
   }
 
   return new OneBrainProvider(new OneBrainServiceClient(clientOptions));
@@ -388,8 +336,4 @@ function readOneBrainTimeoutMs(value: string | undefined, fallback: number) {
 function emptyToUndefined(value: string | undefined) {
   const trimmed = value?.trim();
   return trimmed || undefined;
-}
-
-function stringOrEmpty(value: unknown) {
-  return typeof value === "string" ? value : "";
 }

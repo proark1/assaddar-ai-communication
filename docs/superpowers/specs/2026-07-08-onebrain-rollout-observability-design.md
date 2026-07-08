@@ -93,10 +93,11 @@ pnpm smoke:onebrain
 
 The script should:
 
-1. Require `ONEBRAIN_API_BASE_URL` and `ONEBRAIN_SERVICE_KEY`.
+1. Require `ONEBRAIN_API_BASE_URL`, `ONEBRAIN_SERVICE_KEY`, and
+   `ONEBRAIN_SPACE_ID`.
 2. Call `GET /api/service/capabilities`.
-3. Validate that the response is for the expected app/purpose when
-   `ONEBRAIN_APP_ID` or `ONEBRAIN_KNOWLEDGE_PURPOSE` are configured.
+3. Validate that the response supports app `communication` and purpose
+   `customer_service_inbox`.
 4. Optionally, when `ONEBRAIN_SMOKE_INTAKE=true`, send one synthetic
    `knowledge_update` intake record with a clearly marked `source_ref`.
 

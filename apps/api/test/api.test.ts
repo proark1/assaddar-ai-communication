@@ -5555,10 +5555,12 @@ describe("API", () => {
     const previousEnv = {
       ONEBRAIN_API_BASE_URL: process.env.ONEBRAIN_API_BASE_URL,
       ONEBRAIN_SERVICE_KEY: process.env.ONEBRAIN_SERVICE_KEY,
+      ONEBRAIN_SPACE_ID: process.env.ONEBRAIN_SPACE_ID,
       ONEBRAIN_SYNC_ENABLED: process.env.ONEBRAIN_SYNC_ENABLED,
     };
     process.env.ONEBRAIN_API_BASE_URL = "https://onebrain.example";
     process.env.ONEBRAIN_SERVICE_KEY = "obk_secret";
+    process.env.ONEBRAIN_SPACE_ID = "sp_customer_service";
     process.env.ONEBRAIN_SYNC_ENABLED = "true";
 
     try {

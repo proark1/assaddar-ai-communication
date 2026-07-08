@@ -124,8 +124,8 @@ Knowledge/intake sync:
 
 Smoke checks:
 
-1. `pnpm smoke:onebrain` requires `ONEBRAIN_API_BASE_URL` and
-   `ONEBRAIN_SERVICE_KEY`.
+1. `pnpm smoke:onebrain` requires `ONEBRAIN_API_BASE_URL`,
+   `ONEBRAIN_SERVICE_KEY`, and `ONEBRAIN_SPACE_ID`.
 2. The read-only check calls `GET /api/service/capabilities`.
 3. Optional synthetic intake uses `customer_service_inbox`.
 4. Output must not print service keys.

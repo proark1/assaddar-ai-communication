@@ -45,6 +45,7 @@ begin
     'knowledge_chunks',
     'brain_onboarding_answers',
     'knowledge_suggestions',
+    'onebrain_sync_records',
     'allowed_intents',
     'blocked_topics',
     'business_hours',

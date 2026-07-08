@@ -11,7 +11,9 @@ describe("runOneBrainSmoke", () => {
       runOneBrainSmoke({
         ONEBRAIN_API_BASE_URL: "https://onebrain.example",
       }),
-    ).rejects.toThrow("Missing OneBrain smoke config: ONEBRAIN_SERVICE_KEY");
+    ).rejects.toThrow(
+      "Missing OneBrain smoke config: ONEBRAIN_SERVICE_KEY, ONEBRAIN_SPACE_ID",
+    );
   });
 
   it("checks capabilities with the expected communication scope", async () => {
@@ -33,6 +35,11 @@ describe("runOneBrainSmoke", () => {
           ONEBRAIN_API_BASE_URL: "https://onebrain.example",
           ONEBRAIN_SERVICE_KEY: "obk_secret",
           ONEBRAIN_SPACE_ID: "sp_customer_service",
+          ONEBRAIN_APP_ID: "not-communication",
+          ONEBRAIN_KNOWLEDGE_PURPOSE: "not-canonical",
+        } as Parameters<typeof runOneBrainSmoke>[0] & {
+          ONEBRAIN_APP_ID: string;
+          ONEBRAIN_KNOWLEDGE_PURPOSE: string;
         },
         { fetchImpl },
       ),
@@ -62,6 +69,7 @@ describe("runOneBrainSmoke", () => {
         {
           ONEBRAIN_API_BASE_URL: "https://onebrain.example",
           ONEBRAIN_SERVICE_KEY: "obk_secret",
+          ONEBRAIN_SPACE_ID: "sp_customer_service",
         },
         { fetchImpl },
       ),
@@ -99,6 +107,7 @@ describe("runOneBrainSmoke", () => {
       {
         ONEBRAIN_API_BASE_URL: "https://onebrain.example",
         ONEBRAIN_SERVICE_KEY: "obk_secret",
+        ONEBRAIN_SPACE_ID: "sp_customer_service",
         ONEBRAIN_SMOKE_INTAKE: "true",
       },
       {
@@ -115,6 +124,7 @@ describe("runOneBrainSmoke", () => {
     expect(calls).toHaveLength(2);
     expect(JSON.parse(calls[1]?.body ?? "{}")).toMatchObject({
       account_id: "acme",
+      space_id: "sp_customer_service",
       app_id: ONEBRAIN_COMMUNICATION_APP_ID,
       intent: "knowledge_update",
       purpose: ONEBRAIN_KNOWLEDGE_PURPOSE,

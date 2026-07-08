@@ -85,6 +85,7 @@ describe("answerWithOneBrainFallback", () => {
         tenantId,
         accountId: "tenant-one",
         spaceId: "sp_customer_service",
+        appId: "communication",
         purpose: ONEBRAIN_CUSTOMER_SERVICE_ANSWER_PURPOSE,
       },
     });
@@ -103,6 +104,48 @@ describe("answerWithOneBrainFallback", () => {
       step: "onebrain_answer",
       outcome: "skipped",
       detail: "disabled",
+    });
+  });
+
+  it("falls back locally when provider is not configured", async () => {
+    const result = await answerWithOneBrainFallback({
+      tenant: { id: tenantId, slug: "tenant-one" },
+      message,
+      oneBrain: { enabled: true, provider: null },
+      localAnswer: async () => localAnswer("Provider missing fallback."),
+    });
+
+    expect(result.text).toBe("Provider missing fallback.");
+    expect(result.trace[0]).toEqual({
+      step: "onebrain_answer",
+      outcome: "skipped",
+      detail: "not_configured",
+    });
+  });
+
+  it("falls back locally when OneBrain returns an empty answer", async () => {
+    const provider: BrainProvider = {
+      kind: "onebrain",
+      async intake() {
+        throw new Error("not used");
+      },
+      async ask() {
+        return { answer: "   ", chunksUsed: 0 };
+      },
+    };
+
+    const result = await answerWithOneBrainFallback({
+      tenant: { id: tenantId, slug: "tenant-one" },
+      message,
+      oneBrain: { enabled: true, provider },
+      localAnswer: async () => localAnswer("Empty answer fallback."),
+    });
+
+    expect(result.text).toBe("Empty answer fallback.");
+    expect(result.trace[0]).toEqual({
+      step: "onebrain_answer",
+      outcome: "failed",
+      detail: "empty_answer",
     });
   });
 
@@ -145,6 +188,22 @@ describe("answerWithOneBrainFallback", () => {
       buildOneBrainRuntimeScope({ id: "t2", publicId: "asst_beta" }),
     ).toMatchObject({
       accountId: "asst_beta",
+    });
+  });
+
+  it("ignores app and purpose env overrides", () => {
+    expect(
+      buildOneBrainRuntimeScope({ id: "t1", slug: "alpha" }, {
+        ONEBRAIN_SPACE_ID: "sp_customer_service",
+        ONEBRAIN_APP_ID: "not-communication",
+        ONEBRAIN_ANSWER_PURPOSE: "not-canonical",
+      } as Parameters<typeof buildOneBrainRuntimeScope>[1] & {
+        ONEBRAIN_APP_ID: string;
+        ONEBRAIN_ANSWER_PURPOSE: string;
+      }),
+    ).toMatchObject({
+      appId: "communication",
+      purpose: ONEBRAIN_CUSTOMER_SERVICE_ANSWER_PURPOSE,
     });
   });
 });

@@ -8,7 +8,6 @@ import {
 } from "./onebrain";
 
 export type OneBrainSmokeEnv = OneBrainServiceEnv & {
-  ONEBRAIN_KNOWLEDGE_PURPOSE?: string | undefined;
   ONEBRAIN_SMOKE_INTAKE?: string | undefined;
 };
 
@@ -38,30 +37,27 @@ export async function runOneBrainSmoke(
 ): Promise<OneBrainSmokeResult> {
   const baseUrl = emptyToUndefined(env.ONEBRAIN_API_BASE_URL);
   const serviceKey = emptyToUndefined(env.ONEBRAIN_SERVICE_KEY);
+  const configuredSpaceId = emptyToUndefined(env.ONEBRAIN_SPACE_ID);
   const missing = [
     ["ONEBRAIN_API_BASE_URL", baseUrl],
     ["ONEBRAIN_SERVICE_KEY", serviceKey],
+    ["ONEBRAIN_SPACE_ID", configuredSpaceId],
   ]
     .filter(([, value]) => !value)
     .map(([name]) => name);
-  if (!baseUrl || !serviceKey) {
+  if (!baseUrl || !serviceKey || !configuredSpaceId) {
     throw new Error(`Missing OneBrain smoke config: ${missing.join(", ")}`);
   }
 
-  const expectedAppId =
-    emptyToUndefined(env.ONEBRAIN_APP_ID) ?? ONEBRAIN_COMMUNICATION_APP_ID;
-  const expectedPurpose =
-    emptyToUndefined(env.ONEBRAIN_KNOWLEDGE_PURPOSE) ??
-    ONEBRAIN_KNOWLEDGE_PURPOSE;
+  const expectedAppId = ONEBRAIN_COMMUNICATION_APP_ID;
+  const expectedPurpose = ONEBRAIN_KNOWLEDGE_PURPOSE;
   const configuredAccountId = emptyToUndefined(env.ONEBRAIN_ACCOUNT_ID);
-  const configuredSpaceId = emptyToUndefined(env.ONEBRAIN_SPACE_ID);
   const client = new OneBrainServiceClient({
     baseUrl,
     serviceKey,
-    appId: expectedAppId,
     timeoutMs: readTimeoutMs(env.ONEBRAIN_TIMEOUT_MS, 10_000),
     ...(configuredAccountId ? { accountId: configuredAccountId } : {}),
-    ...(configuredSpaceId ? { spaceId: configuredSpaceId } : {}),
+    spaceId: configuredSpaceId,
     ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
   });
   const capabilities = await client.capabilities();

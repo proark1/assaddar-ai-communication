@@ -21,8 +21,6 @@ export type OneBrainRuntimeTenant = {
 export type OneBrainRuntimeAnswerEnv = {
   ONEBRAIN_ACCOUNT_ID?: string | undefined;
   ONEBRAIN_SPACE_ID?: string | undefined;
-  ONEBRAIN_APP_ID?: string | undefined;
-  ONEBRAIN_ANSWER_PURPOSE?: string | undefined;
 };
 
 export type OneBrainRuntimeAnswerSettings = {
@@ -117,10 +115,8 @@ export function buildOneBrainRuntimeScope(
   const scope: BrainScope = {
     tenantId: tenant.id,
     accountId,
-    appId: env.ONEBRAIN_APP_ID?.trim() || ONEBRAIN_COMMUNICATION_APP_ID,
-    purpose:
-      env.ONEBRAIN_ANSWER_PURPOSE?.trim() ||
-      ONEBRAIN_CUSTOMER_SERVICE_ANSWER_PURPOSE,
+    appId: ONEBRAIN_COMMUNICATION_APP_ID,
+    purpose: ONEBRAIN_CUSTOMER_SERVICE_ANSWER_PURPOSE,
   };
   const spaceId = env.ONEBRAIN_SPACE_ID?.trim();
   if (spaceId) {
