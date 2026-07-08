@@ -6,6 +6,7 @@ import {
   type BrainIntakeInput,
   type BrainProvider,
   type BrainScope,
+  type OneBrainIntakeResponse,
 } from "@assaddar/core";
 import { createHash } from "node:crypto";
 
@@ -140,14 +141,8 @@ export async function syncApprovedKnowledgeToOneBrain(
           ...syncSource,
           sourceRef: input.sourceRef ?? "",
           contentHash,
-          externalRecordId: response.record.id,
-          metadata: {
-            oneBrainAccountId: response.record.account_id,
-            oneBrainSpaceId: response.record.space_id,
-            oneBrainAppId: response.record.app_id,
-            oneBrainPurpose: response.record.purpose,
-            oneBrainStatus: response.record.status,
-          },
+          externalRecordId: oneBrainExternalRecordId(response),
+          metadata: oneBrainSyncMetadata(response),
         });
         synced += 1;
       } catch (error) {
@@ -271,4 +266,27 @@ export function hashOneBrainIntake(input: BrainIntakeInput) {
       }),
     )
     .digest("hex");
+}
+
+function oneBrainExternalRecordId(response: OneBrainIntakeResponse) {
+  return "record" in response ? response.record.id : response.job.id;
+}
+
+function oneBrainSyncMetadata(response: OneBrainIntakeResponse) {
+  if ("record" in response) {
+    return {
+      oneBrainAccountId: response.record.account_id,
+      oneBrainSpaceId: response.record.space_id,
+      oneBrainAppId: response.record.app_id,
+      oneBrainPurpose: response.record.purpose,
+      oneBrainStatus: response.record.status,
+    };
+  }
+  return {
+    oneBrainAccountId: response.job.account_id,
+    oneBrainSpaceId: response.job.space_id,
+    oneBrainJobId: response.job.id,
+    oneBrainJobStatus: response.job.status,
+    oneBrainJobType: response.job.type,
+  };
 }

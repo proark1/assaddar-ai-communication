@@ -35,7 +35,7 @@ describe("buildOneBrainScope", () => {
       tenantId: tenant.id,
       accountId: "acme",
       appId: "communication",
-      purpose: "knowledge_management",
+      purpose: "customer_service_inbox",
     });
   });
 
@@ -69,7 +69,7 @@ describe("buildOneBrainKnowledgeIntake", () => {
         accountId: "acme",
         spaceId: "sp_customer_service",
         appId: "communication",
-        purpose: "knowledge_management",
+        purpose: "customer_service_inbox",
       },
       title: "Opening hours",
       content: "Question: When are you open?\nAnswer: 09:00-17:00.",
@@ -139,7 +139,7 @@ describe("syncApprovedKnowledgeToOneBrain", () => {
             account_id: "acme",
             space_id: "",
             app_id: "communication",
-            purpose: "knowledge_management",
+            purpose: "customer_service_inbox",
             source: "communication",
             source_ref: input.sourceRef ?? "",
             record_type: "document",
@@ -178,6 +178,67 @@ describe("syncApprovedKnowledgeToOneBrain", () => {
       sourceType: "knowledge",
       sourceId: knowledge.id,
       externalRecordId: "rec_1",
+    });
+  });
+
+  it("records async OneBrain intake jobs as successful handoffs", async () => {
+    const successes: unknown[] = [];
+    const store: OneBrainKnowledgeSyncStore = {
+      async listTenants() {
+        return [tenant];
+      },
+      async listKnowledge() {
+        return [knowledge];
+      },
+      async getOneBrainSyncRecord() {
+        return null;
+      },
+      async recordOneBrainSyncSuccess(_tenantId, input) {
+        successes.push(input);
+      },
+      async recordOneBrainSyncFailure() {
+        throw new Error("unexpected failure write");
+      },
+    };
+    const provider: BrainProvider = {
+      kind: "onebrain",
+      async intake() {
+        return {
+          job: {
+            id: "job_1",
+            type: "service_intake",
+            status: "queued",
+            tenant_id: "acme",
+            account_id: "acme",
+            space_id: "sp_customer_service",
+            result: null,
+            error: "",
+            attempts: 0,
+            created_at: "",
+            updated_at: "",
+            completed_at: "",
+          },
+        };
+      },
+      async ask() {
+        return { answer: "", chunksUsed: 0 };
+      },
+    };
+
+    await expect(
+      syncApprovedKnowledgeToOneBrain(store, provider),
+    ).resolves.toMatchObject({
+      attempted: 1,
+      synced: 1,
+      skipped: 0,
+    });
+    expect(successes[0]).toMatchObject({
+      externalRecordId: "job_1",
+      metadata: {
+        oneBrainJobId: "job_1",
+        oneBrainJobStatus: "queued",
+        oneBrainJobType: "service_intake",
+      },
     });
   });
 

@@ -23,7 +23,7 @@ describe("OneBrainServiceClient", () => {
               account_id: "acme",
               space_id: "sp_customer_service",
               app_id: "communication",
-              purpose: "knowledge_management",
+              purpose: "customer_service_inbox",
               source: "communication",
               source_ref: "communication:tenant:t1:knowledge:k1",
               record_type: "document",
@@ -58,6 +58,10 @@ describe("OneBrainServiceClient", () => {
       }),
     });
 
+    expect("record" in result).toBe(true);
+    if (!("record" in result)) {
+      throw new Error("expected immediate intake record");
+    }
     expect(result.record.id).toBe("rec_1");
     expect(calls).toHaveLength(1);
     expect(calls[0]?.url).toBe("https://onebrain.example/api/service/intake");
@@ -100,6 +104,44 @@ describe("OneBrainServiceClient", () => {
     ).resolves.toEqual({
       answer: "Use the approved answer.",
       chunksUsed: 2,
+    });
+  });
+
+  it("accepts async intake job responses", async () => {
+    const client = new OneBrainServiceClient({
+      baseUrl: "https://onebrain.example",
+      serviceKey: "obk_test",
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            id: "job_1",
+            type: "service_intake",
+            status: "queued",
+            tenant_id: "acme",
+            account_id: "acme",
+            space_id: "sp_customer_service",
+            attempts: 0,
+          }),
+          { status: 202 },
+        ),
+    });
+
+    await expect(
+      client.intake({
+        scope: {
+          tenantId: "t1",
+          accountId: "acme",
+          spaceId: "sp_customer_service",
+        },
+        content: "Open 09:00-17:00.",
+      }),
+    ).resolves.toMatchObject({
+      job: {
+        id: "job_1",
+        type: "service_intake",
+        status: "queued",
+        tenant_id: "acme",
+      },
     });
   });
 

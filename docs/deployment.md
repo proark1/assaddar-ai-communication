@@ -140,7 +140,9 @@ ONEBRAIN_KNOWLEDGE_EXPORT_LIMIT=50
 Defaults:
 
 - `ONEBRAIN_APP_ID=communication`
-- `ONEBRAIN_KNOWLEDGE_PURPOSE=knowledge_management`
+- `ONEBRAIN_KNOWLEDGE_PURPOSE=customer_service_inbox` by default. Use another
+  purpose only if the OneBrain communication app installation and service key
+  explicitly allow it.
 - `ONEBRAIN_ACCOUNT_ID` is optional; when omitted, each tenant slug is used as
   the OneBrain account id.
 
