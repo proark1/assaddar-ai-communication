@@ -70,3 +70,26 @@ Failures return a refusal or handoff recommendation. The MVP intentionally avoid
 ## Provider Abstraction
 
 Supabase Postgres is used through `DATABASE_URL`; the data layer remains portable to any PostgreSQL-compatible host with `pgvector`. OpenAI, Meta, TikTok, Twilio, object storage, and encryption providers are behind environment variables or adapter interfaces. The local MVP can run without those external credentials.
+
+## OneBrain Boundary
+
+The communication platform can integrate with `onebrain` as an external memory
+and knowledge service, but it remains the runtime owner for channels,
+conversations, contacts, handoffs, delivery state, billing, and operator
+workflows. OneBrain should own durable cross-app knowledge, intake records,
+privacy-aware memory, access policy, and long-term retrieval.
+
+The first integration path is background-only:
+
+- `packages/core` exposes a typed OneBrain service client and `BrainProvider`
+  contract.
+- `apps/workers` can run an opt-in `onebrain.sync` BullMQ job.
+- The sync job exports approved local knowledge chunks through
+  `POST /api/service/intake` with `app_id=communication`.
+- `onebrain_sync_records` stores per-tenant source refs and content hashes so
+  unchanged records are not sent repeatedly.
+- Live widget/social/voice answers still use the local Project Brain and answer
+  engine unless a tenant is explicitly moved to a remote answer provider later.
+
+This keeps the service boundary API-based. The repositories do not share
+database schemas or vector tables.

@@ -4,6 +4,7 @@ import {
   EmbeddingJobSchema,
   FileParsingJobSchema,
   jobSchemas,
+  OneBrainSyncJobSchema,
   RetentionCleanupJobSchema,
   SuggestionScanJobSchema,
   UsageMeteringJobSchema,
@@ -21,6 +22,7 @@ describe("jobSchemas", () => {
         "embeddings.backfill",
         "embeddings.generate",
         "file.parse",
+        "onebrain.sync",
         "retention.cleanup",
         "suggestions.scan",
         "usage.meter",
@@ -121,6 +123,10 @@ describe("jobSchemas", () => {
 
     it("SuggestionScanJobSchema parses an empty object", () => {
       expect(SuggestionScanJobSchema.parse({})).toEqual({});
+    });
+
+    it("OneBrainSyncJobSchema parses an empty object", () => {
+      expect(OneBrainSyncJobSchema.parse({})).toEqual({});
     });
 
     it("maintenance schemas passthrough unknown keys", () => {
