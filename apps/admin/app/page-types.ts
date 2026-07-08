@@ -288,6 +288,36 @@ export type ProductionReadinessResult = {
   sections: ProductionReadinessSection[];
 };
 
+export type OneBrainSyncStatusRecord = {
+  id: string;
+  sourceType: string;
+  sourceId: string;
+  sourceRef: string;
+  status: string;
+  externalRecordId: string | null;
+  lastError: string | null;
+  syncedAt: string | null;
+  updatedAt: string | null;
+};
+
+export type OneBrainSyncStatus = {
+  enabled: boolean;
+  configured: boolean;
+  readiness: "not_configured" | "disabled" | "syncing" | "synced" | "failed";
+  stats: {
+    total: number;
+    synced: number;
+    failed: number;
+    pending: number;
+    other: number;
+  };
+  lastSyncedAt: string | null;
+  lastFailedAt: string | null;
+  recentFailures: OneBrainSyncStatusRecord[];
+  recentSynced: OneBrainSyncStatusRecord[];
+  docsUrl: string;
+};
+
 export type DashboardBootstrap = {
   knowledge: KnowledgeItem[];
   analytics: TenantAnalytics | null;
@@ -298,6 +328,7 @@ export type DashboardBootstrap = {
   channelConnections: ChannelConnection[];
   whatsappTemplates: WhatsappTemplate[];
   whatsappCompliance: WhatsappCompliance | null;
+  oneBrainSync: OneBrainSyncStatus | null;
   unansweredQuestions: UnansweredQuestion[];
   workflowSuggestions: WorkflowSuggestionsResult | null;
   productionReadiness: ProductionReadinessResult | null;

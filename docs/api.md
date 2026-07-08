@@ -127,6 +127,7 @@ FAQ entries are stored as approved knowledge source, document, and chunk records
 
 ```http
 GET /admin/tenants/{tenantId}/brain
+GET /admin/tenants/{tenantId}/onebrain-sync
 GET /admin/tenants/{tenantId}/brain/onboarding
 PUT /admin/tenants/{tenantId}/brain/onboarding
 POST /admin/tenants/{tenantId}/knowledge/uploads
@@ -138,7 +139,7 @@ POST /admin/tenants/{tenantId}/knowledge/suggestions/{suggestionId}/approve
 POST /admin/tenants/{tenantId}/knowledge/suggestions/{suggestionId}/reject
 ```
 
-The project brain stores reusable tenant facts once and serves them to every channel through the approved knowledge base. Onboarding answers cover standard setup questions and can be published immediately. Document uploads accept text, Markdown, CSV, JSON, and text-based PDFs; extracted content is stored once and turned into pending review suggestions. Customer handoff gaps can be scanned into pending learning suggestions. Tenant admins review, edit, approve, or reject suggestions before they affect live answers.
+The project brain stores reusable tenant facts once and serves them to every channel through the approved knowledge base. Onboarding answers cover standard setup questions and can be published immediately. Document uploads accept text, Markdown, CSV, JSON, and text-based PDFs; extracted content is stored once and turned into pending review suggestions. Customer handoff gaps can be scanned into pending learning suggestions. Tenant admins review, edit, approve, or reject suggestions before they affect live answers. The OneBrain sync status endpoint returns sanitized readiness, counts, and recent row status only; it does not expose service credentials or sync metadata.
 
 ## Test Assistant
 

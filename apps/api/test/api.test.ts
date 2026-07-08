@@ -17,6 +17,7 @@ import {
   type PlatformStore,
 } from "../src/server";
 import type { BillingProvider } from "../src/billing";
+import type { OneBrainSyncSummary } from "@assaddar/db";
 
 const originalFetch = globalThis.fetch;
 
@@ -92,6 +93,19 @@ class MemoryPlatformStore
     createdAt: Date;
     updatedAt: Date;
   }> = [];
+  oneBrainSyncSummary: OneBrainSyncSummary = {
+    total: 0,
+    byStatus: {
+      synced: 0,
+      failed: 0,
+      pending: 0,
+      other: 0,
+    },
+    lastSyncedAt: null,
+    lastFailedAt: null,
+    recentFailures: [],
+    recentSynced: [],
+  };
   conversations: Array<{
     id: string;
     publicId: string;
@@ -1348,6 +1362,10 @@ class MemoryPlatformStore
         (job) => job.tenantId === tenantId && job.status === "failed",
       ).length,
     };
+  }
+
+  async getOneBrainSyncSummary() {
+    return this.oneBrainSyncSummary;
   }
 
   async listBrainOnboardingAnswers(tenantId: string) {
@@ -5323,6 +5341,136 @@ describe("API", () => {
     });
 
     await app.close();
+  });
+
+  it("returns sanitized OneBrain sync status in the endpoint and dashboard", async () => {
+    const previousEnv = {
+      ONEBRAIN_API_BASE_URL: process.env.ONEBRAIN_API_BASE_URL,
+      ONEBRAIN_SERVICE_KEY: process.env.ONEBRAIN_SERVICE_KEY,
+      ONEBRAIN_SYNC_ENABLED: process.env.ONEBRAIN_SYNC_ENABLED,
+    };
+    process.env.ONEBRAIN_API_BASE_URL = "https://onebrain.example";
+    process.env.ONEBRAIN_SERVICE_KEY = "obk_secret";
+    process.env.ONEBRAIN_SYNC_ENABLED = "true";
+
+    try {
+      const store = new MemoryPlatformStore();
+      const tenant = await store.createTenant({
+        name: "Tenant One",
+        slug: "tenant-one",
+      });
+      const failedAt = new Date("2026-07-08T10:00:00.000Z");
+      const syncedAt = new Date("2026-07-08T09:30:00.000Z");
+      store.oneBrainSyncSummary = {
+        total: 2,
+        byStatus: {
+          synced: 1,
+          failed: 1,
+          pending: 0,
+          other: 0,
+        },
+        lastSyncedAt: syncedAt,
+        lastFailedAt: failedAt,
+        recentFailures: [
+          {
+            id: "sync_failed",
+            tenantId: tenant.id,
+            provider: "onebrain",
+            sourceType: "knowledge",
+            sourceId: "k1",
+            sourceRef: "communication:tenant:tenant-one:knowledge:k1",
+            contentHash: "hash_failed",
+            status: "failed",
+            externalRecordId: null,
+            lastError: "OneBrain service request failed (403): forbidden",
+            syncedAt: null,
+            metadata: { serviceKey: "obk_secret" },
+            createdAt: failedAt,
+            updatedAt: failedAt,
+          },
+        ],
+        recentSynced: [
+          {
+            id: "sync_synced",
+            tenantId: tenant.id,
+            provider: "onebrain",
+            sourceType: "knowledge",
+            sourceId: "k2",
+            sourceRef: "communication:tenant:tenant-one:knowledge:k2",
+            contentHash: "hash_synced",
+            status: "synced",
+            externalRecordId: "rec_1",
+            lastError: null,
+            syncedAt,
+            metadata: { source: "test" },
+            createdAt: syncedAt,
+            updatedAt: syncedAt,
+          },
+        ],
+      };
+      const { app, memberHeaders } = await buildServerWithMember(
+        store,
+        tenant.id,
+      );
+
+      const response = await app.inject({
+        method: "GET",
+        url: `/admin/tenants/${tenant.id}/onebrain-sync`,
+        headers: memberHeaders,
+      });
+      expect(response.statusCode).toBe(200);
+      const body = response.json<{
+        configured: boolean;
+        enabled: boolean;
+        readiness: string;
+        recentFailures: Array<Record<string, unknown>>;
+        stats: { failed: number; synced: number; total: number };
+      }>();
+      expect(body).toMatchObject({
+        configured: true,
+        enabled: true,
+        readiness: "failed",
+        stats: {
+          failed: 1,
+          synced: 1,
+          total: 2,
+        },
+      });
+      expect(body.recentFailures[0]).toMatchObject({
+        sourceType: "knowledge",
+        sourceId: "k1",
+        status: "failed",
+      });
+      expect(Object.keys(body.recentFailures[0] ?? {})).not.toContain(
+        "metadata",
+      );
+      expect(Object.keys(body.recentFailures[0] ?? {})).not.toContain(
+        "contentHash",
+      );
+      expect(JSON.stringify(body)).not.toContain("obk_secret");
+
+      const dashboardResponse = await app.inject({
+        method: "GET",
+        url: `/admin/tenants/${tenant.id}/dashboard`,
+        headers: memberHeaders,
+      });
+      expect(dashboardResponse.statusCode).toBe(200);
+      expect(
+        dashboardResponse.json<{ oneBrainSync: { readiness: string } }>()
+          .oneBrainSync,
+      ).toMatchObject({
+        readiness: "failed",
+      });
+      await app.close();
+    } finally {
+      for (const [key, value] of Object.entries(previousEnv)) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
+    }
   });
 
   it("keeps telephone setup status separate from live call traffic", async () => {

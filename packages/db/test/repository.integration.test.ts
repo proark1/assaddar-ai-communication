@@ -54,6 +54,59 @@ describe.skipIf(!runIntegrationTests)("TenantRepository integration", () => {
     return tenant;
   }
 
+  it("summarizes OneBrain sync records by tenant and status", async () => {
+    const tenant = await createTestTenant("onebrain");
+    const otherTenant = await createTestTenant("onebrain-other");
+
+    await repo.recordOneBrainSyncSuccess(tenant.id, {
+      sourceType: "knowledge",
+      sourceId: "k1",
+      sourceRef: `communication:tenant:${tenant.id}:knowledge:k1`,
+      contentHash: "hash_1",
+      externalRecordId: "rec_1",
+    });
+    await repo.recordOneBrainSyncFailure(tenant.id, {
+      sourceType: "knowledge",
+      sourceId: "k2",
+      sourceRef: `communication:tenant:${tenant.id}:knowledge:k2`,
+      contentHash: "hash_2",
+      error: "Forbidden",
+    });
+    await repo.recordOneBrainSyncSuccess(otherTenant.id, {
+      sourceType: "knowledge",
+      sourceId: "k3",
+      sourceRef: `communication:tenant:${otherTenant.id}:knowledge:k3`,
+      contentHash: "hash_3",
+      externalRecordId: "rec_3",
+    });
+
+    const summary = await repo.getOneBrainSyncSummary(tenant.id, 1);
+
+    expect(summary).toMatchObject({
+      total: 2,
+      byStatus: {
+        synced: 1,
+        failed: 1,
+        pending: 0,
+        other: 0,
+      },
+    });
+    expect(summary.lastSyncedAt).toBeInstanceOf(Date);
+    expect(summary.lastFailedAt).toBeInstanceOf(Date);
+    expect(summary.recentFailures).toHaveLength(1);
+    expect(summary.recentFailures[0]).toMatchObject({
+      sourceId: "k2",
+      status: "failed",
+      lastError: "Forbidden",
+    });
+    expect(summary.recentSynced).toHaveLength(1);
+    expect(summary.recentSynced[0]).toMatchObject({
+      sourceId: "k1",
+      status: "synced",
+      externalRecordId: "rec_1",
+    });
+  });
+
   it("matches contacts by identifier without crossing tenant boundaries", async () => {
     const tenantA = await createTestTenant("contacts-a");
     const tenantB = await createTestTenant("contacts-b");

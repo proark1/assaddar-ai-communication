@@ -25,6 +25,7 @@
     "lint:fix": "eslint . --fix",
     "quality:budgets": "node scripts/check-budgets.mjs",
     "smoke:api": "node scripts/smoke-api.mjs",
+    "smoke:onebrain": "tsx scripts/smoke-onebrain.ts",
     "test": "pnpm -r --if-present test",
     "test:coverage": "pnpm -r --if-present test:coverage",
     "typecheck": "pnpm -r --if-present typecheck",

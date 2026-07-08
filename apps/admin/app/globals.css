@@ -1295,6 +1295,145 @@ textarea {
   color: var(--amber);
 }
 
+.onebrainSyncPanel {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto minmax(180px, 0.8fr);
+  gap: 12px;
+  align-items: center;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.92);
+  padding: 12px;
+}
+
+.onebrainSyncPanel[data-tone="good"] {
+  border-color: var(--green-line);
+}
+
+.onebrainSyncPanel[data-tone="warn"] {
+  border-color: var(--amber-line);
+}
+
+.onebrainSyncPanel[data-tone="danger"] {
+  border-color: var(--danger-line);
+}
+
+.onebrainSyncMain {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+}
+
+.onebrainSyncIcon {
+  display: inline-flex;
+  width: 36px;
+  height: 36px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  color: var(--accent);
+}
+
+.onebrainSyncPanel[data-tone="good"] .onebrainSyncIcon {
+  border-color: var(--green-line);
+  background: var(--green-bg);
+  color: var(--green);
+}
+
+.onebrainSyncPanel[data-tone="warn"] .onebrainSyncIcon {
+  border-color: var(--amber-line);
+  background: var(--amber-bg);
+  color: var(--amber);
+}
+
+.onebrainSyncPanel[data-tone="danger"] .onebrainSyncIcon {
+  border-color: var(--danger-line);
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.onebrainSyncMain span,
+.onebrainSyncStats span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.onebrainSyncMain strong {
+  display: block;
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.onebrainSyncMain small {
+  display: block;
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--text-soft);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.onebrainSyncStats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(58px, 1fr));
+  gap: 6px;
+}
+
+.onebrainSyncStats span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  border-left: 1px solid var(--line);
+  padding-left: 10px;
+}
+
+.onebrainSyncStats strong {
+  color: var(--text);
+  font-size: 20px;
+  line-height: 1;
+}
+
+.onebrainSyncMeta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  min-width: 0;
+}
+
+.onebrainSyncMeta span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-soft);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.onebrainSyncMeta a {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 900;
+  text-decoration: none;
+}
+
 .overviewGrid,
 .knowledgeGrid,
 .testStudioGrid,
@@ -5840,6 +5979,7 @@ textarea {
   .knowledgeGrid,
   .testStudioGrid,
   .widgetGrid,
+  .onebrainSyncPanel,
   .onboardingWorkspace,
   .selfServiceGrid,
   .settingsGrid,

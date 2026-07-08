@@ -62,9 +62,9 @@ import {
 } from "./schema";
 import {
   getOneBrainSyncRecordRow,
-  type OneBrainSyncRecord,
-  type OneBrainSyncSourceInput,
-  type RecordOneBrainSyncInput,
+  getOneBrainSyncSummaryRow,
+  type OneBrainSyncSourceInput as SyncSourceInput,
+  type RecordOneBrainSyncInput as SyncRecordInput,
   recordOneBrainSyncFailureRow,
   recordOneBrainSyncSuccessRow,
 } from "./repository-onebrain";
@@ -3479,41 +3479,37 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       .limit(limit)
       .offset(offset);
   }
-  async getOneBrainSyncRecord(
-    tenantId: string,
-    input: OneBrainSyncSourceInput,
-  ): Promise<OneBrainSyncRecord | null> {
+  async getOneBrainSyncRecord(tenantId: string, input: SyncSourceInput) {
     assertTenantId(tenantId);
-    if (this.needsTenantScope(tenantId)) {
-      return this.withTenantScope(tenantId, (repo) =>
-        repo.getOneBrainSyncRecord(tenantId, input),
-      );
-    }
-    return getOneBrainSyncRecordRow(this.db, tenantId, input);
+    return this.needsTenantScope(tenantId)
+      ? this.withTenantScope(tenantId, (repo) =>
+          getOneBrainSyncRecordRow(repo.db, tenantId, input),
+        )
+      : getOneBrainSyncRecordRow(this.db, tenantId, input);
   }
-  async recordOneBrainSyncSuccess(
-    tenantId: string,
-    input: RecordOneBrainSyncInput,
-  ): Promise<OneBrainSyncRecord> {
+  async getOneBrainSyncSummary(tenantId: string, limit?: number) {
     assertTenantId(tenantId);
-    if (this.needsTenantScope(tenantId)) {
-      return this.withTenantScope(tenantId, (repo) =>
-        repo.recordOneBrainSyncSuccess(tenantId, input),
-      );
-    }
-    return recordOneBrainSyncSuccessRow(this.db, tenantId, input);
+    return this.needsTenantScope(tenantId)
+      ? this.withTenantScope(tenantId, (repo) =>
+          getOneBrainSyncSummaryRow(repo.db, tenantId, limit),
+        )
+      : getOneBrainSyncSummaryRow(this.db, tenantId, limit);
   }
-  async recordOneBrainSyncFailure(
-    tenantId: string,
-    input: RecordOneBrainSyncInput,
-  ): Promise<OneBrainSyncRecord> {
+  async recordOneBrainSyncSuccess(tenantId: string, input: SyncRecordInput) {
     assertTenantId(tenantId);
-    if (this.needsTenantScope(tenantId)) {
-      return this.withTenantScope(tenantId, (repo) =>
-        repo.recordOneBrainSyncFailure(tenantId, input),
-      );
-    }
-    return recordOneBrainSyncFailureRow(this.db, tenantId, input);
+    return this.needsTenantScope(tenantId)
+      ? this.withTenantScope(tenantId, (repo) =>
+          recordOneBrainSyncSuccessRow(repo.db, tenantId, input),
+        )
+      : recordOneBrainSyncSuccessRow(this.db, tenantId, input);
+  }
+  async recordOneBrainSyncFailure(tenantId: string, input: SyncRecordInput) {
+    assertTenantId(tenantId);
+    return this.needsTenantScope(tenantId)
+      ? this.withTenantScope(tenantId, (repo) =>
+          recordOneBrainSyncFailureRow(repo.db, tenantId, input),
+        )
+      : recordOneBrainSyncFailureRow(this.db, tenantId, input);
   }
   async updateFaq(
     tenantId: string,
