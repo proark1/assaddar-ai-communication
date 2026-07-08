@@ -150,6 +150,32 @@ Only enable the scheduler after the target OneBrain account/space/app
 installation and scoped service key exist. The service key must stay on the
 workers runtime; never expose it to admin, widget, or browser code.
 
+Rollout checklist:
+
+1. Provision the OneBrain account and customer-service space.
+2. Mint a communication service key with access to
+   `customer_service_inbox`.
+3. Set `ONEBRAIN_API_BASE_URL`, `ONEBRAIN_SERVICE_KEY`,
+   `ONEBRAIN_SPACE_ID`, and any app/purpose overrides while keeping
+   `ONEBRAIN_SYNC_ENABLED=false`.
+4. Apply communication database migrations.
+5. Run a read-only credential check:
+
+   ```bash
+   pnpm smoke:onebrain
+   ```
+
+6. If you want to verify write access before enabling the scheduler, run one
+   clearly marked synthetic intake:
+
+   ```bash
+   ONEBRAIN_SMOKE_INTAKE=true pnpm smoke:onebrain
+   ```
+
+7. Enable sync with a small `ONEBRAIN_KNOWLEDGE_EXPORT_LIMIT`, then watch the
+   admin OneBrain sync panel and worker logs. Increase the limit only after
+   failures are understood.
+
 ## Enabling Semantic Retrieval
 
 Retrieval runs keyword-only by default. To turn on hybrid keyword + semantic

@@ -17,6 +17,7 @@ import {
   type GroundedAnswerGenerator,
   type HandoffStore,
 } from "@assaddar/core";
+import type { OneBrainSyncSummary } from "@assaddar/db";
 import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
 import Fastify, {
@@ -37,6 +38,7 @@ import { openApiDocument } from "./openapi";
 import { AppError } from "./errors";
 import { MetricsRegistry, METRICS_CONTENT_TYPE } from "./metrics";
 import { captureException } from "./observability";
+import { buildOneBrainSyncStatus } from "./onebrain-sync-status";
 import type { SupabaseAuthProvider } from "./supabase-auth";
 import {
   notifyLead,
@@ -275,6 +277,10 @@ export type PlatformStore = AnswerDataStore &
       options?: PaginationOptions,
     ): Promise<unknown[]>;
     getTenantBrainSummary(tenantId: string): Promise<unknown>;
+    getOneBrainSyncSummary(
+      tenantId: string,
+      limit?: number,
+    ): Promise<OneBrainSyncSummary>;
     listBrainOnboardingAnswers(tenantId: string): Promise<unknown[]>;
     upsertBrainOnboardingAnswers(
       tenantId: string,
@@ -2063,6 +2069,15 @@ export async function buildServer(
     async (request) => {
       const { tenantId } = ParamsTenantSchema.parse(request.params);
       return options.store.getTenantBrainSummary(tenantId);
+    },
+  );
+
+  app.get(
+    "/admin/tenants/:tenantId/onebrain-sync",
+    { preHandler: requireTenantAccess(options, "viewer") },
+    async (request) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      return buildOneBrainSyncStatus(options.store, tenantId);
     },
   );
 
@@ -5703,6 +5718,7 @@ async function buildDashboardBootstrap(
     rawChannelConnections,
     whatsappTemplates,
     whatsappCompliance,
+    oneBrainSync,
     tenantUsers,
     tenantInvites,
   ] = await Promise.all([
@@ -5716,6 +5732,7 @@ async function buildDashboardBootstrap(
     options.store.listChannelConnections(tenantId),
     options.store.listWhatsappTemplates(tenantId),
     options.store.getWhatsappCompliance(tenantId),
+    buildOneBrainSyncStatus(options.store, tenantId),
     canLoadUsers
       ? options.store.listTenantUsers(tenantId, { limit: 50, offset: 0 })
       : Promise.resolve([]),
@@ -5758,6 +5775,7 @@ async function buildDashboardBootstrap(
     channelConnections,
     whatsappTemplates,
     whatsappCompliance,
+    oneBrainSync,
     unansweredQuestions: buildUnansweredQueue(handoffs),
     workflowSuggestions: buildWorkflowSuggestions({
       analytics,

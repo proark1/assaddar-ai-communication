@@ -142,6 +142,13 @@ export const openApiDocument = {
         "x-minimum-role": "viewer",
       },
     },
+    "/admin/tenants/{tenantId}/onebrain-sync": {
+      get: {
+        summary:
+          "Fetch sanitized OneBrain sync readiness, counts, and recent status rows",
+        "x-minimum-role": "viewer",
+      },
+    },
     "/admin/tenants/{tenantId}/brain/onboarding": {
       get: {
         summary: "List project brain onboarding answers",

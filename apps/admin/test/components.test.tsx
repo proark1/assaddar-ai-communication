@@ -6,7 +6,12 @@ import { DeleteKnowledgeModal } from "../app/DeleteKnowledgeModal";
 import ErrorBoundary from "../app/error";
 import { AnalyticsPanel } from "../app/AnalyticsPanel";
 import { DashboardMetrics } from "../app/DashboardMetrics";
-import type { KnowledgeItem, Toast } from "../app/page-types";
+import { OneBrainSyncPanel } from "../app/OneBrainSyncPanel";
+import type {
+  KnowledgeItem,
+  OneBrainSyncStatus,
+  Toast,
+} from "../app/page-types";
 
 describe("ToastStack", () => {
   it("renders nothing when there are no toasts", () => {
@@ -188,5 +193,52 @@ describe("AnalyticsPanel", () => {
       />,
     );
     expect(screen.queryByText("Voice calls")).not.toBeInTheDocument();
+  });
+});
+
+describe("OneBrainSyncPanel", () => {
+  const status: OneBrainSyncStatus = {
+    configured: true,
+    enabled: true,
+    readiness: "failed",
+    stats: {
+      total: 3,
+      synced: 2,
+      failed: 1,
+      pending: 0,
+      other: 0,
+    },
+    lastSyncedAt: "2026-07-08T09:30:00.000Z",
+    lastFailedAt: "2026-07-08T10:00:00.000Z",
+    recentFailures: [
+      {
+        id: "sync_failed",
+        sourceType: "knowledge",
+        sourceId: "k1",
+        sourceRef: "communication:tenant:t1:knowledge:k1",
+        status: "failed",
+        externalRecordId: null,
+        lastError: "OneBrain service request failed (403): forbidden",
+        syncedAt: null,
+        updatedAt: "2026-07-08T10:00:00.000Z",
+      },
+    ],
+    recentSynced: [],
+    docsUrl: "https://example.test/docs",
+  };
+
+  it("renders compact failure status with counts and docs link", () => {
+    render(<OneBrainSyncPanel status={status} />);
+
+    expect(screen.getByText("OneBrain sync")).toBeInTheDocument();
+    expect(screen.getByText("Needs attention")).toBeInTheDocument();
+    expect(screen.getByText("1 failed sync row")).toBeInTheDocument();
+    expect(screen.getByText("Synced")).toBeInTheDocument();
+    expect(screen.getByText("Failed")).toBeInTheDocument();
+    expect(screen.getByText("Total")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /docs/i })).toHaveAttribute(
+      "href",
+      "https://example.test/docs",
+    );
   });
 });

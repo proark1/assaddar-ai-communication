@@ -61,6 +61,7 @@ import {
   ProductionReadinessPanel,
   SetupChecklistPanel,
 } from "./LaunchHealthPanels";
+import { OneBrainSyncPanel } from "./OneBrainSyncPanel";
 import {
   AnswerQualityPanel,
   BusinessReadinessPanel,
@@ -297,6 +298,8 @@ export default function DashboardPage() {
   >([]);
   const [whatsappCompliance, setWhatsappCompliance] =
     useState<WhatsappCompliance | null>(null);
+  const [oneBrainSync, setOneBrainSync] =
+    useState<DashboardBootstrap["oneBrainSync"]>(null);
   const [workflowSuggestions, setWorkflowSuggestions] =
     useState<WorkflowSuggestionsResult | null>(null);
   const [productionReadiness, setProductionReadiness] =
@@ -1924,6 +1927,7 @@ export default function DashboardPage() {
       setChannelConnections([]);
       setWhatsappTemplates([]);
       setWhatsappCompliance(null);
+      setOneBrainSync(null);
       setWorkflowSuggestions(null);
       setTenantUsers([]);
       setTenantInvites([]);
@@ -1955,6 +1959,7 @@ export default function DashboardPage() {
       setChannelConnections(bootstrap.channelConnections);
       setWhatsappTemplates(bootstrap.whatsappTemplates);
       setWhatsappCompliance(bootstrap.whatsappCompliance);
+      setOneBrainSync(bootstrap.oneBrainSync);
       setUnansweredQuestions(bootstrap.unansweredQuestions);
       setWorkflowSuggestions(bootstrap.workflowSuggestions);
       setProductionReadiness(bootstrap.productionReadiness);
@@ -4453,6 +4458,7 @@ export default function DashboardPage() {
     const canEditKnowledge = canManageKnowledge();
     return (
       <div className="workspaceStack">
+        <OneBrainSyncPanel status={oneBrainSync} />
         {renderKnowledgeLoopPanel(canEditKnowledge)}
         {renderKnowledgeUploadsPanel(canEditKnowledge)}
         {renderKnowledgeSuggestionsPanel(canEditKnowledge)}
