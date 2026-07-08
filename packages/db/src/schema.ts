@@ -775,6 +775,48 @@ export const knowledgeSuggestions = pgTable(
   ],
 );
 
+export const onebrainSyncRecords = pgTable(
+  "onebrain_sync_records",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    provider: text("provider").notNull().default("onebrain"),
+    sourceType: text("source_type").notNull(),
+    sourceId: text("source_id").notNull(),
+    sourceRef: text("source_ref").notNull(),
+    contentHash: text("content_hash").notNull(),
+    status: text("status").notNull().default("pending"),
+    externalRecordId: text("external_record_id"),
+    lastError: text("last_error"),
+    syncedAt: timestamp("synced_at", { withTimezone: true }),
+    metadata: jsonb("metadata")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("onebrain_sync_records_source_idx").on(
+      table.tenantId,
+      table.provider,
+      table.sourceType,
+      table.sourceId,
+    ),
+    uniqueIndex("onebrain_sync_records_source_ref_idx").on(
+      table.tenantId,
+      table.provider,
+      table.sourceRef,
+    ),
+    index("onebrain_sync_records_tenant_status_idx").on(
+      table.tenantId,
+      table.status,
+      table.updatedAt.desc(),
+    ),
+  ],
+);
+
 export const allowedIntents = pgTable(
   "allowed_intents",
   {

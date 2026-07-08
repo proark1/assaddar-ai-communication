@@ -124,6 +124,30 @@ OPENAI_VOICE_MODEL=gpt-4o-mini-tts
 OPENAI_TIMEOUT_MS=10000
 ```
 
+OneBrain sync is optional and workers-only. It exports approved local knowledge
+to the OneBrain service API; it does not change live answering. Apply migrations
+before enabling it so the `onebrain_sync_records` table exists:
+
+```text
+ONEBRAIN_SYNC_ENABLED=true
+ONEBRAIN_API_BASE_URL=https://your-onebrain-api-domain
+ONEBRAIN_SERVICE_KEY=obk_...
+ONEBRAIN_SPACE_ID=sp_customer_service
+ONEBRAIN_SYNC_INTERVAL_MS=3600000
+ONEBRAIN_KNOWLEDGE_EXPORT_LIMIT=50
+```
+
+Defaults:
+
+- `ONEBRAIN_APP_ID=communication`
+- `ONEBRAIN_KNOWLEDGE_PURPOSE=knowledge_management`
+- `ONEBRAIN_ACCOUNT_ID` is optional; when omitted, each tenant slug is used as
+  the OneBrain account id.
+
+Only enable the scheduler after the target OneBrain account/space/app
+installation and scoped service key exist. The service key must stay on the
+workers runtime; never expose it to admin, widget, or browser code.
+
 ## Enabling Semantic Retrieval
 
 Retrieval runs keyword-only by default. To turn on hybrid keyword + semantic

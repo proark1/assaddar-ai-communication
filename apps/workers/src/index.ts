@@ -2,7 +2,10 @@ import { config } from "dotenv";
 import * as Sentry from "@sentry/node";
 import { Queue, Worker, type JobsOptions } from "bullmq";
 import { createChannelAdapterRegistry } from "@assaddar/channels";
-import { createEmbeddingProvider } from "@assaddar/core";
+import {
+  createEmbeddingProvider,
+  createOneBrainProvider,
+} from "@assaddar/core";
 import {
   createDbClient,
   createEnvChannelCredentialCipher,
@@ -12,6 +15,7 @@ import {
 import { backfillMissingEmbeddings } from "./backfill-embeddings";
 import { retryFailedDeliveries } from "./retry-deliveries";
 import { jobSchemas, type WorkerJobName } from "./jobs";
+import { syncApprovedKnowledgeToOneBrain } from "./onebrain-sync";
 
 config({ path: new URL("../../../.env", import.meta.url) });
 
@@ -50,6 +54,7 @@ const repository = new TenantRepository(
   createEnvChannelCredentialCipher(process.env),
 );
 const embeddingProvider = createEmbeddingProvider(process.env);
+const oneBrainProvider = createOneBrainProvider(process.env);
 const channelAdapters = createChannelAdapterRegistry(process.env);
 
 const redisUrl = process.env.REDIS_URL ?? "redis://localhost:6379";
@@ -138,6 +143,17 @@ const DELIVERY_RETRY_INTERVAL_MS = parsePositiveIntEnv(
 const SUGGESTION_SCAN_INTERVAL_MS = parsePositiveIntEnv(
   process.env.SUGGESTION_SCAN_INTERVAL_MS,
   10 * 60 * 1000,
+);
+
+// OneBrain sync is opt-in because OneBrain currently treats source_ref as
+// provenance, not a guaranteed idempotency key. Enable only after provisioning
+// the tenant/account/space and deciding the expected sync cadence.
+const ONEBRAIN_SYNC_ENABLED =
+  (process.env.ONEBRAIN_SYNC_ENABLED ?? "").toLowerCase() === "true";
+
+const ONEBRAIN_SYNC_INTERVAL_MS = parsePositiveIntEnv(
+  process.env.ONEBRAIN_SYNC_INTERVAL_MS,
+  60 * 60 * 1000,
 );
 
 // Retention deletion is DESTRUCTIVE, so it is gated behind an explicit flag and
@@ -347,6 +363,35 @@ const worker = new Worker(
         }
         return { status: "ok", created, scanned, tenants: tenants.length };
       }
+      case "onebrain.sync": {
+        if (!ONEBRAIN_SYNC_ENABLED) {
+          return {
+            status: "skipped",
+            reason: "OneBrain sync disabled (set ONEBRAIN_SYNC_ENABLED=true).",
+          };
+        }
+        if (!oneBrainProvider) {
+          return {
+            status: "skipped",
+            reason:
+              "OneBrain provider not configured (set ONEBRAIN_API_BASE_URL and ONEBRAIN_SERVICE_KEY).",
+          };
+        }
+        try {
+          const result = await syncApprovedKnowledgeToOneBrain(
+            repository,
+            oneBrainProvider,
+            {
+              env: process.env,
+              log: (message) => console.log(`[onebrain.sync] ${message}`),
+            },
+          );
+          return { status: "ok", ...result };
+        } catch (error) {
+          console.error(`[onebrain.sync] run failed (job ${job.id})`, error);
+          throw error;
+        }
+      }
     }
   },
   {
@@ -407,6 +452,22 @@ async function scheduleMaintenanceJobs() {
   console.log(
     `Scheduled suggestions.scan every ${SUGGESTION_SCAN_INTERVAL_MS}ms`,
   );
+
+  if (ONEBRAIN_SYNC_ENABLED && oneBrainProvider) {
+    await queue.upsertJobScheduler(
+      "onebrain-sync",
+      { every: ONEBRAIN_SYNC_INTERVAL_MS },
+      { name: "onebrain.sync", data: {} },
+    );
+    console.log(`Scheduled onebrain.sync every ${ONEBRAIN_SYNC_INTERVAL_MS}ms`);
+  } else {
+    await queue.removeJobScheduler("onebrain-sync").catch(() => {});
+    console.log(
+      ONEBRAIN_SYNC_ENABLED
+        ? "OneBrain sync not scheduled: provider credentials are missing."
+        : "OneBrain sync disabled (set ONEBRAIN_SYNC_ENABLED=true to enable).",
+    );
+  }
 
   if (RETENTION_CLEANUP_ENABLED) {
     await queue.upsertJobScheduler(

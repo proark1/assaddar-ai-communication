@@ -48,6 +48,7 @@ import {
   messageDeliveries,
   messages,
   memberships,
+  onebrainSyncRecords,
   roles,
   stripeWebhookEvents,
   tenantInvites,
@@ -306,6 +307,8 @@ export type BrainOnboardingAnswerRecord =
 export type KnowledgeSuggestionRecord =
   typeof knowledgeSuggestions.$inferSelect;
 
+export type OneBrainSyncRecord = typeof onebrainSyncRecords.$inferSelect;
+
 export type DocumentIngestionJobRecord =
   typeof documentIngestionJobs.$inferSelect;
 
@@ -526,6 +529,20 @@ export type TenantBrainSummary = {
   failedIngestionJobs: number;
 };
 
+export type OneBrainSyncSourceInput = {
+  provider?: string | undefined;
+  sourceType: string;
+  sourceId: string;
+};
+
+export type RecordOneBrainSyncInput = OneBrainSyncSourceInput & {
+  sourceRef: string;
+  contentHash: string;
+  externalRecordId?: string | null | undefined;
+  error?: string | null | undefined;
+  metadata?: Record<string, unknown> | undefined;
+};
+
 export type ChannelConnectionInput = {
   channel: Channel;
   provider: string;
@@ -607,6 +624,16 @@ export type WhatsappTemplateInput = {
   providerTemplateId?: string | null | undefined;
   metadata?: Record<string, unknown> | undefined;
 };
+
+function normalizeOneBrainSyncSource(input: OneBrainSyncSourceInput) {
+  const provider = input.provider?.trim() || "onebrain";
+  const sourceType = input.sourceType.trim();
+  const sourceId = input.sourceId.trim();
+  if (!sourceType || !sourceId) {
+    throw new Error("OneBrain sync source type and id are required.");
+  }
+  return { provider, sourceType, sourceId };
+}
 
 export class TenantRepository implements AnswerDataStore, HandoffStore {
   /**
@@ -3472,6 +3499,130 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       .orderBy(desc(knowledgeChunks.createdAt))
       .limit(limit)
       .offset(offset);
+  }
+
+  async getOneBrainSyncRecord(
+    tenantId: string,
+    input: OneBrainSyncSourceInput,
+  ): Promise<OneBrainSyncRecord | null> {
+    assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<OneBrainSyncRecord | null>(tenantId, (repo) =>
+        repo.getOneBrainSyncRecord(tenantId, input),
+      );
+    }
+    const source = normalizeOneBrainSyncSource(input);
+    const [record] = await this.db
+      .select()
+      .from(onebrainSyncRecords)
+      .where(
+        and(
+          eq(onebrainSyncRecords.tenantId, tenantId),
+          eq(onebrainSyncRecords.provider, source.provider),
+          eq(onebrainSyncRecords.sourceType, source.sourceType),
+          eq(onebrainSyncRecords.sourceId, source.sourceId),
+        ),
+      )
+      .limit(1);
+    return record ?? null;
+  }
+
+  async recordOneBrainSyncSuccess(
+    tenantId: string,
+    input: RecordOneBrainSyncInput,
+  ): Promise<OneBrainSyncRecord> {
+    assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<OneBrainSyncRecord>(tenantId, (repo) =>
+        repo.recordOneBrainSyncSuccess(tenantId, input),
+      );
+    }
+    const source = normalizeOneBrainSyncSource(input);
+    const [record] = await this.db
+      .insert(onebrainSyncRecords)
+      .values({
+        tenantId,
+        provider: source.provider,
+        sourceType: source.sourceType,
+        sourceId: source.sourceId,
+        sourceRef: input.sourceRef,
+        contentHash: input.contentHash,
+        status: "synced",
+        externalRecordId: input.externalRecordId ?? null,
+        lastError: null,
+        syncedAt: new Date(),
+        metadata: input.metadata ?? {},
+      })
+      .onConflictDoUpdate({
+        target: [
+          onebrainSyncRecords.tenantId,
+          onebrainSyncRecords.provider,
+          onebrainSyncRecords.sourceType,
+          onebrainSyncRecords.sourceId,
+        ],
+        set: {
+          sourceRef: input.sourceRef,
+          contentHash: input.contentHash,
+          status: "synced",
+          externalRecordId: input.externalRecordId ?? null,
+          lastError: null,
+          syncedAt: new Date(),
+          metadata: input.metadata ?? {},
+          updatedAt: sql`now()`,
+        },
+      })
+      .returning();
+    if (!record) {
+      throw new Error("Failed to record OneBrain sync success.");
+    }
+    return record;
+  }
+
+  async recordOneBrainSyncFailure(
+    tenantId: string,
+    input: RecordOneBrainSyncInput,
+  ): Promise<OneBrainSyncRecord> {
+    assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<OneBrainSyncRecord>(tenantId, (repo) =>
+        repo.recordOneBrainSyncFailure(tenantId, input),
+      );
+    }
+    const source = normalizeOneBrainSyncSource(input);
+    const [record] = await this.db
+      .insert(onebrainSyncRecords)
+      .values({
+        tenantId,
+        provider: source.provider,
+        sourceType: source.sourceType,
+        sourceId: source.sourceId,
+        sourceRef: input.sourceRef,
+        contentHash: input.contentHash,
+        status: "failed",
+        lastError: input.error ?? "OneBrain sync failed.",
+        metadata: input.metadata ?? {},
+      })
+      .onConflictDoUpdate({
+        target: [
+          onebrainSyncRecords.tenantId,
+          onebrainSyncRecords.provider,
+          onebrainSyncRecords.sourceType,
+          onebrainSyncRecords.sourceId,
+        ],
+        set: {
+          sourceRef: input.sourceRef,
+          contentHash: input.contentHash,
+          status: "failed",
+          lastError: input.error ?? "OneBrain sync failed.",
+          metadata: input.metadata ?? {},
+          updatedAt: sql`now()`,
+        },
+      })
+      .returning();
+    if (!record) {
+      throw new Error("Failed to record OneBrain sync failure.");
+    }
+    return record;
   }
 
   async updateFaq(
