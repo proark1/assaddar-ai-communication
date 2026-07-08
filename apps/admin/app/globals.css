@@ -617,6 +617,35 @@ textarea {
   color: var(--danger);
 }
 
+.privacyNotice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 18px;
+  padding: 12px 14px;
+  border: 1px solid var(--accent-bg);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  background: var(--accent-bg);
+  color: var(--accent-hover);
+}
+
+.privacyNotice svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--accent);
+}
+
+.privacyNotice p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.privacyNotice strong {
+  font-weight: 800;
+}
+
 .tabBar {
   position: sticky;
   top: 0;
@@ -662,10 +691,8 @@ textarea {
   min-width: 0;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background:
-    linear-gradient(135deg, rgba(47, 111, 115, 0.08), rgba(71, 85, 105, 0.05)),
-    rgba(255, 255, 255, 0.9);
-  box-shadow: var(--shadow-soft);
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: none;
   padding: 18px;
 }
 
@@ -684,23 +711,24 @@ textarea {
 }
 
 .homeIntro {
-  background:
-    linear-gradient(135deg, rgba(47, 111, 115, 0.1), rgba(31, 122, 77, 0.07)),
-    #ffffff;
+  background: #ffffff;
 }
 
 .quickActionGrid,
-.workspaceIntroStats {
+.workspaceIntroStats,
+.sectionSwitch {
   display: grid;
   gap: 8px;
   min-width: 280px;
 }
 
-.quickActionGrid {
+.quickActionGrid,
+.sectionSwitch {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.quickActionGrid button {
+.quickActionGrid button,
+.sectionSwitch button {
   display: inline-flex;
   align-items: center;
   justify-content: flex-start;
@@ -717,8 +745,11 @@ textarea {
   font-weight: 900;
 }
 
-.quickActionGrid button:hover {
+.quickActionGrid button:hover,
+.sectionSwitch button:hover,
+.sectionSwitch button[data-active="true"] {
   border-color: var(--accent);
+  background: var(--accent-bg);
   color: var(--accent);
 }
 
@@ -776,6 +807,66 @@ textarea {
   gap: 12px;
 }
 
+.focusSummaryGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.summaryTile {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  min-height: 104px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.96);
+  color: var(--text);
+  padding: 14px;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 140ms ease,
+    background 140ms ease;
+}
+
+.summaryTile:hover {
+  border-color: rgba(47, 111, 115, 0.36);
+  background: #ffffff;
+}
+
+.summaryTile span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.summaryTile strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 26px;
+  line-height: 1.08;
+}
+
+.summaryTile small {
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.summaryTile[data-tone="good"] {
+  border-color: var(--green-line);
+  background: var(--green-bg);
+}
+
+.summaryTile[data-tone="warn"] {
+  border-color: var(--amber-line);
+  background: var(--amber-bg);
+}
+
 .metricCard {
   display: grid;
   grid-template-columns: 32px minmax(0, 1fr);
@@ -787,7 +878,7 @@ textarea {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.96);
-  box-shadow: var(--shadow-soft);
+  box-shadow: none;
   padding: 14px;
 }
 
@@ -873,7 +964,7 @@ textarea {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.96);
-  box-shadow: var(--shadow-soft);
+  box-shadow: none;
   padding: 14px;
 }
 
@@ -1073,8 +1164,89 @@ textarea {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.96);
-  box-shadow: var(--shadow);
+  box-shadow: none;
   padding: 18px;
+}
+
+.workspaceDisclosure,
+.inlineDisclosure {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.88);
+}
+
+.workspaceDisclosure > summary,
+.inlineDisclosure > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-height: 56px;
+  padding: 0 16px;
+  color: var(--text);
+  cursor: pointer;
+  list-style: none;
+}
+
+.workspaceDisclosure > summary::-webkit-details-marker,
+.inlineDisclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+.workspaceDisclosure > summary::after,
+.inlineDisclosure > summary::after {
+  content: ">";
+  color: var(--accent);
+  font-weight: 900;
+  transition: transform 140ms ease;
+}
+
+.workspaceDisclosure[open] > summary,
+.inlineDisclosure[open] > summary {
+  border-bottom: 1px solid var(--line);
+}
+
+.workspaceDisclosure[open] > summary::after,
+.inlineDisclosure[open] > summary::after {
+  transform: rotate(90deg);
+}
+
+.workspaceDisclosure summary span,
+.inlineDisclosure summary span {
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.workspaceDisclosure summary small,
+.inlineDisclosure summary small {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.workspaceDisclosureBody {
+  display: grid;
+  gap: 16px;
+  padding: 16px;
+}
+
+.workspaceDisclosureBody > .workspaceStack {
+  gap: 16px;
+}
+
+.inlineDisclosure {
+  display: grid;
+}
+
+.inlineDisclosure > summary {
+  min-height: 46px;
+}
+
+.inlineDisclosure > .commandGrid,
+.inlineDisclosure > .weakestGuide {
+  margin: 12px;
 }
 
 .panelHeader {
@@ -5674,6 +5846,7 @@ textarea {
   .automationGrid,
   .inboxGrid,
   .quickStartGrid,
+  .focusSummaryGrid,
   .operationalGrid,
   .launchHealthGrid,
   .leadActionGrid,
@@ -5715,7 +5888,8 @@ textarea {
   }
 
   .quickActionGrid,
-  .workspaceIntroStats {
+  .workspaceIntroStats,
+  .sectionSwitch {
     min-width: 0;
   }
 
@@ -5799,7 +5973,8 @@ textarea {
   .dangerButton,
   .iconButton,
   .tenantButton,
-  .quickActionGrid button {
+  .quickActionGrid button,
+  .sectionSwitch button {
     min-height: 44px;
   }
 
@@ -5858,6 +6033,7 @@ textarea {
   .unlockRow,
   .scoreGuideGrid,
   .commandGrid,
+  .focusSummaryGrid,
   .loopStepGrid,
   .playModeGrid,
   .leadActionGrid,
@@ -5870,6 +6046,7 @@ textarea {
   .presetRow,
   .previewQuickReplies,
   .quickActionGrid,
+  .sectionSwitch,
   .workspaceIntroStats,
   .landingValueGrid,
   .landingChannelGrid,
