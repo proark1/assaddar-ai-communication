@@ -4,7 +4,6 @@ import {
   ONEBRAIN_COMMUNICATION_APP_ID,
   ONEBRAIN_KNOWLEDGE_PURPOSE,
   OneBrainServiceClient,
-  OneBrainServiceError,
   oneBrainSourceRef,
 } from "../src/onebrain";
 
