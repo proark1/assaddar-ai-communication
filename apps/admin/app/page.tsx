@@ -53,6 +53,19 @@ import { AdminSidebar } from "./AdminSidebar";
 import { DeleteKnowledgeModal } from "./DeleteKnowledgeModal";
 import { DashboardMetrics } from "./DashboardMetrics";
 import { AnalyticsPanel } from "./AnalyticsPanel";
+import {
+  OperationalHealthPanel,
+  ProductionReadinessPanel,
+  SetupChecklistPanel,
+} from "./LaunchHealthPanels";
+import {
+  FocusSummaryGrid,
+  InlineDisclosure,
+  SectionSwitch,
+  WorkspaceDisclosure,
+  type SectionSwitchItem,
+  type SummaryTileItem,
+} from "./WorkspaceUi";
 import { useDebouncedValue, useDialogA11y, useToasts } from "./dashboard-hooks";
 import {
   buildAnswerTrustSummary,
@@ -335,6 +348,18 @@ const pipelineStages: Array<{ key: LeadPipelineStage; label: string }> = [
   { key: "lost", label: "Lost" },
 ];
 
+type SettingsSectionId =
+  | "business-settings"
+  | "widget-settings"
+  | "automation-settings"
+  | "test-settings";
+
+type ChannelsSectionId =
+  | "channel-overview"
+  | "telephone-channel-setup"
+  | "connect-channels"
+  | "whatsapp-operations";
+
 const listPageSize = 50;
 
 function readFileAsBase64(file: File): Promise<string> {
@@ -532,6 +557,10 @@ export default function DashboardPage() {
   const [suggestionQuestionDraft, setSuggestionQuestionDraft] = useState("");
   const [suggestionAnswerDraft, setSuggestionAnswerDraft] = useState("");
   const [activeTab, setActiveTab] = useState<TabKey>("home");
+  const [activeSettingsSection, setActiveSettingsSection] =
+    useState<SettingsSectionId>("business-settings");
+  const [activeChannelsSection, setActiveChannelsSection] =
+    useState<ChannelsSectionId>("channel-overview");
   const [knowledgeSearch, setKnowledgeSearch] = useState("");
   const [knowledgeStatusFilter, setKnowledgeStatusFilter] =
     useState<KnowledgeStatusFilter>("all");
@@ -3798,101 +3827,6 @@ export default function DashboardPage() {
     );
   }
 
-  function renderSetupChecklist() {
-    return (
-      <section className="panel setupPanel">
-        <div className="panelHeader">
-          <div className="panelTitle">
-            <ClipboardCheck size={18} />
-            <h2>Launch checklist</h2>
-          </div>
-          <span className="countPill">
-            {completedSteps}/{setupSteps.length}
-          </span>
-        </div>
-        <div className="progressTrack">
-          <span
-            style={{ width: `${(completedSteps / setupSteps.length) * 100}%` }}
-          />
-        </div>
-        <div className="setupList">
-          {setupSteps.map((step) => (
-            <button
-              data-done={step.done ? "true" : "false"}
-              key={step.label}
-              type="button"
-              onClick={() => openWorkspaceSection(step.tab, step.sectionId)}
-            >
-              {step.done ? (
-                <CheckCircle2 size={17} />
-              ) : (
-                <AlertCircle size={17} />
-              )}
-              <div>
-                <strong>{step.label}</strong>
-                <span>{step.done ? "Ready" : step.action}</span>
-              </div>
-            </button>
-          ))}
-        </div>
-      </section>
-    );
-  }
-
-  function renderTodayPanel() {
-    const activeAutomationCount = [
-      automationSettings.ownerLeadEmailEnabled,
-      automationSettings.visitorConfirmationEmailEnabled,
-      automationSettings.autoQualifyReadinessEnabled,
-      automationSettings.autoQualifyLeadDetailsEnabled,
-      automationSettings.weeklySummaryEmailEnabled,
-    ].filter(Boolean).length;
-
-    return (
-      <section className="panel todayPanel">
-        <div className="panelHeader">
-          <div className="panelTitle">
-            <Sparkles size={18} />
-            <h2>Today</h2>
-          </div>
-          <span className="countPill">
-            {openLeads.length + unansweredQuestions.length + staleLeads.length}
-          </span>
-        </div>
-        <div className="todayGrid">
-          <button
-            type="button"
-            onClick={() => setActiveTab("leads")}
-            data-alert={openLeads.length ? "true" : "false"}
-          >
-            <span>Follow up</span>
-            <strong>{openLeads.length}</strong>
-            <small>Open leads</small>
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab("leads")}
-            data-alert={staleLeads.length ? "true" : "false"}
-          >
-            <span>Reminder</span>
-            <strong>{staleLeads.length}</strong>
-            <small>Stale leads</small>
-          </button>
-          <button type="button" onClick={() => setActiveTab("knowledge")}>
-            <span>Knowledge</span>
-            <strong>{unansweredQuestions.length}</strong>
-            <small>FAQ drafts</small>
-          </button>
-          <button type="button" onClick={() => setActiveTab("settings")}>
-            <span>Automation</span>
-            <strong>{activeAutomationCount}/5</strong>
-            <small>Rules active</small>
-          </button>
-        </div>
-      </section>
-    );
-  }
-
   function renderProgressionPanel() {
     const unlockProgress = nextProductLevel
       ? Math.max(
@@ -4004,77 +3938,45 @@ export default function DashboardPage() {
             No urgent work. Run one fresh website test and keep the loop warm.
           </div>
         )}
-        <div className="commandGrid">
-          {secondaryCommands.map((action) => (
-            <button
-              className="actionItem"
-              data-tone={action.tone}
-              key={`${action.source}-${action.title}`}
-              type="button"
-              onClick={() => runCommandAction(action)}
-            >
-              <span>{action.source}</span>
-              <strong>{action.title}</strong>
-              <small>{action.impact}</small>
-              <em>{action.reward}</em>
-            </button>
-          ))}
-        </div>
-        {weakestScoreGuide ? (
-          <button
-            className="weakestGuide"
-            type="button"
-            onClick={() =>
-              openWorkspaceSection(
-                weakestScoreGuide.tab,
-                weakestScoreGuide.sectionId,
-              )
-            }
+        {secondaryCommands.length || weakestScoreGuide ? (
+          <InlineDisclosure
+            title="More actions"
+            detail={`${secondaryCommands.length + (weakestScoreGuide ? 1 : 0)} available`}
           >
-            <span>Best score lift</span>
-            <strong>{weakestScoreGuide.label}</strong>
-            <small>{weakestScoreGuide.action}</small>
-          </button>
+            <div className="commandGrid">
+              {secondaryCommands.map((action) => (
+                <button
+                  className="actionItem"
+                  data-tone={action.tone}
+                  key={`${action.source}-${action.title}`}
+                  type="button"
+                  onClick={() => runCommandAction(action)}
+                >
+                  <span>{action.source}</span>
+                  <strong>{action.title}</strong>
+                  <small>{action.impact}</small>
+                  <em>{action.reward}</em>
+                </button>
+              ))}
+            </div>
+            {weakestScoreGuide ? (
+              <button
+                className="weakestGuide"
+                type="button"
+                onClick={() =>
+                  openWorkspaceSection(
+                    weakestScoreGuide.tab,
+                    weakestScoreGuide.sectionId,
+                  )
+                }
+              >
+                <span>Best score lift</span>
+                <strong>{weakestScoreGuide.label}</strong>
+                <small>{weakestScoreGuide.action}</small>
+              </button>
+            ) : null}
+          </InlineDisclosure>
         ) : null}
-      </section>
-    );
-  }
-
-  function renderOperationalHealth() {
-    const knowledgeGapCount =
-      unansweredTopicGroups.length + missingKnowledgeChecks.length;
-
-    return (
-      <section className="panel operationalPanel">
-        <div className="panelHeader">
-          <div className="panelTitle">
-            <BarChart3 size={18} />
-            <h2>Operational health</h2>
-          </div>
-          <span className="countPill">{channelReadinessScore}% channels</span>
-        </div>
-        <div className="operationalGrid">
-          <article data-alert={dueLeads.length ? "true" : "false"}>
-            <span>Due follow-ups</span>
-            <strong>{dueLeads.length}</strong>
-            <small>Scheduled leads needing attention today</small>
-          </article>
-          <article data-alert={hotLeads.length ? "true" : "false"}>
-            <span>Hot leads</span>
-            <strong>{hotLeads.length}</strong>
-            <small>At or above the qualification threshold</small>
-          </article>
-          <article>
-            <span>Average lead score</span>
-            <strong>{averageLeadScore}/100</strong>
-            <small>Based on captured lead details</small>
-          </article>
-          <article data-alert={knowledgeGapCount ? "true" : "false"}>
-            <span>Knowledge gaps</span>
-            <strong>{knowledgeGapCount}</strong>
-            <small>Missing topics and unanswered questions</small>
-          </article>
-        </div>
       </section>
     );
   }
@@ -4103,97 +4005,6 @@ export default function DashboardPage() {
       return undefined;
     }
     return "business-settings";
-  }
-
-  function renderProductionReadiness() {
-    const score = productionReadiness?.score ?? 0;
-    const statusLabel =
-      productionReadiness?.status === "ready_for_beta"
-        ? "Beta ready"
-        : productionReadiness?.status === "needs_work"
-          ? "Needs work"
-          : productionReadiness
-            ? "Not ready"
-            : "Checking";
-    const nextActions = productionReadiness?.summary.nextActions ?? [];
-
-    return (
-      <section className="panel operationalPanel">
-        <div className="panelHeader">
-          <div className="panelTitle">
-            <ShieldCheck size={18} />
-            <h2>Production readiness</h2>
-          </div>
-          <span
-            className="countPill"
-            data-tone={
-              productionReadiness?.status === "ready_for_beta" ? "good" : "warn"
-            }
-          >
-            {score}/100
-          </span>
-        </div>
-        <div className="progressTrack">
-          <span style={{ width: `${score}%` }} />
-        </div>
-        <div className="operationalGrid">
-          <article
-            data-alert={productionReadiness?.summary.failed ? "true" : "false"}
-          >
-            <span>Status</span>
-            <strong>{statusLabel}</strong>
-            <small>Production beta gate across the top 10 areas</small>
-          </article>
-          <article>
-            <span>Passed</span>
-            <strong>{productionReadiness?.summary.passed ?? 0}</strong>
-            <small>Checks already satisfied</small>
-          </article>
-          <article
-            data-alert={
-              productionReadiness?.summary.warnings ? "true" : "false"
-            }
-          >
-            <span>Warnings</span>
-            <strong>{productionReadiness?.summary.warnings ?? 0}</strong>
-            <small>Useful before launch</small>
-          </article>
-          <article
-            data-alert={productionReadiness?.summary.failed ? "true" : "false"}
-          >
-            <span>Blockers</span>
-            <strong>{productionReadiness?.summary.failed ?? 0}</strong>
-            <small>Must resolve before production selling</small>
-          </article>
-        </div>
-        <div className="nextActionList">
-          {nextActions.length ? (
-            nextActions.slice(0, 4).map((check) => (
-              <button
-                className="actionItem"
-                data-tone={check.status === "fail" ? "urgent" : "warn"}
-                key={check.id}
-                type="button"
-                onClick={() =>
-                  openWorkspaceSection(
-                    readinessActionTab(check.id),
-                    readinessActionSection(check.id),
-                  )
-                }
-              >
-                <span>{check.status}</span>
-                <strong>{check.title}</strong>
-                <small>{check.detail}</small>
-              </button>
-            ))
-          ) : (
-            <div className="emptyState compact">
-              Production readiness has no open actions.
-            </div>
-          )}
-        </div>
-      </section>
-    );
   }
 
   function renderWorkflowSuggestions() {
@@ -4253,196 +4064,277 @@ export default function DashboardPage() {
     );
   }
 
+  function renderTodayFocusSummary() {
+    const knowledgeGapCount =
+      unansweredTopicGroups.length + missingKnowledgeChecks.length;
+    const setupSummary = setupCompletion >= 100 ? "Ready" : "Needs setup";
+
+    const summaryItems: SummaryTileItem[] = [
+      {
+        label: "Work",
+        value: openLeads.length + staleLeads.length,
+        detail:
+          openLeads.length || staleLeads.length
+            ? "Leads need follow-up"
+            : "No lead follow-up due",
+        tone: openLeads.length || staleLeads.length ? "warn" : "good",
+        onClick: () => setActiveTab("leads"),
+      },
+      {
+        label: "Answers",
+        value: knowledgeGapCount,
+        detail:
+          knowledgeGapCount > 0
+            ? "Knowledge gaps to fill"
+            : "No urgent answer gaps",
+        tone: knowledgeGapCount > 0 ? "warn" : "good",
+        onClick: () => openWorkspaceSection("knowledge", "knowledge-manager"),
+      },
+      {
+        label: "Channels",
+        value: `${connectedChannelCount}/${channelConnections.length || 1}`,
+        detail:
+          channelReadinessScore >= 100
+            ? "Customer channels ready"
+            : "Next channel needs setup",
+        tone: channelReadinessScore >= 100 ? "good" : "neutral",
+        onClick: () => openChannelsSection("channel-overview"),
+      },
+      {
+        label: "Setup",
+        value: `${setupCompletion}%`,
+        detail: setupSummary,
+        tone: setupCompletion >= 100 ? "good" : "neutral",
+        onClick: () => openSettingsSection("business-settings"),
+      },
+    ];
+
+    return <FocusSummaryGrid ariaLabel="Today summary" items={summaryItems} />;
+  }
+
   function renderOverview() {
     return (
       <div className="workspaceStack">
         {renderCommandQueue()}
-        {renderTodayPanel()}
-        {renderMetrics()}
-        <div className="launchHealthGrid" aria-label="Launch health">
-          {renderProductionReadiness()}
-          {renderSetupChecklist()}
-          {renderOperationalHealth()}
-        </div>
-        {renderProgressionPanel()}
-        <div className="overviewGrid">
-          {renderWorkflowSuggestions()}
+        {renderTodayFocusSummary()}
 
-          <section className="panel">
-            <div className="panelHeader">
-              <div className="panelTitle">
-                <ShieldCheck size={18} />
-                <h2>Business readiness</h2>
-              </div>
-              <span
-                className="countPill"
-                data-tone={missingKnowledgeChecks.length ? "warn" : "good"}
-              >
-                {missingKnowledgeChecks.length ? "Needs work" : "Ready"}
-              </span>
-            </div>
-            <div className="readinessList">
-              {businessKnowledgeChecks.map((check) => {
-                const done = !missingKnowledgeChecks.some(
-                  (missing) => missing.label === check.label,
-                );
-                return (
-                  <article
-                    data-done={done ? "true" : "false"}
-                    key={check.label}
-                  >
-                    {done ? (
-                      <CheckCircle2 size={16} />
-                    ) : (
-                      <AlertCircle size={16} />
-                    )}
-                    <span>{check.label}</span>
-                  </article>
-                );
-              })}
-            </div>
-          </section>
+        <WorkspaceDisclosure
+          title="Launch health"
+          detail={`${setupCompletion}% setup · ${channelReadinessScore}% channels`}
+          bodyClassName="launchHealthGrid"
+        >
+          <ProductionReadinessPanel
+            productionReadiness={productionReadiness}
+            onOpenCheck={(checkId) =>
+              openWorkspaceSection(
+                readinessActionTab(checkId),
+                readinessActionSection(checkId),
+              )
+            }
+          />
+          <SetupChecklistPanel
+            completedSteps={completedSteps}
+            setupSteps={setupSteps}
+            onOpenStep={(step) =>
+              openWorkspaceSection(step.tab as TabKey, step.sectionId)
+            }
+          />
+          <OperationalHealthPanel
+            averageLeadScore={averageLeadScore}
+            channelReadinessScore={channelReadinessScore}
+            dueLeadsCount={dueLeads.length}
+            hotLeadsCount={hotLeads.length}
+            knowledgeGapCount={
+              unansweredTopicGroups.length + missingKnowledgeChecks.length
+            }
+          />
+        </WorkspaceDisclosure>
 
-          <section className="panel">
-            <div className="panelHeader">
-              <div className="panelTitle">
-                <Inbox size={18} />
-                <h2>Needs attention</h2>
+        <WorkspaceDisclosure
+          title="Performance details"
+          detail="Metrics, funnel, quality, and recommendations"
+        >
+          {renderMetrics()}
+          {renderProgressionPanel()}
+          <div className="overviewGrid">
+            {renderWorkflowSuggestions()}
+
+            <section className="panel">
+              <div className="panelHeader">
+                <div className="panelTitle">
+                  <ShieldCheck size={18} />
+                  <h2>Business readiness</h2>
+                </div>
+                <span
+                  className="countPill"
+                  data-tone={missingKnowledgeChecks.length ? "warn" : "good"}
+                >
+                  {missingKnowledgeChecks.length ? "Needs work" : "Ready"}
+                </span>
               </div>
-              <span className="countPill">{openHandoffs.length}</span>
-            </div>
-            <div className="compactList">
-              {openHandoffs.length ? (
-                openHandoffs.slice(0, 4).map((handoff) => (
+              <div className="readinessList">
+                {businessKnowledgeChecks.map((check) => {
+                  const done = !missingKnowledgeChecks.some(
+                    (missing) => missing.label === check.label,
+                  );
+                  return (
+                    <article
+                      data-done={done ? "true" : "false"}
+                      key={check.label}
+                    >
+                      {done ? (
+                        <CheckCircle2 size={16} />
+                      ) : (
+                        <AlertCircle size={16} />
+                      )}
+                      <span>{check.label}</span>
+                    </article>
+                  );
+                })}
+              </div>
+            </section>
+
+            <section className="panel">
+              <div className="panelHeader">
+                <div className="panelTitle">
+                  <Inbox size={18} />
+                  <h2>Needs attention</h2>
+                </div>
+                <span className="countPill">{openHandoffs.length}</span>
+              </div>
+              <div className="compactList">
+                {openHandoffs.length ? (
+                  openHandoffs.slice(0, 4).map((handoff) => (
+                    <button
+                      className="plainListButton"
+                      key={handoff.id}
+                      type="button"
+                      onClick={() => {
+                        setActiveTab("leads");
+                        openLeadDetail(handoff);
+                      }}
+                    >
+                      <strong>{handoff.reason}</strong>
+                      <span>{handoff.requesterMessage}</span>
+                    </button>
+                  ))
+                ) : (
                   <button
                     className="plainListButton"
-                    key={handoff.id}
                     type="button"
-                    onClick={() => {
-                      setActiveTab("leads");
-                      openLeadDetail(handoff);
-                    }}
+                    onClick={() =>
+                      openWorkspaceSection("settings", "test-settings")
+                    }
                   >
-                    <strong>{handoff.reason}</strong>
-                    <span>{handoff.requesterMessage}</span>
+                    <strong>No open handoffs</strong>
+                    <span>Test a low-confidence question.</span>
                   </button>
-                ))
-              ) : (
-                <button
-                  className="plainListButton"
-                  type="button"
-                  onClick={() =>
-                    openWorkspaceSection("settings", "test-settings")
-                  }
-                >
-                  <strong>No open handoffs</strong>
-                  <span>Test a low-confidence question.</span>
-                </button>
-              )}
-            </div>
-          </section>
-
-          <section className="panel">
-            <div className="panelHeader">
-              <div className="panelTitle">
-                <MessageSquare size={18} />
-                <h2>Recent conversations</h2>
+                )}
               </div>
-              <span className="countPill">
-                {analytics?.conversations ?? conversations.length}
-              </span>
-            </div>
-            <div className="compactList">
-              {conversations.length ? (
-                conversations.slice(0, 4).map((conversation) => (
+            </section>
+
+            <section className="panel">
+              <div className="panelHeader">
+                <div className="panelTitle">
+                  <MessageSquare size={18} />
+                  <h2>Recent conversations</h2>
+                </div>
+                <span className="countPill">
+                  {analytics?.conversations ?? conversations.length}
+                </span>
+              </div>
+              <div className="compactList">
+                {conversations.length ? (
+                  conversations.slice(0, 4).map((conversation) => (
+                    <button
+                      className="plainListButton"
+                      key={conversation.id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedConversationId(conversation.id);
+                        setActiveTab("leads");
+                      }}
+                    >
+                      <strong>{titleCase(conversation.channel)}</strong>
+                      <span>{formatDate(conversation.createdAt)}</span>
+                    </button>
+                  ))
+                ) : (
                   <button
                     className="plainListButton"
-                    key={conversation.id}
                     type="button"
-                    onClick={() => {
-                      setSelectedConversationId(conversation.id);
-                      setActiveTab("leads");
-                    }}
+                    onClick={() =>
+                      openWorkspaceSection("settings", "test-settings")
+                    }
                   >
-                    <strong>{titleCase(conversation.channel)}</strong>
-                    <span>{formatDate(conversation.createdAt)}</span>
+                    <strong>No conversations yet</strong>
+                    <span>Send a test message.</span>
                   </button>
-                ))
-              ) : (
-                <button
-                  className="plainListButton"
-                  type="button"
-                  onClick={() =>
-                    openWorkspaceSection("settings", "test-settings")
-                  }
-                >
-                  <strong>No conversations yet</strong>
-                  <span>Send a test message.</span>
-                </button>
-              )}
-            </div>
-          </section>
-
-          <section className="panel">
-            <div className="panelHeader">
-              <div className="panelTitle">
-                <BarChart3 size={18} />
-                <h2>Traffic funnel</h2>
+                )}
               </div>
-              <span className="countPill">
-                {formatPercent(leadConversionRate)}
-              </span>
-            </div>
-            <div className="funnelGrid">
-              <article>
-                <span>Widget opens</span>
-                <strong>{widgetOpenCount}</strong>
-              </article>
-              <article>
-                <span>Chat outcomes</span>
-                <strong>{chatOutcomeCount}</strong>
-              </article>
-              <article>
-                <span>Quick replies</span>
-                <strong>{quickReplyCount}</strong>
-              </article>
-              <article>
-                <span>CTA clicks</span>
-                <strong>{ctaClickCount}</strong>
-              </article>
-            </div>
-          </section>
+            </section>
 
-          <section className="panel">
-            <div className="panelHeader">
-              <div className="panelTitle">
-                <BarChart3 size={18} />
-                <h2>Answer quality</h2>
+            <section className="panel">
+              <div className="panelHeader">
+                <div className="panelTitle">
+                  <BarChart3 size={18} />
+                  <h2>Traffic funnel</h2>
+                </div>
+                <span className="countPill">
+                  {formatPercent(leadConversionRate)}
+                </span>
               </div>
-              <span className="countPill">
-                {formatPercent(100 - unansweredRate)}
-              </span>
-            </div>
-            <div className="qualityRows">
-              <article>
-                <span>Answered</span>
-                <strong>{answeredCount}</strong>
-              </article>
-              <article data-alert={unansweredCount ? "true" : "false"}>
-                <span>Needs knowledge or human</span>
-                <strong>{unansweredCount}</strong>
-              </article>
-              <article>
-                <span>Lead captures</span>
-                <strong>{leadHandoffs.length}</strong>
-              </article>
-              <article>
-                <span>Won leads</span>
-                <strong>{wonLeadCount}</strong>
-              </article>
-            </div>
-          </section>
-        </div>
+              <div className="funnelGrid">
+                <article>
+                  <span>Widget opens</span>
+                  <strong>{widgetOpenCount}</strong>
+                </article>
+                <article>
+                  <span>Chat outcomes</span>
+                  <strong>{chatOutcomeCount}</strong>
+                </article>
+                <article>
+                  <span>Quick replies</span>
+                  <strong>{quickReplyCount}</strong>
+                </article>
+                <article>
+                  <span>CTA clicks</span>
+                  <strong>{ctaClickCount}</strong>
+                </article>
+              </div>
+            </section>
+
+            <section className="panel">
+              <div className="panelHeader">
+                <div className="panelTitle">
+                  <BarChart3 size={18} />
+                  <h2>Answer quality</h2>
+                </div>
+                <span className="countPill">
+                  {formatPercent(100 - unansweredRate)}
+                </span>
+              </div>
+              <div className="qualityRows">
+                <article>
+                  <span>Answered</span>
+                  <strong>{answeredCount}</strong>
+                </article>
+                <article data-alert={unansweredCount ? "true" : "false"}>
+                  <span>Needs knowledge or human</span>
+                  <strong>{unansweredCount}</strong>
+                </article>
+                <article>
+                  <span>Lead captures</span>
+                  <strong>{leadHandoffs.length}</strong>
+                </article>
+                <article>
+                  <span>Won leads</span>
+                  <strong>{wonLeadCount}</strong>
+                </article>
+              </div>
+            </section>
+          </div>
+        </WorkspaceDisclosure>
       </div>
     );
   }
@@ -7272,51 +7164,60 @@ export default function DashboardPage() {
 
   function renderChannels() {
     const canEditChannels = canManageChannels();
-    return (
-      <div className="workspaceStack">
-        <section className="metricsGrid compactMetrics">
-          <button
-            className="metricCard metricButton"
-            type="button"
-            onClick={() => openChannelsSection("connect-channels")}
-          >
-            <Globe2 size={18} />
-            <span>Channels</span>
-            <strong>{channelConnections.length}</strong>
-          </button>
-          <button
-            className="metricCard metricButton"
-            type="button"
-            onClick={() => openChannelsSection("connect-channels")}
-          >
-            <CheckCircle2 size={18} />
-            <span>Connected</span>
-            <strong>{connectedChannelCount}</strong>
-          </button>
-          <button
-            className="metricCard metricButton"
-            type="button"
-            onClick={() => openChannelsSection("connect-channels")}
-          >
-            <MessageCircle size={18} />
-            <span>Messaging ready</span>
-            <strong>{messagingChannelsReady}</strong>
-          </button>
-          <button
-            className="metricCard metricButton"
-            data-alert={
-              telephoneConnection?.status === "connected" ? "false" : "true"
-            }
-            type="button"
-            onClick={() => openChannelsSection("telephone-channel-setup")}
-          >
-            <Inbox size={18} />
-            <span>Telephone</span>
-            <strong>
-              {telephoneConnection?.status === "connected" ? "Ready" : "Setup"}
-            </strong>
-          </button>
-        </section>
+    const channelSections: Array<SectionSwitchItem<ChannelsSectionId>> = [
+      { id: "channel-overview", label: "Overview", icon: <Globe2 size={16} /> },
+      {
+        id: "telephone-channel-setup",
+        label: "Telephone",
+        icon: <PhoneCall size={16} />,
+      },
+      {
+        id: "connect-channels",
+        label: "Messaging",
+        icon: <MessageCircle size={16} />,
+      },
+      {
+        id: "whatsapp-operations",
+        label: "WhatsApp",
+        icon: <MessageSquare size={16} />,
+      },
+    ];
+
+    const renderChannelOverview = () => (
+      <>
+        <FocusSummaryGrid
+          ariaLabel="Channel summary"
+          items={[
+            {
+              label: "Channels",
+              value: channelConnections.length,
+              detail: "Available customer channels",
+              onClick: () => openChannelsSection("connect-channels"),
+            },
+            {
+              label: "Connected",
+              value: connectedChannelCount,
+              detail: "Ready to receive messages",
+              tone: connectedChannelCount ? "good" : "neutral",
+              onClick: () => openChannelsSection("connect-channels"),
+            },
+            {
+              label: "Messaging",
+              value: messagingChannelsReady,
+              detail: "WhatsApp, Messenger, Instagram, Telegram, Email",
+              onClick: () => openChannelsSection("connect-channels"),
+            },
+            {
+              label: "Telephone",
+              value:
+                telephoneConnection?.status === "connected" ? "Ready" : "Setup",
+              detail: "Phone AI setup",
+              tone:
+                telephoneConnection?.status === "connected" ? "good" : "warn",
+              onClick: () => openChannelsSection("telephone-channel-setup"),
+            },
+          ]}
+        />
 
         <section className="panel channelLaunchPanel">
           <div className="panelHeader">
@@ -7364,258 +7265,292 @@ export default function DashboardPage() {
           ) : null}
         </section>
 
-        {renderSelfServiceBillingPanel()}
+        {canManagePlatformBilling() ? (
+          <WorkspaceDisclosure
+            title="Billing and number inventory"
+            detail="Platform-owner tools"
+          >
+            {renderSelfServiceBillingPanel()}
+          </WorkspaceDisclosure>
+        ) : null}
+      </>
+    );
 
-        {renderTelephoneSetup(telephoneConnection)}
-
-        <section className="panel" id="connect-channels">
-          <div className="panelHeader">
-            <div className="panelTitle">
-              <Globe2 size={18} />
-              <h2>Connect channels</h2>
-            </div>
-            <span className="countPill">
-              {channelConnections.length} available
-            </span>
-            <button
-              className="secondaryButton"
-              type="button"
-              disabled={busy || !selectedTenant}
-              onClick={() => refreshChannelConnections()}
-            >
-              <RefreshCw size={16} />
-              Refresh
-            </button>
+    const renderChannelConnections = () => (
+      <section className="panel" id="connect-channels">
+        <div className="panelHeader">
+          <div className="panelTitle">
+            <Globe2 size={18} />
+            <h2>Connect channels</h2>
           </div>
-          <div className="channelGrid">
-            {channelConnections
-              .filter((connection) => connection.channel !== "telephone")
-              .map((connection, index) => {
-                const webhook =
-                  connection.assistantWebhookUrl ?? connection.webhookUrl ?? "";
-                const connectionKey = [
-                  connection.channel,
-                  connection.provider,
-                  connection.externalAccountId ?? "default",
-                  webhook || "no-webhook",
-                  index,
-                ].join("-");
-                const draftValue =
-                  channelAccountDrafts[connection.channel] ??
-                  connection.externalAccountId ??
-                  "";
-                const isWebsite = connection.channel === "website";
-                const implementationGuide =
-                  channelImplementationGuides[connection.channel];
-                const details = channelExperienceDetails[connection.channel];
-                return (
-                  <article className="channelCard" key={connectionKey}>
-                    <div className="channelCardHeader">
-                      <div>
-                        <strong>{connection.label}</strong>
-                        <span>{connection.provider}</span>
-                      </div>
-                      <small data-status={connection.status}>
-                        {connection.status}
-                      </small>
+          <span className="countPill">
+            {channelConnections.length} available
+          </span>
+          <button
+            className="secondaryButton"
+            type="button"
+            disabled={busy || !selectedTenant}
+            onClick={() => refreshChannelConnections()}
+          >
+            <RefreshCw size={16} />
+            Refresh
+          </button>
+        </div>
+        <div className="channelGrid">
+          {channelConnections
+            .filter((connection) => connection.channel !== "telephone")
+            .map((connection, index) => {
+              const webhook =
+                connection.assistantWebhookUrl ?? connection.webhookUrl ?? "";
+              const connectionKey = [
+                connection.channel,
+                connection.provider,
+                connection.externalAccountId ?? "default",
+                webhook || "no-webhook",
+                index,
+              ].join("-");
+              const draftValue =
+                channelAccountDrafts[connection.channel] ??
+                connection.externalAccountId ??
+                "";
+              const isWebsite = connection.channel === "website";
+              const implementationGuide =
+                channelImplementationGuides[connection.channel];
+              const details = channelExperienceDetails[connection.channel];
+              return (
+                <article className="channelCard" key={connectionKey}>
+                  <div className="channelCardHeader">
+                    <div>
+                      <strong>{connection.label}</strong>
+                      <span>{connection.provider}</span>
+                    </div>
+                    <small data-status={connection.status}>
+                      {connection.status}
+                    </small>
+                  </div>
+
+                  <div className="channelIntro">
+                    <small>{details.group}</small>
+                    <p>{details.purpose}</p>
+                    <strong>{channelNextAction(connection)}</strong>
+                  </div>
+
+                  <details
+                    className="channelSetupDetails"
+                    open={isWebsite || connection.status !== "connected"}
+                  >
+                    <summary>
+                      <span>Setup details</span>
+                      <small>{channelNextAction(connection)}</small>
+                    </summary>
+
+                    <ol className="channelTutorial">
+                      {details.tutorial.map((step) => (
+                        <li key={`${connectionKey}-${step}`}>{step}</li>
+                      ))}
+                    </ol>
+
+                    <div className="channelStepList">
+                      {getChannelSetupSteps(connection, webhook).map((step) => (
+                        <article
+                          data-done={step.done ? "true" : "false"}
+                          key={`${connectionKey}-${step.label}`}
+                        >
+                          {step.done ? (
+                            <CheckCircle2 size={16} />
+                          ) : (
+                            <AlertCircle size={16} />
+                          )}
+                          <div>
+                            <strong>{step.label}</strong>
+                            <span>{step.detail}</span>
+                          </div>
+                        </article>
+                      ))}
                     </div>
 
-                    <div className="channelIntro">
-                      <small>{details.group}</small>
-                      <p>{details.purpose}</p>
-                      <strong>{channelNextAction(connection)}</strong>
+                    <div className="channelStatusRows">
+                      <article
+                        data-ready={
+                          channelCredentialReady(connection) ? "true" : "false"
+                        }
+                      >
+                        <span>{channelCredentialLabel(connection)}</span>
+                        <strong>{channelCredentialStatus(connection)}</strong>
+                      </article>
+                      <article
+                        data-ready={
+                          connection.externalAccountId || isWebsite
+                            ? "true"
+                            : "false"
+                        }
+                      >
+                        <span>{channelAccountLabel(connection.channel)}</span>
+                        <strong>
+                          {connection.externalAccountId || isWebsite
+                            ? "Set"
+                            : "Missing"}
+                        </strong>
+                      </article>
                     </div>
 
-                    <details
-                      className="channelSetupDetails"
-                      open={isWebsite || connection.status !== "connected"}
-                    >
-                      <summary>
-                        <span>Setup details</span>
-                        <small>{channelNextAction(connection)}</small>
-                      </summary>
-
-                      <ol className="channelTutorial">
-                        {details.tutorial.map((step) => (
-                          <li key={`${connectionKey}-${step}`}>{step}</li>
-                        ))}
-                      </ol>
-
-                      <div className="channelStepList">
-                        {getChannelSetupSteps(connection, webhook).map(
-                          (step) => (
-                            <article
-                              data-done={step.done ? "true" : "false"}
-                              key={`${connectionKey}-${step.label}`}
-                            >
-                              {step.done ? (
-                                <CheckCircle2 size={16} />
-                              ) : (
-                                <AlertCircle size={16} />
-                              )}
-                              <div>
-                                <strong>{step.label}</strong>
-                                <span>{step.detail}</span>
-                              </div>
-                            </article>
-                          ),
-                        )}
-                      </div>
-
-                      <div className="channelStatusRows">
-                        <article
-                          data-ready={
-                            channelCredentialReady(connection)
-                              ? "true"
-                              : "false"
+                    {isWebsite ? (
+                      <button
+                        className="secondaryButton full"
+                        type="button"
+                        onClick={() =>
+                          openWorkspaceSection("settings", "widget-settings")
+                        }
+                      >
+                        <Code2 size={15} />
+                        Open widget setup
+                      </button>
+                    ) : (
+                      <label className="field">
+                        <span>{channelAccountLabel(connection.channel)}</span>
+                        <input
+                          value={draftValue}
+                          placeholder={channelAccountPlaceholder(
+                            connection.channel,
+                          )}
+                          disabled={!canEditChannels}
+                          onChange={(event) =>
+                            setChannelAccountDrafts((current) => ({
+                              ...current,
+                              [connection.channel]: event.target.value,
+                            }))
                           }
-                        >
-                          <span>{channelCredentialLabel(connection)}</span>
-                          <strong>{channelCredentialStatus(connection)}</strong>
-                        </article>
-                        <article
-                          data-ready={
-                            connection.externalAccountId || isWebsite
-                              ? "true"
-                              : "false"
-                          }
-                        >
-                          <span>{channelAccountLabel(connection.channel)}</span>
-                          <strong>
-                            {connection.externalAccountId || isWebsite
-                              ? "Set"
-                              : "Missing"}
-                          </strong>
-                        </article>
-                      </div>
+                        />
+                      </label>
+                    )}
 
-                      {isWebsite ? (
+                    {webhook ? (
+                      <div className="webhookBox">
+                        <span>Webhook URL</span>
+                        <code>{webhook}</code>
                         <button
-                          className="secondaryButton full"
+                          className="secondaryButton"
                           type="button"
                           onClick={() =>
-                            openWorkspaceSection("settings", "widget-settings")
+                            copyText(webhook, `${connection.label} webhook`)
                           }
                         >
-                          <Code2 size={15} />
-                          Open widget setup
+                          <Copy size={15} />
+                          Copy
                         </button>
-                      ) : (
-                        <label className="field">
-                          <span>{channelAccountLabel(connection.channel)}</span>
-                          <input
-                            value={draftValue}
-                            placeholder={channelAccountPlaceholder(
-                              connection.channel,
-                            )}
-                            disabled={!canEditChannels}
-                            onChange={(event) =>
-                              setChannelAccountDrafts((current) => ({
-                                ...current,
-                                [connection.channel]: event.target.value,
-                              }))
-                            }
-                          />
-                        </label>
-                      )}
-
-                      {webhook ? (
-                        <div className="webhookBox">
-                          <span>Webhook URL</span>
-                          <code>{webhook}</code>
-                          <button
-                            className="secondaryButton"
-                            type="button"
-                            onClick={() =>
-                              copyText(webhook, `${connection.label} webhook`)
-                            }
-                          >
-                            <Copy size={15} />
-                            Copy
-                          </button>
-                        </div>
-                      ) : null}
-
-                      <div className="channelHint">
-                        {channelSetupHint(connection)}
                       </div>
+                    ) : null}
 
-                      {isWebsite ? (
-                        <a
-                          className="channelGuideLink"
-                          href="#widget-settings"
-                          onClick={(event) => {
-                            event.preventDefault();
-                            openSettingsSection("widget-settings");
-                          }}
-                        >
-                          <Code2 size={15} />
-                          <span>Implementation guide</span>
-                          <small>Widget setup</small>
-                        </a>
-                      ) : implementationGuide ? (
-                        <a
-                          className="channelGuideLink"
-                          href={implementationGuide.url}
-                          rel="noreferrer"
-                          target="_blank"
-                        >
-                          <ExternalLink size={15} />
-                          <span>Implementation guide</span>
-                          <small>{implementationGuide.label}</small>
-                        </a>
-                      ) : null}
+                    <div className="channelHint">
+                      {channelSetupHint(connection)}
+                    </div>
 
-                      {!isWebsite ? (
-                        <div className="rowActions">
-                          <button
-                            className="primaryButton"
-                            type="button"
-                            disabled={busy || !canEditChannels}
-                            onClick={() =>
-                              saveChannelConnection(connection, {
-                                externalAccountId: draftValue,
-                                status: "connected",
-                              })
-                            }
-                          >
-                            <Save size={15} />
-                            Save connected
-                          </button>
-                          <button
-                            className="secondaryButton"
-                            type="button"
-                            disabled={busy || !canEditChannels}
-                            onClick={() =>
-                              saveChannelConnection(connection, {
-                                status: "pending",
-                              })
-                            }
-                          >
-                            Pending
-                          </button>
-                          <button
-                            className="dangerButton"
-                            type="button"
-                            disabled={busy || !canEditChannels}
-                            onClick={() =>
-                              saveChannelConnection(connection, {
-                                status: "disabled",
-                              })
-                            }
-                          >
-                            Disable
-                          </button>
-                        </div>
-                      ) : null}
-                    </details>
-                  </article>
-                );
-              })}
+                    {isWebsite ? (
+                      <a
+                        className="channelGuideLink"
+                        href="#widget-settings"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          openSettingsSection("widget-settings");
+                        }}
+                      >
+                        <Code2 size={15} />
+                        <span>Implementation guide</span>
+                        <small>Widget setup</small>
+                      </a>
+                    ) : implementationGuide ? (
+                      <a
+                        className="channelGuideLink"
+                        href={implementationGuide.url}
+                        rel="noreferrer"
+                        target="_blank"
+                      >
+                        <ExternalLink size={15} />
+                        <span>Implementation guide</span>
+                        <small>{implementationGuide.label}</small>
+                      </a>
+                    ) : null}
+
+                    {!isWebsite ? (
+                      <div className="rowActions">
+                        <button
+                          className="primaryButton"
+                          type="button"
+                          disabled={busy || !canEditChannels}
+                          onClick={() =>
+                            saveChannelConnection(connection, {
+                              externalAccountId: draftValue,
+                              status: "connected",
+                            })
+                          }
+                        >
+                          <Save size={15} />
+                          Save connected
+                        </button>
+                        <button
+                          className="secondaryButton"
+                          type="button"
+                          disabled={busy || !canEditChannels}
+                          onClick={() =>
+                            saveChannelConnection(connection, {
+                              status: "pending",
+                            })
+                          }
+                        >
+                          Pending
+                        </button>
+                        <button
+                          className="dangerButton"
+                          type="button"
+                          disabled={busy || !canEditChannels}
+                          onClick={() =>
+                            saveChannelConnection(connection, {
+                              status: "disabled",
+                            })
+                          }
+                        >
+                          Disable
+                        </button>
+                      </div>
+                    ) : null}
+                  </details>
+                </article>
+              );
+            })}
+        </div>
+      </section>
+    );
+
+    return (
+      <div className="workspaceStack">
+        <section className="workspaceIntro">
+          <div>
+            <span className="eyebrow">Channels</span>
+            <h2>Connect one channel at a time</h2>
+            <p>
+              Start with the website assistant, then phone, then messaging.
+              Technical setup stays inside each selected channel.
+            </p>
           </div>
+          <SectionSwitch
+            activeId={activeChannelsSection}
+            items={channelSections}
+            onSelect={openChannelsSection}
+          />
         </section>
 
-        {renderWhatsappOperations()}
+        {activeChannelsSection === "channel-overview"
+          ? renderChannelOverview()
+          : null}
+        {activeChannelsSection === "telephone-channel-setup"
+          ? renderTelephoneSetup(telephoneConnection)
+          : null}
+        {activeChannelsSection === "connect-channels"
+          ? renderChannelConnections()
+          : null}
+        {activeChannelsSection === "whatsapp-operations" ? (
+          <div id="whatsapp-operations">{renderWhatsappOperations()}</div>
+        ) : null}
       </div>
     );
   }
@@ -9750,8 +9685,45 @@ export default function DashboardPage() {
     );
   }
 
+  function normalizeSettingsSection(
+    sectionId?: string,
+  ): SettingsSectionId | undefined {
+    if (
+      sectionId === "business-settings" ||
+      sectionId === "widget-settings" ||
+      sectionId === "automation-settings" ||
+      sectionId === "test-settings"
+    ) {
+      return sectionId;
+    }
+    return undefined;
+  }
+
+  function normalizeChannelsSection(
+    sectionId?: string,
+  ): ChannelsSectionId | undefined {
+    if (
+      sectionId === "telephone-channel-setup" ||
+      sectionId === "connect-channels" ||
+      sectionId === "whatsapp-operations"
+    ) {
+      return sectionId;
+    }
+    return sectionId === "channel-overview" ? sectionId : undefined;
+  }
+
   function openWorkspaceSection(tab: TabKey, sectionId?: string) {
     setActiveTab(tab);
+    if (tab === "settings") {
+      setActiveSettingsSection(
+        normalizeSettingsSection(sectionId) ?? "business-settings",
+      );
+    }
+    if (tab === "channels") {
+      setActiveChannelsSection(
+        normalizeChannelsSection(sectionId) ?? "channel-overview",
+      );
+    }
     if (!sectionId) {
       return;
     }
@@ -9762,11 +9734,11 @@ export default function DashboardPage() {
     }, 0);
   }
 
-  function openSettingsSection(sectionId: string) {
+  function openSettingsSection(sectionId: SettingsSectionId) {
     openWorkspaceSection("settings", sectionId);
   }
 
-  function openChannelsSection(sectionId: string) {
+  function openChannelsSection(sectionId: ChannelsSectionId) {
     openWorkspaceSection("channels", sectionId);
   }
 
@@ -9858,72 +9830,84 @@ export default function DashboardPage() {
           </div>
         </section>
         {renderLeadActionCenter()}
-        {renderLeads()}
-        <div className="leadSupportGrid">
+        <WorkspaceDisclosure
+          title="Pipeline and captured leads"
+          detail={`${leadHandoffs.length} total leads`}
+        >
+          {renderLeads()}
+        </WorkspaceDisclosure>
+        <WorkspaceDisclosure
+          title="Conversations and handoffs"
+          detail={`${conversations.length} conversations · ${openHandoffs.length} open handoffs`}
+          bodyClassName="leadSupportGrid"
+        >
           {renderInbox()}
           {renderHandoffs()}
-        </div>
-        {renderContacts()}
+        </WorkspaceDisclosure>
+        <WorkspaceDisclosure
+          title="Customer profiles"
+          detail={`${contacts.length} known contacts`}
+        >
+          {renderContacts()}
+        </WorkspaceDisclosure>
       </div>
     );
   }
 
   function renderSettingsWorkspace() {
+    const settingsSections: Array<SectionSwitchItem<SettingsSectionId>> = [
+      {
+        id: "business-settings",
+        label: "Profile",
+        icon: <Sparkles size={16} />,
+      },
+      { id: "widget-settings", label: "Widget", icon: <Code2 size={16} /> },
+      {
+        id: "automation-settings",
+        label: "Automation",
+        icon: <Sparkles size={16} />,
+      },
+      { id: "test-settings", label: "Test", icon: <MessageCircle size={16} /> },
+    ];
+
     return (
       <div className="workspaceStack">
         <section className="workspaceIntro">
           <div>
             <span className="eyebrow">Configuration</span>
-            <h2>Assistant setup, widget, automation, and testing</h2>
+            <h2>Setup in focused steps</h2>
             <p>
-              The setup tools are grouped here so users configure the system in
-              one place instead of jumping between small technical tabs.
+              Pick one area, make the change, then move to the next. Advanced
+              controls stay out of the way until they are needed.
             </p>
           </div>
-          <div className="quickActionGrid">
-            <button
-              type="button"
-              onClick={() => openSettingsSection("business-settings")}
-            >
-              <Sparkles size={16} />
-              Profile
-            </button>
-            <button
-              type="button"
-              onClick={() => openSettingsSection("widget-settings")}
-            >
-              <Code2 size={16} />
-              Widget
-            </button>
-            <button
-              type="button"
-              onClick={() => openSettingsSection("automation-settings")}
-            >
-              <Sparkles size={16} />
-              Automation
-            </button>
-            <button
-              type="button"
-              onClick={() => openSettingsSection("test-settings")}
-            >
-              <MessageCircle size={16} />
-              Test
-            </button>
-          </div>
+          <SectionSwitch
+            activeId={activeSettingsSection}
+            items={settingsSections}
+            onSelect={openSettingsSection}
+          />
         </section>
 
-        <div id="business-settings" className="settingsSection">
-          {renderSettings()}
-        </div>
-        <div id="widget-settings" className="settingsSection">
-          {renderWidget()}
-        </div>
-        <div id="automation-settings" className="settingsSection">
-          {renderAutomation()}
-        </div>
-        <div id="test-settings" className="settingsSection">
-          {renderTestStudio()}
-        </div>
+        {activeSettingsSection === "business-settings" ? (
+          <div id="business-settings" className="settingsSection">
+            {renderSettings()}
+          </div>
+        ) : null}
+        {activeSettingsSection === "widget-settings" ? (
+          <div id="widget-settings" className="settingsSection">
+            {renderWidget()}
+          </div>
+        ) : null}
+        {activeSettingsSection === "automation-settings" ? (
+          <div id="automation-settings" className="settingsSection">
+            {renderAutomation()}
+          </div>
+        ) : null}
+        {activeSettingsSection === "test-settings" ? (
+          <div id="test-settings" className="settingsSection">
+            {renderTestStudio()}
+          </div>
+        ) : null}
       </div>
     );
   }
