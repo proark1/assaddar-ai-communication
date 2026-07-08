@@ -60,7 +60,11 @@ provenance, not as a guaranteed uniqueness constraint.
   single-tenant installs
 - `space_id`: `ONEBRAIN_SPACE_ID` when configured; otherwise OneBrain can route
   the request for scoped service keys that allow routing
-- `purpose`: `knowledge_management` for approved knowledge intake
+- `purpose`: `customer_service_inbox` by default because OneBrain's standard
+  `communication` app service key is provisioned for write intake through that
+  purpose. Deployments can override `ONEBRAIN_KNOWLEDGE_PURPOSE` only when the
+  target OneBrain app installation and service key explicitly allow another
+  purpose such as `knowledge_management`.
 - `source_ref`: `communication:tenant:<tenantId>:knowledge:<chunkId>`
 
 The communication backend and workers are the only callers. Browser clients

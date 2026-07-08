@@ -2,7 +2,7 @@ import { z } from "zod";
 
 export const ONEBRAIN_COMMUNICATION_APP_ID = "communication";
 export const ONEBRAIN_SOURCE = "communication";
-export const ONEBRAIN_KNOWLEDGE_PURPOSE = "knowledge_management";
+export const ONEBRAIN_KNOWLEDGE_PURPOSE = "customer_service_inbox";
 export const ONEBRAIN_CUSTOMER_SERVICE_ANSWER_PURPOSE =
   "customer_service_answer";
 
@@ -102,9 +102,31 @@ const OneBrainIntakeRecordSchema = z
   })
   .passthrough();
 
-export const OneBrainIntakeResponseSchema = z.object({
+const OneBrainImmediateIntakeResponseSchema = z.object({
   record: OneBrainIntakeRecordSchema,
 });
+
+const OneBrainJobStatusSchema = z
+  .object({
+    id: z.string(),
+    type: z.string(),
+    status: z.string(),
+    tenant_id: z.string(),
+    account_id: z.string().default(""),
+    space_id: z.string().default(""),
+    result: z.record(z.string(), z.unknown()).nullable().default(null),
+    error: z.string().default(""),
+    attempts: z.number().int().nonnegative().default(0),
+    created_at: z.string().default(""),
+    updated_at: z.string().default(""),
+    completed_at: z.string().default(""),
+  })
+  .passthrough();
+
+export const OneBrainIntakeResponseSchema = z.union([
+  OneBrainImmediateIntakeResponseSchema,
+  OneBrainJobStatusSchema.transform((job) => ({ job })),
+]);
 
 export type OneBrainIntakeResponse = z.infer<
   typeof OneBrainIntakeResponseSchema
