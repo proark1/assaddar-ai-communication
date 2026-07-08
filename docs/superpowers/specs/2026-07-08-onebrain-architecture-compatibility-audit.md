@@ -39,8 +39,8 @@ The split-repository architecture is sound:
   `customer_service_inbox`.
   OneBrain's standard `communication` app provisioning grants write access for
   `customer_service_inbox` and read access for `customer_service_answer`.
-  Deployments can still override `ONEBRAIN_KNOWLEDGE_PURPOSE` when OneBrain is
-  explicitly provisioned for a different purpose.
+  The communication integration no longer exposes an env override for this
+  purpose.
 - Updated the TypeScript OneBrain client to accept both immediate intake
   responses and asynchronous job responses.
   OneBrain can return `202` with a queued `service_intake` job when async
@@ -53,9 +53,8 @@ The split-repository architecture is sound:
 - Provision a OneBrain account whose id matches the communication tenant slug,
   or set `ONEBRAIN_ACCOUNT_ID` for a single-tenant install.
 - Use a OneBrain service key with `write` scope for `customer_service_inbox`.
-- Set `ONEBRAIN_SPACE_ID` when the target space should be deterministic. If it
-  is omitted, OneBrain can route intake only when the service key/app
-  installation gives it enough allowed spaces to choose from.
+- Set `ONEBRAIN_SPACE_ID`; communication service calls do not rely on OneBrain
+  inferring the space from the service key.
 - Keep `ONEBRAIN_SYNC_ENABLED=false` until the OneBrain account, app
   installation, service key, and worker process are live.
 

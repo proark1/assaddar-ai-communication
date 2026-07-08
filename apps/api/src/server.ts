@@ -8,14 +8,18 @@ import {
   type ChannelAdapter,
 } from "@assaddar/channels";
 import {
+  answerWithOneBrainFallback,
   createAnswerEngine,
   InboundMessageSchema,
   type AnswerDataStore,
   type AnswerResult,
+  type BrainProvider,
   type Channel,
   type DraftAnswerGenerator,
   type GroundedAnswerGenerator,
   type HandoffStore,
+  type InboundMessage,
+  type OneBrainRuntimeAnswerEnv,
 } from "@assaddar/core";
 import type { OneBrainSyncSummary } from "@assaddar/db";
 import cors from "@fastify/cors";
@@ -684,6 +688,15 @@ export type BuildServerOptions = {
    * knowledge; omitted keeps the deterministic extractive answer path.
    */
   groundedGenerator?: GroundedAnswerGenerator;
+  /**
+   * Optional runtime OneBrain answer provider. When enabled, customer-facing
+   * answer paths ask OneBrain first and fall back to the local Project Brain.
+   */
+  oneBrainAnswer?: {
+    enabled: boolean;
+    provider?: BrainProvider | null | undefined;
+    env?: OneBrainRuntimeAnswerEnv | undefined;
+  };
   /**
    * Optional ungrounded draft writer used to propose a candidate answer for an
    * unanswered-question suggestion. Its output is for human review only and is
@@ -2734,16 +2747,25 @@ export async function buildServer(
         content: body.message,
       });
 
-      const answer = await engine.answer(
-        InboundMessageSchema.parse({
-          tenantId,
-          conversationId: conversation.id,
-          channel: "admin_test",
-          text: body.message,
-          locale: body.locale ?? tenant.defaultLocale,
-          metadata: {},
-        }),
-      );
+      const inboundMessage = InboundMessageSchema.parse({
+        tenantId,
+        conversationId: conversation.id,
+        channel: "admin_test",
+        text: body.message,
+        locale: body.locale ?? tenant.defaultLocale,
+        metadata: {},
+      });
+      const answer = await answerTenantMessage({
+        options,
+        engine,
+        tenant,
+        message: inboundMessage,
+        onOneBrainError: (error) =>
+          request.log.warn(
+            { err: error, tenantId },
+            "OneBrain answer failed; falling back to local Project Brain",
+          ),
+      });
 
       await options.store.addMessage({
         tenantId,
@@ -2952,17 +2974,26 @@ export async function buildServer(
       const answerStartedAtMs = Date.now();
       let answer: AnswerResult;
       try {
-        answer = await engine.answer(
-          InboundMessageSchema.parse({
-            tenantId: tenant.id,
-            conversationId: conversation.id,
-            channel: "website",
-            externalUserId: body.visitorId,
-            text: event.text,
-            locale: body.locale ?? tenant.defaultLocale,
-            metadata: {},
-          }),
-        );
+        const inboundMessage = InboundMessageSchema.parse({
+          tenantId: tenant.id,
+          conversationId: conversation.id,
+          channel: "website",
+          externalUserId: body.visitorId,
+          text: event.text,
+          locale: body.locale ?? tenant.defaultLocale,
+          metadata: {},
+        });
+        answer = await answerTenantMessage({
+          options,
+          engine,
+          tenant,
+          message: inboundMessage,
+          onOneBrainError: (error) =>
+            request.log.warn(
+              { err: error, tenantId: tenant.id },
+              "OneBrain answer failed; falling back to local Project Brain",
+            ),
+        });
         metrics.observeOperation("widget_answer", "success", answerStartedAtMs);
       } catch (error) {
         metrics.observeOperation("widget_answer", "error", answerStartedAtMs);
@@ -5049,20 +5080,24 @@ async function processChannelInboundEvent(input: {
     },
   });
 
-  const answer = await input.engine.answer(
-    InboundMessageSchema.parse({
-      tenantId: input.tenant.id,
-      conversationId: conversation.id,
-      channel: input.event.channel,
-      externalUserId: input.event.externalUserId,
-      text: input.event.text,
-      locale: input.tenant.defaultLocale,
-      metadata: {
-        provider: input.event.provider,
-        providerAccountId: input.event.providerAccountId,
-      },
-    }),
-  );
+  const inboundMessage = InboundMessageSchema.parse({
+    tenantId: input.tenant.id,
+    conversationId: conversation.id,
+    channel: input.event.channel,
+    externalUserId: input.event.externalUserId,
+    text: input.event.text,
+    locale: input.tenant.defaultLocale,
+    metadata: {
+      provider: input.event.provider,
+      providerAccountId: input.event.providerAccountId,
+    },
+  });
+  const answer = await answerTenantMessage({
+    options: input.options,
+    engine: input.engine,
+    tenant: input.tenant,
+    message: inboundMessage,
+  });
 
   const outboundMessage = {
     tenantId: input.tenant.id,
@@ -5153,6 +5188,22 @@ async function processChannelInboundEvent(input: {
     deliveryStatus: delivery.status,
     deliveryDetail: delivery.detail,
   };
+}
+
+async function answerTenantMessage(input: {
+  options: BuildServerOptions;
+  engine: ReturnType<typeof createAnswerEngine>;
+  tenant: StoreTenant;
+  message: InboundMessage;
+  onOneBrainError?: (error: unknown) => void;
+}) {
+  return answerWithOneBrainFallback({
+    tenant: input.tenant,
+    message: input.message,
+    oneBrain: input.options.oneBrainAnswer,
+    localAnswer: () => input.engine.answer(input.message),
+    onOneBrainError: input.onOneBrainError,
+  });
 }
 
 function buildProviderConversationId(event: NormalizedInboundEvent) {

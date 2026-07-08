@@ -17,8 +17,6 @@ const DEFAULT_PER_TENANT_LIMIT = 50;
 export type OneBrainKnowledgeSyncEnv = {
   ONEBRAIN_ACCOUNT_ID?: string;
   ONEBRAIN_SPACE_ID?: string;
-  ONEBRAIN_APP_ID?: string;
-  ONEBRAIN_KNOWLEDGE_PURPOSE?: string;
   ONEBRAIN_KNOWLEDGE_EXPORT_LIMIT?: string;
 };
 
@@ -221,9 +219,8 @@ export function buildOneBrainScope(
   const scope: BrainScope = {
     tenantId: tenant.id,
     accountId,
-    appId: env.ONEBRAIN_APP_ID?.trim() || ONEBRAIN_COMMUNICATION_APP_ID,
-    purpose:
-      env.ONEBRAIN_KNOWLEDGE_PURPOSE?.trim() || ONEBRAIN_KNOWLEDGE_PURPOSE,
+    appId: ONEBRAIN_COMMUNICATION_APP_ID,
+    purpose: ONEBRAIN_KNOWLEDGE_PURPOSE,
   };
   const spaceId = env.ONEBRAIN_SPACE_ID?.trim();
   if (spaceId) {
@@ -256,6 +253,13 @@ export function hashOneBrainIntake(input: BrainIntakeInput) {
   return createHash("sha256")
     .update(
       JSON.stringify({
+        scope: {
+          tenantId: input.scope.tenantId,
+          accountId: input.scope.accountId,
+          appId: input.scope.appId ?? "",
+          spaceId: input.scope.spaceId ?? "",
+          purpose: input.scope.purpose ?? "",
+        },
         title: input.title ?? "",
         content: input.content,
         source: input.source ?? "",

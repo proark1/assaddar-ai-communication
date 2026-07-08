@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createOneBrainProvider,
   ONEBRAIN_COMMUNICATION_APP_ID,
+  ONEBRAIN_CUSTOMER_SERVICE_ANSWER_PURPOSE,
   ONEBRAIN_KNOWLEDGE_PURPOSE,
   OneBrainServiceClient,
   oneBrainSourceRef,
@@ -23,7 +24,7 @@ describe("OneBrainServiceClient", () => {
               account_id: "acme",
               space_id: "sp_customer_service",
               app_id: "communication",
-              purpose: "customer_service_inbox",
+              purpose: ONEBRAIN_KNOWLEDGE_PURPOSE,
               source: "communication",
               source_ref: "communication:tenant:t1:knowledge:k1",
               record_type: "document",
@@ -48,6 +49,8 @@ describe("OneBrainServiceClient", () => {
         tenantId: "t1",
         accountId: "acme",
         spaceId: "sp_customer_service",
+        appId: "not-communication",
+        purpose: "not-canonical",
       },
       title: "Hours",
       content: "Open 09:00-17:00.",
@@ -66,7 +69,7 @@ describe("OneBrainServiceClient", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.url).toBe("https://onebrain.example/api/service/intake");
     expect(calls[0]?.init.headers).toMatchObject({
-      authorization: "Bearer obk_test",
+      Authorization: "Bearer obk_test",
       "content-type": "application/json",
     });
     expect(JSON.parse(String(calls[0]?.init.body))).toMatchObject({
@@ -84,26 +87,44 @@ describe("OneBrainServiceClient", () => {
   });
 
   it("maps service ask responses to camel case", async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
     const client = new OneBrainServiceClient({
       baseUrl: "https://onebrain.example",
       serviceKey: "obk_test",
-      fetchImpl: async () =>
-        new Response(
+      fetchImpl: async (url, init) => {
+        calls.push({ url: String(url), init: init ?? {} });
+        return new Response(
           JSON.stringify({
             answer: "Use the approved answer.",
             chunks_used: 2,
           }),
-        ),
+        );
+      },
     });
 
     await expect(
       client.ask({
-        scope: { tenantId: "t1", accountId: "acme" },
+        scope: {
+          tenantId: "t1",
+          accountId: "acme",
+          spaceId: "sp_customer_service",
+          appId: "not-communication",
+          purpose: "not-canonical",
+        },
         question: "What should I say?",
       }),
     ).resolves.toEqual({
       answer: "Use the approved answer.",
       chunksUsed: 2,
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe("https://onebrain.example/api/service/ask");
+    expect(JSON.parse(String(calls[0]?.init.body))).toMatchObject({
+      account_id: "acme",
+      space_id: "sp_customer_service",
+      app_id: ONEBRAIN_COMMUNICATION_APP_ID,
+      purpose: ONEBRAIN_CUSTOMER_SERVICE_ANSWER_PURPOSE,
+      question: "What should I say?",
     });
   });
 
@@ -145,6 +166,60 @@ describe("OneBrainServiceClient", () => {
     });
   });
 
+  it("surfaces intake failures instead of falling back to legacy capture", async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const client = new OneBrainServiceClient({
+      baseUrl: "https://onebrain.example",
+      serviceKey: "obk_test",
+      fetchImpl: async (url, init) => {
+        calls.push({ url: String(url), init: init ?? {} });
+        if (String(url).endsWith("/api/service/intake")) {
+          return new Response('{"detail":"Not Found"}', { status: 404 });
+        }
+        throw new Error("legacy capture should not be called");
+      },
+    });
+
+    await expect(
+      client.intake({
+        scope: {
+          tenantId: "t1",
+          accountId: "acme",
+          spaceId: "sp_customer_service",
+        },
+        title: "Hours",
+        content: "Open 09:00-17:00.",
+      }),
+    ).rejects.toMatchObject({
+      name: "OneBrainServiceError",
+      status: 404,
+    });
+
+    expect(calls.map((call) => call.url)).toEqual([
+      "https://onebrain.example/api/service/intake",
+    ]);
+  });
+
+  it("requires explicit account and space scope before ask or intake", async () => {
+    const client = new OneBrainServiceClient({
+      baseUrl: "https://onebrain.example",
+      serviceKey: "obk_test",
+      fetchImpl: async () => {
+        throw new Error("request should not be sent");
+      },
+    });
+
+    await expect(
+      client.ask({
+        scope: { tenantId: "t1", accountId: "acme" },
+        question: "What should I say?",
+      }),
+    ).rejects.toMatchObject({
+      name: "OneBrainConfigurationError",
+      message: "Missing OneBrain service scope: space_id",
+    });
+  });
+
   it("throws a typed error for non-2xx responses", async () => {
     const client = new OneBrainServiceClient({
       baseUrl: "https://onebrain.example",
@@ -161,11 +236,23 @@ describe("OneBrainServiceClient", () => {
 });
 
 describe("createOneBrainProvider", () => {
-  it("is dormant without a service URL and key", () => {
+  it("is dormant without canonical service URL, key, and space", () => {
     expect(createOneBrainProvider({})).toBeNull();
     expect(
       createOneBrainProvider({ ONEBRAIN_API_BASE_URL: "https://onebrain" }),
     ).toBeNull();
+    expect(
+      createOneBrainProvider({
+        ONEBRAIN_API_BASE_URL: "https://onebrain",
+        ONEBRAIN_SERVICE_KEY: "obk_test",
+      }),
+    ).toBeNull();
+    const legacyEnv = {
+      ONEBRAIN_URL: "https://onebrain",
+      ONEBRAIN_SERVICE_KEY: "obk_test",
+      ONEBRAIN_SPACE_ID: "sp_customer_service",
+    };
+    expect(createOneBrainProvider(legacyEnv)).toBeNull();
   });
 
   it("creates a provider when required env vars are present", () => {
@@ -173,6 +260,7 @@ describe("createOneBrainProvider", () => {
       createOneBrainProvider({
         ONEBRAIN_API_BASE_URL: "https://onebrain",
         ONEBRAIN_SERVICE_KEY: "obk_test",
+        ONEBRAIN_SPACE_ID: "sp_customer_service",
       }),
     ).not.toBeNull();
   });

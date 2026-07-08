@@ -39,13 +39,16 @@ describe("buildOneBrainScope", () => {
     });
   });
 
-  it("allows deployment env overrides for account, space, app, and purpose", () => {
+  it("allows account and space env while keeping canonical app and purpose", () => {
     expect(
       buildOneBrainScope(tenant, {
         ONEBRAIN_ACCOUNT_ID: "account_override",
         ONEBRAIN_SPACE_ID: "sp_customer_service",
-        ONEBRAIN_APP_ID: "communication",
-        ONEBRAIN_KNOWLEDGE_PURPOSE: "customer_service_inbox",
+        ONEBRAIN_APP_ID: "not-communication",
+        ONEBRAIN_KNOWLEDGE_PURPOSE: "not-canonical",
+      } as Parameters<typeof buildOneBrainScope>[1] & {
+        ONEBRAIN_APP_ID: string;
+        ONEBRAIN_KNOWLEDGE_PURPOSE: string;
       }),
     ).toEqual({
       tenantId: tenant.id,
@@ -137,7 +140,7 @@ describe("syncApprovedKnowledgeToOneBrain", () => {
             id: "rec_1",
             tenant_id: tenant.id,
             account_id: "acme",
-            space_id: "",
+            space_id: "sp_customer_service",
             app_id: "communication",
             purpose: "customer_service_inbox",
             source: "communication",
@@ -162,7 +165,10 @@ describe("syncApprovedKnowledgeToOneBrain", () => {
 
     await expect(
       syncApprovedKnowledgeToOneBrain(store, provider, {
-        env: { ONEBRAIN_KNOWLEDGE_EXPORT_LIMIT: "1" },
+        env: {
+          ONEBRAIN_KNOWLEDGE_EXPORT_LIMIT: "1",
+          ONEBRAIN_SPACE_ID: "sp_customer_service",
+        },
       }),
     ).resolves.toEqual({
       tenants: 1,
@@ -172,6 +178,8 @@ describe("syncApprovedKnowledgeToOneBrain", () => {
     });
     expect(inputs).toHaveLength(1);
     expect(inputs[0]?.scope.accountId).toBe("acme");
+    expect(inputs[0]?.scope.spaceId).toBe("sp_customer_service");
+    expect(inputs[0]?.scope.purpose).toBe("customer_service_inbox");
     expect(successes).toHaveLength(1);
     expect(successes[0]).toMatchObject({
       provider: "onebrain",
@@ -226,7 +234,9 @@ describe("syncApprovedKnowledgeToOneBrain", () => {
     };
 
     await expect(
-      syncApprovedKnowledgeToOneBrain(store, provider),
+      syncApprovedKnowledgeToOneBrain(store, provider, {
+        env: { ONEBRAIN_SPACE_ID: "sp_customer_service" },
+      }),
     ).resolves.toMatchObject({
       attempted: 1,
       synced: 1,
@@ -243,7 +253,9 @@ describe("syncApprovedKnowledgeToOneBrain", () => {
   });
 
   it("skips unchanged knowledge that already synced", async () => {
-    const input = buildOneBrainKnowledgeIntake(tenant, knowledge);
+    const input = buildOneBrainKnowledgeIntake(tenant, knowledge, {
+      ONEBRAIN_SPACE_ID: "sp_customer_service",
+    });
     if (!input) {
       throw new Error("expected knowledge intake input");
     }
@@ -278,12 +290,79 @@ describe("syncApprovedKnowledgeToOneBrain", () => {
     };
 
     await expect(
-      syncApprovedKnowledgeToOneBrain(store, provider),
+      syncApprovedKnowledgeToOneBrain(store, provider, {
+        env: { ONEBRAIN_SPACE_ID: "sp_customer_service" },
+      }),
     ).resolves.toEqual({
       tenants: 1,
       attempted: 0,
       synced: 0,
       skipped: 1,
     });
+  });
+
+  it("resyncs when the OneBrain scope changes", async () => {
+    const previousInput = buildOneBrainKnowledgeIntake(tenant, knowledge, {
+      ONEBRAIN_SPACE_ID: "previous_space",
+    });
+    if (!previousInput) {
+      throw new Error("expected knowledge intake input");
+    }
+    const inputs: BrainIntakeInput[] = [];
+    const store: OneBrainKnowledgeSyncStore = {
+      async listTenants() {
+        return [tenant];
+      },
+      async listKnowledge() {
+        return [knowledge];
+      },
+      async getOneBrainSyncRecord() {
+        return {
+          status: "synced",
+          contentHash: hashOneBrainIntake(previousInput),
+        };
+      },
+      async recordOneBrainSyncSuccess() {},
+      async recordOneBrainSyncFailure() {
+        throw new Error("scope changes should not fail");
+      },
+    };
+    const provider: BrainProvider = {
+      kind: "onebrain",
+      async intake(input) {
+        inputs.push(input);
+        return {
+          job: {
+            id: "job_scope_change",
+            type: "service_intake",
+            status: "queued",
+            tenant_id: "acme",
+            account_id: "acme",
+            space_id: "sp_customer_service",
+            result: null,
+            error: "",
+            attempts: 0,
+            created_at: "",
+            updated_at: "",
+            completed_at: "",
+          },
+        };
+      },
+      async ask() {
+        return { answer: "", chunksUsed: 0 };
+      },
+    };
+
+    await expect(
+      syncApprovedKnowledgeToOneBrain(store, provider, {
+        env: { ONEBRAIN_SPACE_ID: "sp_customer_service" },
+      }),
+    ).resolves.toMatchObject({
+      attempted: 1,
+      synced: 1,
+      skipped: 0,
+    });
+    expect(inputs[0]?.scope.spaceId).toBe("sp_customer_service");
+    expect(inputs[0]?.scope.purpose).toBe("customer_service_inbox");
   });
 });

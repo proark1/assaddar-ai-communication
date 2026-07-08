@@ -3,6 +3,7 @@ import {
   rankChunks,
   type AnswerDataStore,
   type BlockedTopic,
+  type BrainProvider,
   type Channel,
   type HandoffInput,
   type HandoffStore,
@@ -2590,6 +2591,16 @@ function memberSupabaseAuth(authUserId: string) {
   };
 }
 
+function fakeOneBrainProvider(ask: BrainProvider["ask"]): BrainProvider {
+  return {
+    kind: "onebrain",
+    async intake() {
+      throw new Error("not used");
+    },
+    ask,
+  };
+}
+
 /**
  * Build a server plus a genuine tenant-member identity for the given tenant.
  * Returns headers that authenticate as that member via the Supabase bearer
@@ -3292,6 +3303,118 @@ describe("API", () => {
     expect(metricsResponse.body).toContain(
       'app_operation_duration_seconds_count{operation="widget_answer",status="success"} 1',
     );
+
+    await app.close();
+  });
+
+  it("answers widget chat from OneBrain when runtime answering is enabled", async () => {
+    const calls: Parameters<BrainProvider["ask"]>[0][] = [];
+    const store = new MemoryPlatformStore();
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+      oneBrainAnswer: {
+        enabled: true,
+        provider: fakeOneBrainProvider(async (input) => {
+          calls.push(input);
+          return {
+            answer: "Remote OneBrain says we implement AI automation.",
+            chunksUsed: 2,
+          };
+        }),
+        env: { ONEBRAIN_SPACE_ID: "sp_customer_service" },
+      },
+    });
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+
+    const chatResponse = await app.inject({
+      method: "POST",
+      url: "/widget/chat",
+      payload: {
+        assistantId: tenant.publicId,
+        message: "What do you do?",
+      },
+    });
+
+    expect(chatResponse.statusCode).toBe(200);
+    expect(
+      chatResponse.json<{ reply: string; citations: unknown[] }>(),
+    ).toMatchObject({
+      reply: "Remote OneBrain says we implement AI automation.",
+      citations: [],
+    });
+    expect(calls[0]).toMatchObject({
+      question: "What do you do?",
+      scope: {
+        tenantId: tenant.id,
+        accountId: "tenant-one",
+        spaceId: "sp_customer_service",
+      },
+    });
+    expect(store.messages[1]?.trace).toMatchObject({
+      answer: {
+        intent: "onebrain_answer",
+        trace: [
+          {
+            step: "onebrain_answer",
+            outcome: "passed",
+            detail: "chunks_used:2",
+          },
+        ],
+      },
+    });
+
+    await app.close();
+  });
+
+  it("falls back to local widget answers when OneBrain answering fails", async () => {
+    const store = new MemoryPlatformStore();
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+      oneBrainAnswer: {
+        enabled: true,
+        provider: fakeOneBrainProvider(async () => {
+          throw new Error("OneBrain unavailable");
+        }),
+      },
+    });
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+    await store.addFaq(tenant.id, {
+      question: "What do you do?",
+      answer: "Local Project Brain answer.",
+    });
+
+    const chatResponse = await app.inject({
+      method: "POST",
+      url: "/widget/chat",
+      payload: {
+        assistantId: tenant.publicId,
+        message: "What do you do?",
+      },
+    });
+
+    expect(chatResponse.statusCode).toBe(200);
+    expect(chatResponse.json<{ reply: string }>().reply).toContain(
+      "Local Project Brain answer.",
+    );
+    const answerTrace = store.messages[1]?.trace as {
+      answer?: { intent?: string; trace?: unknown[] };
+    };
+    expect(answerTrace.answer?.intent).toBe("faq");
+    expect(answerTrace.answer?.trace?.[0]).toEqual({
+      step: "onebrain_answer",
+      outcome: "failed",
+      detail: "error",
+    });
 
     await app.close();
   });
@@ -4769,6 +4892,91 @@ describe("API", () => {
     await app.close();
   });
 
+  it("answers mapped WhatsApp webhooks from OneBrain when enabled", async () => {
+    const calls: Parameters<BrainProvider["ask"]>[0][] = [];
+    const store = new MemoryPlatformStore();
+    globalThis.fetch = vi.fn(async () => {
+      return new Response(JSON.stringify({ messages: [{ id: "wamid.1" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+      whatsappAccessToken: "whatsapp-token",
+      oneBrainAnswer: {
+        enabled: true,
+        provider: fakeOneBrainProvider(async (input) => {
+          calls.push(input);
+          return {
+            answer: "Remote WhatsApp answer from OneBrain.",
+            chunksUsed: 1,
+          };
+        }),
+      },
+    });
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+    await store.upsertChannelConnection(tenant.id, {
+      channel: "whatsapp",
+      provider: "meta-whatsapp-cloud",
+      externalAccountId: "phone-number-1",
+      status: "connected",
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/webhooks/meta/whatsapp",
+      payload: {
+        entry: [
+          {
+            changes: [
+              {
+                value: {
+                  metadata: {
+                    phone_number_id: "phone-number-1",
+                  },
+                  messages: [
+                    {
+                      id: "wamid.inbound.1",
+                      from: "491701234567",
+                      text: {
+                        body: "What do you do?",
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(store.messages[1]).toMatchObject({
+      content: "Remote WhatsApp answer from OneBrain.",
+      trace: {
+        answer: {
+          intent: "onebrain_answer",
+        },
+      },
+    });
+    expect(calls[0]).toMatchObject({
+      question: "What do you do?",
+      scope: {
+        tenantId: tenant.id,
+        accountId: "tenant-one",
+      },
+    });
+
+    await app.close();
+  });
+
   it("deduplicates provider webhook events before creating messages or replies", async () => {
     const store = new MemoryPlatformStore();
     globalThis.fetch = vi.fn(async () => {
@@ -5347,10 +5555,12 @@ describe("API", () => {
     const previousEnv = {
       ONEBRAIN_API_BASE_URL: process.env.ONEBRAIN_API_BASE_URL,
       ONEBRAIN_SERVICE_KEY: process.env.ONEBRAIN_SERVICE_KEY,
+      ONEBRAIN_SPACE_ID: process.env.ONEBRAIN_SPACE_ID,
       ONEBRAIN_SYNC_ENABLED: process.env.ONEBRAIN_SYNC_ENABLED,
     };
     process.env.ONEBRAIN_API_BASE_URL = "https://onebrain.example";
     process.env.ONEBRAIN_SERVICE_KEY = "obk_secret";
+    process.env.ONEBRAIN_SPACE_ID = "sp_customer_service";
     process.env.ONEBRAIN_SYNC_ENABLED = "true";
 
     try {

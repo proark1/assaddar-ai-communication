@@ -4,6 +4,7 @@ import {
   createEmbeddingProvider,
   createGeminiDraftAnswerGenerator,
   createGeminiGroundedAnswerGenerator,
+  createOneBrainProvider,
 } from "@assaddar/core";
 import {
   createDbClient,
@@ -47,6 +48,9 @@ async function main() {
   const embeddingProvider = createEmbeddingProvider(process.env);
   const groundedGenerator = createGeminiGroundedAnswerGenerator(process.env);
   const draftGenerator = createGeminiDraftAnswerGenerator(process.env);
+  const oneBrainProvider = createOneBrainProvider(process.env);
+  const oneBrainAnswerEnabled =
+    (process.env.ONEBRAIN_ANSWER_ENABLED ?? "").toLowerCase() === "true";
   const serverOptions: BuildServerOptions = {
     store,
     adminToken: env.ADMIN_API_TOKEN,
@@ -147,6 +151,17 @@ async function main() {
   }
   if (draftGenerator) {
     serverOptions.draftGenerator = draftGenerator;
+  }
+  if (
+    oneBrainAnswerEnabled ||
+    process.env.ONEBRAIN_API_BASE_URL ||
+    process.env.ONEBRAIN_SERVICE_KEY
+  ) {
+    serverOptions.oneBrainAnswer = {
+      enabled: oneBrainAnswerEnabled,
+      provider: oneBrainProvider,
+      env: process.env,
+    };
   }
 
   const app = await buildServer(serverOptions);

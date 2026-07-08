@@ -2,9 +2,9 @@ import { z } from "zod";
 
 export const ONEBRAIN_COMMUNICATION_APP_ID = "communication";
 export const ONEBRAIN_SOURCE = "communication";
-export const ONEBRAIN_KNOWLEDGE_PURPOSE = "customer_service_inbox";
 export const ONEBRAIN_CUSTOMER_SERVICE_ANSWER_PURPOSE =
   "customer_service_answer";
+export const ONEBRAIN_KNOWLEDGE_PURPOSE = "customer_service_inbox";
 
 export type OneBrainRecordType =
   | "message"
@@ -64,7 +64,6 @@ export type OneBrainServiceEnv = {
   ONEBRAIN_API_BASE_URL?: string;
   ONEBRAIN_SERVICE_KEY?: string;
   ONEBRAIN_TIMEOUT_MS?: string;
-  ONEBRAIN_APP_ID?: string;
   ONEBRAIN_ACCOUNT_ID?: string;
   ONEBRAIN_SPACE_ID?: string;
 };
@@ -73,7 +72,6 @@ export type OneBrainClientOptions = {
   baseUrl: string;
   serviceKey: string;
   timeoutMs?: number;
-  appId?: string;
   accountId?: string;
   spaceId?: string;
   fetchImpl?: typeof fetch;
@@ -162,11 +160,17 @@ export class OneBrainServiceError extends Error {
   }
 }
 
+export class OneBrainConfigurationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OneBrainConfigurationError";
+  }
+}
+
 export class OneBrainServiceClient {
   private readonly baseUrl: string;
   private readonly serviceKey: string;
   private readonly timeoutMs: number;
-  private readonly appId: string;
   private readonly accountId: string | undefined;
   private readonly spaceId: string | undefined;
   private readonly fetchImpl: typeof fetch;
@@ -175,7 +179,6 @@ export class OneBrainServiceClient {
     this.baseUrl = options.baseUrl.replace(/\/+$/, "");
     this.serviceKey = options.serviceKey;
     this.timeoutMs = options.timeoutMs ?? 10_000;
-    this.appId = options.appId ?? ONEBRAIN_COMMUNICATION_APP_ID;
     this.accountId = emptyToUndefined(options.accountId);
     this.spaceId = emptyToUndefined(options.spaceId);
     this.fetchImpl = options.fetchImpl ?? fetch;
@@ -224,15 +227,25 @@ export class OneBrainServiceClient {
   }
 
   private scopeBody(scope: BrainScope, defaultPurpose: string) {
-    const body: Record<string, unknown> = {
-      account_id: scope.accountId || this.accountId,
-      app_id: scope.appId ?? this.appId,
-      purpose: scope.purpose ?? defaultPurpose,
-    };
-    const spaceId = scope.spaceId ?? this.spaceId;
-    if (spaceId) {
-      body.space_id = spaceId;
+    const accountId = emptyToUndefined(scope.accountId) ?? this.accountId;
+    const spaceId = emptyToUndefined(scope.spaceId) ?? this.spaceId;
+    const missing = [
+      ["account_id", accountId],
+      ["space_id", spaceId],
+    ]
+      .filter(([, value]) => !value)
+      .map(([name]) => name);
+    if (!accountId || !spaceId) {
+      throw new OneBrainConfigurationError(
+        `Missing OneBrain service scope: ${missing.join(", ")}`,
+      );
     }
+    const body: Record<string, unknown> = {
+      account_id: accountId,
+      space_id: spaceId,
+      app_id: ONEBRAIN_COMMUNICATION_APP_ID,
+      purpose: defaultPurpose,
+    };
     return body;
   }
 
@@ -244,8 +257,8 @@ export class OneBrainServiceClient {
     const init: RequestInit = {
       method,
       headers: {
-        accept: "application/json",
-        authorization: `Bearer ${this.serviceKey}`,
+        Accept: "application/json",
+        Authorization: `Bearer ${this.serviceKey}`,
       },
       signal: AbortSignal.timeout(this.timeoutMs),
     };
@@ -285,7 +298,8 @@ export function createOneBrainProvider(
 ): OneBrainProvider | null {
   const baseUrl = env.ONEBRAIN_API_BASE_URL?.trim();
   const serviceKey = env.ONEBRAIN_SERVICE_KEY?.trim();
-  if (!baseUrl || !serviceKey) {
+  const spaceId = emptyToUndefined(env.ONEBRAIN_SPACE_ID);
+  if (!baseUrl || !serviceKey || !spaceId) {
     return null;
   }
 
@@ -293,16 +307,11 @@ export function createOneBrainProvider(
     baseUrl,
     serviceKey,
     timeoutMs: readOneBrainTimeoutMs(env.ONEBRAIN_TIMEOUT_MS, 10_000),
-    appId:
-      emptyToUndefined(env.ONEBRAIN_APP_ID) ?? ONEBRAIN_COMMUNICATION_APP_ID,
+    spaceId,
   };
   const accountId = emptyToUndefined(env.ONEBRAIN_ACCOUNT_ID);
-  const spaceId = emptyToUndefined(env.ONEBRAIN_SPACE_ID);
   if (accountId) {
     clientOptions.accountId = accountId;
-  }
-  if (spaceId) {
-    clientOptions.spaceId = spaceId;
   }
 
   return new OneBrainProvider(new OneBrainServiceClient(clientOptions));

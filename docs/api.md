@@ -139,7 +139,7 @@ POST /admin/tenants/{tenantId}/knowledge/suggestions/{suggestionId}/approve
 POST /admin/tenants/{tenantId}/knowledge/suggestions/{suggestionId}/reject
 ```
 
-The project brain stores reusable tenant facts once and serves them to every channel through the approved knowledge base. Onboarding answers cover standard setup questions and can be published immediately. Document uploads accept text, Markdown, CSV, JSON, and text-based PDFs; extracted content is stored once and turned into pending review suggestions. Customer handoff gaps can be scanned into pending learning suggestions. Tenant admins review, edit, approve, or reject suggestions before they affect live answers. The OneBrain sync status endpoint returns sanitized readiness, counts, and recent row status only; it does not expose service credentials or sync metadata.
+The project brain stores reusable tenant facts once and serves them to every channel through the approved knowledge base. When `ONEBRAIN_ANSWER_ENABLED=true`, live API and voice answers ask OneBrain first and fall back to the local project brain when OneBrain is unavailable. Onboarding answers cover standard setup questions and can be published immediately. Document uploads accept text, Markdown, CSV, JSON, and text-based PDFs; extracted content is stored once and turned into pending review suggestions. Customer handoff gaps can be scanned into pending learning suggestions. Tenant admins review, edit, approve, or reject suggestions before they affect live answers. The OneBrain sync status endpoint returns sanitized readiness, counts, and recent row status only; it does not expose service credentials or sync metadata.
 
 ## Test Assistant
 

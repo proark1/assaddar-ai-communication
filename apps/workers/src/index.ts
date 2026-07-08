@@ -374,7 +374,7 @@ const worker = new Worker(
           return {
             status: "skipped",
             reason:
-              "OneBrain provider not configured (set ONEBRAIN_API_BASE_URL and ONEBRAIN_SERVICE_KEY).",
+              "OneBrain provider not configured (set ONEBRAIN_API_BASE_URL, ONEBRAIN_SERVICE_KEY, and ONEBRAIN_SPACE_ID).",
           };
         }
         try {
@@ -464,7 +464,7 @@ async function scheduleMaintenanceJobs() {
     await queue.removeJobScheduler("onebrain-sync").catch(() => {});
     console.log(
       ONEBRAIN_SYNC_ENABLED
-        ? "OneBrain sync not scheduled: provider credentials are missing."
+        ? "OneBrain sync not scheduled: provider credentials or ONEBRAIN_SPACE_ID are missing."
         : "OneBrain sync disabled (set ONEBRAIN_SYNC_ENABLED=true to enable).",
     );
   }

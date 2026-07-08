@@ -38,6 +38,7 @@ export type OneBrainSyncStatusEnv = {
   ONEBRAIN_SYNC_ENABLED?: string;
   ONEBRAIN_API_BASE_URL?: string;
   ONEBRAIN_SERVICE_KEY?: string;
+  ONEBRAIN_SPACE_ID?: string;
 };
 
 export async function buildOneBrainSyncStatus(
@@ -47,7 +48,9 @@ export async function buildOneBrainSyncStatus(
 ): Promise<OneBrainSyncStatus> {
   const summary = await store.getOneBrainSyncSummary(tenantId, 5);
   const configured = Boolean(
-    env.ONEBRAIN_API_BASE_URL?.trim() && env.ONEBRAIN_SERVICE_KEY?.trim(),
+    env.ONEBRAIN_API_BASE_URL?.trim() &&
+    env.ONEBRAIN_SERVICE_KEY?.trim() &&
+    env.ONEBRAIN_SPACE_ID?.trim(),
   );
   const enabled = (env.ONEBRAIN_SYNC_ENABLED ?? "").toLowerCase() === "true";
   const stats = { total: summary.total, ...summary.byStatus };
