@@ -57,6 +57,7 @@ type CallSession struct {
 	CallID      string
 	AssistantID string
 	From        string
+	FromTag     string
 	To          string
 	ToTag       string
 	Codec       sdp.Codec
@@ -68,6 +69,7 @@ type CallSession struct {
 	StartedAt   time.Time
 	processing  atomic.Bool
 	greeting    atomic.Bool
+	lastRTPAt   atomic.Int64
 }
 
 type pcmCache struct {
@@ -179,10 +181,9 @@ func (server *Server) handleMessage(ctx context.Context, message sip.Message, re
 	case "INVITE":
 		server.handleInvite(ctx, message, remote)
 	case "ACK":
-		server.handleACK(message.Header("Call-ID"))
+		server.handleACK(message)
 	case "BYE", "CANCEL":
-		server.endSession(message.Header("Call-ID"))
-		server.sendResponse(message, remote, 200, "OK", "")
+		server.handleDialogEnd(message, remote)
 	default:
 		server.sendResponse(message, remote, 405, "Method Not Allowed", "")
 	}
@@ -256,6 +257,7 @@ func (server *Server) handleInvite(ctx context.Context, request sip.Message, rem
 		CallID:      callID,
 		AssistantID: assistantID,
 		From:        sip.ExtractUserFromHeader(request.Header("From")),
+		FromTag:     sip.HeaderParam(request.Header("From"), "tag"),
 		To:          sip.ExtractUserFromHeader(request.Header("To")),
 		ToTag:       toTag,
 		Codec:       codec,
@@ -266,9 +268,11 @@ func (server *Server) handleInvite(ctx context.Context, request sip.Message, rem
 		Phase:       "ringing",
 		StartedAt:   time.Now(),
 	}
+	session.markRTPReceived()
 	server.storeSession(session)
 	go func() {
 		err := rtpSession.ReadLoop(callCtx, func(packet rtp.Packet, _ *net.UDPAddr) {
+			session.markRTPReceived()
 			server.handleRTPPacket(callCtx, session, packet)
 		})
 		if err != nil {
@@ -277,6 +281,7 @@ func (server *Server) handleInvite(ctx context.Context, request sip.Message, rem
 	}()
 	go server.answerAfterDelay(callCtx, session, request, remote)
 	go server.expireOverdueSession(callCtx, session.CallID, server.cfg.MaxCallDuration)
+	go server.expireRTPInactiveSession(callCtx, session, server.cfg.RTPInactivityTimeout)
 
 	server.logger.Info(
 		"accepted inbound invite",
@@ -343,13 +348,52 @@ func (server *Server) sendAnswer(request sip.Message, remote *net.UDPAddr, sessi
 	server.sendMessage(answer, remote)
 }
 
-func (server *Server) handleACK(callID string) {
+func (server *Server) handleACK(request sip.Message) {
+	callID := request.Header("Call-ID")
 	session := server.getSession(callID)
 	if session == nil {
 		return
 	}
+	if !dialogMatches(session, request, true) {
+		server.logger.Warn("ignored ACK outside dialog", "callId", callID)
+		return
+	}
 	server.markSessionPhase(callID, "active")
 	go server.playGreeting(session.Context, session)
+}
+
+func (server *Server) handleDialogEnd(request sip.Message, remote *net.UDPAddr) {
+	callID := request.Header("Call-ID")
+	if callID == "" {
+		server.sendResponse(request, remote, 400, "Bad Request", "")
+		return
+	}
+	session, phase := server.getSessionAndPhase(callID)
+	if session == nil {
+		server.sendResponse(request, remote, 481, "Call/Transaction Does Not Exist", "")
+		return
+	}
+	method := request.Method()
+	if method == "BYE" && !dialogMatches(session, request, true) {
+		server.logger.Warn("rejected BYE outside dialog", "callId", callID)
+		server.sendResponse(request, remote, 481, "Call/Transaction Does Not Exist", session.ToTag)
+		return
+	}
+	if method == "CANCEL" {
+		if !dialogMatches(session, request, false) {
+			server.logger.Warn("rejected CANCEL outside dialog", "callId", callID)
+			server.sendResponse(request, remote, 481, "Call/Transaction Does Not Exist", session.ToTag)
+			return
+		}
+		switch phase {
+		case "ringing", "early-media", "answered":
+		default:
+			server.sendResponse(request, remote, 481, "Call/Transaction Does Not Exist", session.ToTag)
+			return
+		}
+	}
+	server.endSession(callID)
+	server.sendResponse(request, remote, 200, "OK", session.ToTag)
 }
 
 func (server *Server) expireUnackedSession(ctx context.Context, callID string, timeout time.Duration) {
@@ -1120,6 +1164,39 @@ func (server *Server) markSessionPhase(callID string, phase string) {
 	}
 }
 
+func dialogMatches(session *CallSession, request sip.Message, requireToTag bool) bool {
+	if session == nil {
+		return false
+	}
+	fromTag := sip.HeaderParam(request.Header("From"), "tag")
+	toTag := sip.HeaderParam(request.Header("To"), "tag")
+	if session.FromTag != "" && fromTag != session.FromTag {
+		return false
+	}
+	if requireToTag {
+		return toTag == session.ToTag
+	}
+	return toTag == "" || toTag == session.ToTag
+}
+
+func (session *CallSession) markRTPReceived() {
+	if session == nil {
+		return
+	}
+	session.lastRTPAt.Store(time.Now().UnixNano())
+}
+
+func (session *CallSession) lastRTPReceivedAt() time.Time {
+	if session == nil {
+		return time.Time{}
+	}
+	value := session.lastRTPAt.Load()
+	if value <= 0 {
+		return session.StartedAt
+	}
+	return time.Unix(0, value)
+}
+
 func (server *Server) endSession(callID string) {
 	server.sessionsMu.Lock()
 	session := server.sessions[callID]
@@ -1186,6 +1263,43 @@ func (server *Server) expireOverdueSession(ctx context.Context, callID string, t
 		"maxDurationMs", timeout.Milliseconds(),
 	)
 	server.endSession(callID)
+}
+
+func (server *Server) expireRTPInactiveSession(ctx context.Context, session *CallSession, timeout time.Duration) {
+	if session == nil || timeout <= 0 {
+		return
+	}
+	tick := timeout / 4
+	if tick < 500*time.Millisecond {
+		tick = 500 * time.Millisecond
+	}
+	if tick > 5*time.Second {
+		tick = 5 * time.Second
+	}
+	ticker := time.NewTicker(tick)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		if server.getSession(session.CallID) == nil {
+			return
+		}
+		lastRTPAt := session.lastRTPReceivedAt()
+		if lastRTPAt.IsZero() || time.Since(lastRTPAt) < timeout {
+			continue
+		}
+		server.logger.Warn(
+			"ending call session after rtp inactivity",
+			"callId", session.CallID,
+			"inactivityMs", time.Since(lastRTPAt).Milliseconds(),
+			"timeoutMs", timeout.Milliseconds(),
+		)
+		server.endSession(session.CallID)
+		return
+	}
 }
 
 func (server *Server) contactHeader(assistantID string) string {

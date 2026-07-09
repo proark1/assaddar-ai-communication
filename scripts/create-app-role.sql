@@ -9,28 +9,36 @@
 --     and usage on sequences — enough to run the app, nothing schema-changing.
 --
 -- Run as the database owner/superuser, then point APP_DATABASE_URL at this role:
---   psql "$DATABASE_URL" -v app_password="'a-strong-secret'" -f scripts/create-app-role.sql
+--   psql "$DATABASE_URL" -v app_password='a-strong-secret' -f scripts/create-app-role.sql
 --   APP_DATABASE_URL=postgresql://assaddar_app:a-strong-secret@HOST:PORT/postgres?sslmode=require
 --
 -- Then enforce RLS with scripts/enable-force-rls.sql and verify with `pnpm db:check`.
 
 set search_path = public, extensions;
 
-do $$
-begin
-  if not exists (select 1 from pg_roles where rolname = 'assaddar_app') then
-    execute format(
-      'create role assaddar_app login nosuperuser nobypassrls password %L',
-      current_setting('app_password', true)
-    );
-  end if;
-end $$;
+\if :{?app_password}
+\else
+\echo 'app_password is required. Run with: psql "$DATABASE_URL" -v app_password='\''a-strong-secret'\'' -f scripts/create-app-role.sql'
+\quit 1
+\endif
 
-grant connect on database current_database() to assaddar_app;
+select format(
+  'create role assaddar_app login nosuperuser nobypassrls password %L',
+  :'app_password'
+)
+where not exists (select 1 from pg_roles where rolname = 'assaddar_app')
+\gexec
+
+alter role assaddar_app login nosuperuser nobypassrls password :'app_password';
+
+select format('grant connect on database %I to assaddar_app', current_database())
+\gexec
+
 grant usage on schema public to assaddar_app;
 
 -- Existing objects.
 grant select, insert, update, delete on all tables in schema public to assaddar_app;
+revoke update, delete on audit_logs from assaddar_app;
 grant usage, select on all sequences in schema public to assaddar_app;
 
 -- Future objects created by the owner get the same grants automatically.

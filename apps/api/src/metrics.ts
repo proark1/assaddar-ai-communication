@@ -198,6 +198,18 @@ export class MetricsRegistry {
     "Total number of captured (unhandled) errors, by kind.",
   );
 
+  /** Count of answer outcomes, partitioned by channel and answer status. */
+  readonly answerOutcomeTotal = new Counter(
+    "answer_outcome_total",
+    "Total number of generated answer outcomes, by channel and answer status.",
+  );
+
+  /** Count of outbound delivery outcomes, partitioned by channel/provider/status. */
+  readonly messageDeliveryTotal = new Counter(
+    "message_delivery_total",
+    "Total number of outbound message delivery outcomes, by channel, provider and status.",
+  );
+
   /** Distribution of selected internal operation durations. */
   readonly appOperationDuration = new Histogram(
     "app_operation_duration_seconds",
@@ -226,6 +238,8 @@ export class MetricsRegistry {
       this.httpRequestsTotal.render(),
       this.httpRequestDuration.render(),
       this.errorsTotal.render(),
+      this.answerOutcomeTotal.render(),
+      this.messageDeliveryTotal.render(),
       this.appOperationDuration.render(),
       ...this.gauges.map((gauge) => gauge.render()),
     ];

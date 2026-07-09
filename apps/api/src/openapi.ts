@@ -191,6 +191,26 @@ export const openApiDocument = {
         "x-minimum-role": "tenant_admin",
       },
     },
+    "/admin/tenants/{tenantId}/knowledge/suggestions/bulk-draft": {
+      post: {
+        summary: "Draft answers for multiple pending learning suggestions",
+        "x-minimum-role": "tenant_admin",
+      },
+    },
+    "/admin/tenants/{tenantId}/knowledge/suggestions/bulk-approve": {
+      post: {
+        summary:
+          "Approve multiple learning suggestions through the OneBrain data layer",
+        "x-minimum-role": "tenant_admin",
+      },
+    },
+    "/admin/tenants/{tenantId}/knowledge/suggestions/bulk-reject": {
+      post: {
+        summary:
+          "Reject multiple learning suggestions through the OneBrain data layer",
+        "x-minimum-role": "tenant_admin",
+      },
+    },
     "/admin/tenants/{tenantId}/knowledge/suggestions/{suggestionId}/approve": {
       post: {
         summary:
@@ -212,6 +232,43 @@ export const openApiDocument = {
       delete: {
         summary: "Delete an approved knowledge entry",
         "x-minimum-role": "tenant_admin",
+      },
+    },
+    "/admin/tenants/{tenantId}/playbooks/preview": {
+      post: {
+        summary: "Preview a tenant starter playbook application",
+        "x-minimum-role": "tenant_admin",
+      },
+    },
+    "/admin/tenants/{tenantId}/playbooks/apply": {
+      post: {
+        summary:
+          "Apply a tenant starter playbook through the OneBrain data layer",
+        "x-minimum-role": "tenant_admin",
+      },
+    },
+    "/admin/tenants/{tenantId}/portal-links": {
+      post: {
+        summary:
+          "Create a scoped customer portal link through the OneBrain data layer",
+        "x-minimum-role": "tenant_admin",
+      },
+    },
+    "/admin/tenants/{tenantId}/portal-links/{linkId}/disable": {
+      post: {
+        summary: "Disable a scoped customer portal link",
+        "x-minimum-role": "tenant_admin",
+      },
+    },
+    "/portal/conversations/{token}": {
+      get: {
+        summary: "Fetch a scoped customer portal conversation snapshot",
+      },
+    },
+    "/portal/conversations/{token}/details": {
+      post: {
+        summary:
+          "Submit customer portal details through the OneBrain data layer",
       },
     },
     "/admin/tenants/{tenantId}/analytics": {
@@ -360,6 +417,11 @@ export const openApiDocument = {
     "/widget/events": {
       post: {
         summary: "Track lightweight widget funnel events",
+      },
+    },
+    "/widget/consent": {
+      post: {
+        summary: "Record widget consent through the server-side data layer",
       },
     },
     "/widget/leads": {

@@ -817,6 +817,45 @@ export const onebrainSyncRecords = pgTable(
   ],
 );
 
+export const portalLinkProjections = pgTable(
+  "portal_link_projections",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    onebrainRecordId: text("onebrain_record_id").notNull(),
+    tokenHash: text("token_hash").notNull(),
+    conversationId: uuid("conversation_id").references(() => conversations.id, {
+      onDelete: "set null",
+    }),
+    contactId: uuid("contact_id").references(() => contacts.id, {
+      onDelete: "set null",
+    }),
+    scope: text("scope").notNull().default("conversation"),
+    status: text("status").notNull().default("active"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    disabledAt: timestamp("disabled_at", { withTimezone: true }),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+    createdByUserId: uuid("created_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    metadata: jsonb("metadata")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("portal_link_projections_token_hash_idx").on(table.tokenHash),
+    index("portal_link_projections_tenant_idx").on(table.tenantId),
+    index("portal_link_projections_conversation_idx").on(
+      table.tenantId,
+      table.conversationId,
+    ),
+  ],
+);
+
 export const allowedIntents = pgTable(
   "allowed_intents",
   {

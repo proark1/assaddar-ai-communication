@@ -432,6 +432,7 @@ export default function DashboardPage() {
   >("friendly");
   const [widgetPlatform, setWidgetPlatform] = useState<WidgetPlatform>("html");
   const [copiedSnippet, setCopiedSnippet] = useState("");
+  const [lastPortalLink, setLastPortalLink] = useState("");
   const [siteUrl, setSiteUrl] = useState(defaultSiteUrl);
   const [templateName, setTemplateName] = useState("continue_conversation");
   const [templateLanguage, setTemplateLanguage] = useState<string>(
@@ -518,6 +519,17 @@ export default function DashboardPage() {
   const copiedResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const workspaceRefreshId = useRef(0);
   const inFlightGetRequests = useRef(new Map<string, Promise<unknown>>());
+  const latestRequestIds = useRef<Record<string, number>>({});
+
+  function beginLatestRequest(key: string) {
+    const next = (latestRequestIds.current[key] ?? 0) + 1;
+    latestRequestIds.current[key] = next;
+    return next;
+  }
+
+  function isLatestRequest(key: string, id: number) {
+    return latestRequestIds.current[key] === id;
+  }
   const debouncedKnowledgeSearch = useDebouncedValue(knowledgeSearch);
   const debouncedInboxSearch = useDebouncedValue(inboxSearch);
   const debouncedContactSearch = useDebouncedValue(contactSearch);
@@ -2040,11 +2052,13 @@ export default function DashboardPage() {
     options: { offset?: number; append?: boolean } = {},
   ) {
     if (!tenantId) {
+      beginLatestRequest("knowledge");
       setKnowledge([]);
       setKnowledgeHasMore(false);
       return;
     }
 
+    const requestId = beginLatestRequest("knowledge");
     try {
       const items = await apiFetch<KnowledgeItem[]>(
         buildListPath(`/admin/tenants/${tenantId}/knowledge`, {
@@ -2053,6 +2067,9 @@ export default function DashboardPage() {
           status: knowledgeStatusFilter,
         }),
       );
+      if (!isLatestRequest("knowledge", requestId)) {
+        return;
+      }
       setKnowledge((current) =>
         options.append ? [...current, ...items] : items,
       );
@@ -2064,16 +2081,21 @@ export default function DashboardPage() {
 
   async function refreshKnowledgeSuggestions(tenantId = selectedTenant?.id) {
     if (!tenantId) {
+      beginLatestRequest("knowledge-suggestions");
       setKnowledgeSuggestions([]);
       return;
     }
 
+    const requestId = beginLatestRequest("knowledge-suggestions");
     try {
       const items = await apiFetch<KnowledgeSuggestion[]>(
         buildListPath(`/admin/tenants/${tenantId}/knowledge/suggestions`, {
           status: "pending",
         }),
       );
+      if (!isLatestRequest("knowledge-suggestions", requestId)) {
+        return;
+      }
       setKnowledgeSuggestions(items);
     } catch (error) {
       setStatus(readableError(error));
@@ -2082,16 +2104,21 @@ export default function DashboardPage() {
 
   async function refreshKnowledgeIngestionJobs(tenantId = selectedTenant?.id) {
     if (!tenantId) {
+      beginLatestRequest("knowledge-ingestion-jobs");
       setKnowledgeIngestionJobs([]);
       return;
     }
 
+    const requestId = beginLatestRequest("knowledge-ingestion-jobs");
     try {
       const items = await apiFetch<KnowledgeIngestionJob[]>(
         buildListPath(`/admin/tenants/${tenantId}/knowledge/ingestion-jobs`, {
           limit: 8,
         }),
       );
+      if (!isLatestRequest("knowledge-ingestion-jobs", requestId)) {
+        return;
+      }
       setKnowledgeIngestionJobs(items);
     } catch (error) {
       setStatus(readableError(error));
@@ -2100,14 +2127,19 @@ export default function DashboardPage() {
 
   async function refreshAnalytics(tenantId = selectedTenant?.id) {
     if (!tenantId) {
+      beginLatestRequest("analytics");
       setAnalytics(null);
       return;
     }
 
+    const requestId = beginLatestRequest("analytics");
     try {
       const result = await apiFetch<TenantAnalytics>(
         `/admin/tenants/${tenantId}/analytics`,
       );
+      if (!isLatestRequest("analytics", requestId)) {
+        return;
+      }
       setAnalytics(result);
     } catch (error) {
       setStatus(readableError(error));
@@ -2119,10 +2151,12 @@ export default function DashboardPage() {
     options: { offset?: number; append?: boolean } = {},
   ) {
     if (!tenantId) {
+      beginLatestRequest("conversations");
       setConversations([]);
       return;
     }
 
+    const requestId = beginLatestRequest("conversations");
     try {
       const items = await apiFetch<Conversation[]>(
         buildListPath(`/admin/tenants/${tenantId}/conversations`, {
@@ -2130,6 +2164,9 @@ export default function DashboardPage() {
           q: debouncedInboxSearch,
         }),
       );
+      if (!isLatestRequest("conversations", requestId)) {
+        return;
+      }
       setConversations((current) =>
         options.append ? [...current, ...items] : items,
       );
@@ -2162,11 +2199,13 @@ export default function DashboardPage() {
     options: { offset?: number; append?: boolean } = {},
   ) {
     if (!tenantId) {
+      beginLatestRequest("unified-inbox");
       setUnifiedInbox([]);
       setInboxHasMore(false);
       return;
     }
 
+    const requestId = beginLatestRequest("unified-inbox");
     try {
       const items = await apiFetch<UnifiedInboxItem[]>(
         buildListPath(`/admin/tenants/${tenantId}/inbox`, {
@@ -2174,6 +2213,9 @@ export default function DashboardPage() {
           q: debouncedInboxSearch,
         }),
       );
+      if (!isLatestRequest("unified-inbox", requestId)) {
+        return;
+      }
       setUnifiedInbox((current) =>
         options.append ? [...current, ...items] : items,
       );
@@ -2201,11 +2243,13 @@ export default function DashboardPage() {
     options: { offset?: number; append?: boolean } = {},
   ) {
     if (!tenantId) {
+      beginLatestRequest("contacts");
       setContacts([]);
       setContactsHasMore(false);
       return;
     }
 
+    const requestId = beginLatestRequest("contacts");
     try {
       const items = await apiFetch<ContactProfile[]>(
         buildListPath(`/admin/tenants/${tenantId}/contacts`, {
@@ -2213,6 +2257,9 @@ export default function DashboardPage() {
           q: debouncedContactSearch,
         }),
       );
+      if (!isLatestRequest("contacts", requestId)) {
+        return;
+      }
       setContacts((current) =>
         options.append ? [...current, ...items] : items,
       );
@@ -2231,10 +2278,17 @@ export default function DashboardPage() {
     tenantId: string,
     conversationId: string,
   ) {
+    const requestId = beginLatestRequest("conversation-messages");
     try {
       const items = await apiFetch<ConversationMessage[]>(
         `/admin/tenants/${tenantId}/conversations/${conversationId}/messages`,
       );
+      if (
+        !isLatestRequest("conversation-messages", requestId) ||
+        selectedConversationId !== conversationId
+      ) {
+        return;
+      }
       setConversationMessages(items);
       setPersonalDataAccessDenied(false);
     } catch (error) {
@@ -2253,11 +2307,13 @@ export default function DashboardPage() {
     options: { offset?: number; append?: boolean } = {},
   ) {
     if (!tenantId) {
+      beginLatestRequest("handoffs");
       setHandoffs([]);
       setHandoffsHasMore(false);
       return;
     }
 
+    const requestId = beginLatestRequest("handoffs");
     try {
       const items = await apiFetch<Handoff[]>(
         buildListPath(`/admin/tenants/${tenantId}/handoffs`, {
@@ -2265,6 +2321,9 @@ export default function DashboardPage() {
           q: debouncedInboxSearch,
         }),
       );
+      if (!isLatestRequest("handoffs", requestId)) {
+        return;
+      }
       setHandoffs((current) =>
         options.append ? [...current, ...items] : items,
       );
@@ -2668,6 +2727,74 @@ export default function DashboardPage() {
         ),
       );
       setStatus("Business settings saved");
+    } catch (error) {
+      setStatus(readableError(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function applyAssadPlaybook() {
+    if (!canManageTenantSettings()) {
+      setStatus("Your role cannot apply tenant playbooks.");
+      return;
+    }
+    if (!selectedTenant) {
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const result = await apiFetch<{
+        applied: { theme: boolean; faqs: number };
+      }>(`/admin/tenants/${selectedTenant.id}/playbooks/apply`, {
+        method: "POST",
+        body: JSON.stringify({
+          playbookKey: "assad_dar_ai_consultancy",
+          confirmed: true,
+          overwrite: false,
+        }),
+      });
+      await refreshWorkspace(selectedTenant.id);
+      setStatus(
+        `Playbook applied: ${result.applied.faqs} FAQs, theme ${
+          result.applied.theme ? "updated" : "unchanged"
+        }`,
+      );
+    } catch (error) {
+      setStatus(readableError(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createCustomerPortalLink() {
+    if (!canManageTenantSettings()) {
+      setStatus("Your role cannot create customer portal links.");
+      return;
+    }
+    if (!selectedTenant || !selectedInboxItem) {
+      setStatus("Select a conversation before creating a portal link.");
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const result = await apiFetch<{ url: string; token: string }>(
+        `/admin/tenants/${selectedTenant.id}/portal-links`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            conversationId: selectedInboxItem.id,
+            contactId: selectedInboxItem.contact?.id ?? null,
+            scope: "conversation",
+            expiresInDays: 14,
+          }),
+        },
+      );
+      setLastPortalLink(result.url);
+      await copyText(result.url, "Customer portal link");
+      setStatus("Customer portal link created");
     } catch (error) {
       setStatus(readableError(error));
     } finally {
@@ -3561,6 +3688,123 @@ export default function DashboardPage() {
     }
   }
 
+  async function bulkDraftKnowledgeSuggestions() {
+    if (!canManageKnowledge()) {
+      setStatus("Your role cannot draft knowledge answers.");
+      return;
+    }
+    if (!selectedTenant) {
+      return;
+    }
+    const suggestionIds = knowledgeSuggestions
+      .filter(
+        (item) =>
+          !item.suggestedAnswer &&
+          (item.suggestedQuestion || item.suggestedTitle),
+      )
+      .map((item) => item.id);
+    if (!suggestionIds.length) {
+      setStatus("No loaded suggestions need a draft.");
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const result = await apiFetch<{ drafted: number; failed: number }>(
+        `/admin/tenants/${selectedTenant.id}/knowledge/suggestions/bulk-draft`,
+        {
+          method: "POST",
+          body: JSON.stringify({ suggestionIds }),
+        },
+      );
+      await refreshKnowledgeSuggestions(selectedTenant.id);
+      setStatus(`${result.drafted} drafts generated, ${result.failed} failed`);
+    } catch (error) {
+      setStatus(readableError(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function bulkApproveKnowledgeSuggestions() {
+    if (!canManageKnowledge()) {
+      setStatus("Your role cannot approve knowledge suggestions.");
+      return;
+    }
+    if (!selectedTenant) {
+      return;
+    }
+    const suggestionIds = knowledgeSuggestions
+      .filter(
+        (item) =>
+          item.suggestedAnswer &&
+          (item.suggestedQuestion || item.suggestedTitle),
+      )
+      .map((item) => item.id);
+    if (!suggestionIds.length) {
+      setStatus("No loaded suggestions are ready to approve.");
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const result = await apiFetch<{ approved: number; failed: number }>(
+        `/admin/tenants/${selectedTenant.id}/knowledge/suggestions/bulk-approve`,
+        {
+          method: "POST",
+          body: JSON.stringify({ suggestionIds }),
+        },
+      );
+      cancelSuggestionEdit();
+      await Promise.all([
+        refreshKnowledge(selectedTenant.id),
+        refreshKnowledgeSuggestions(selectedTenant.id),
+        refreshAnalytics(selectedTenant.id),
+        refreshWorkflowSuggestions(selectedTenant.id),
+      ]);
+      setStatus(
+        `${result.approved} suggestions approved, ${result.failed} failed`,
+      );
+    } catch (error) {
+      setStatus(readableError(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function bulkRejectKnowledgeSuggestions() {
+    if (!canManageKnowledge()) {
+      setStatus("Your role cannot reject knowledge suggestions.");
+      return;
+    }
+    if (!selectedTenant || !knowledgeSuggestions.length) {
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const result = await apiFetch<{ rejected: number; failed: number }>(
+        `/admin/tenants/${selectedTenant.id}/knowledge/suggestions/bulk-reject`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            suggestionIds: knowledgeSuggestions.map((item) => item.id),
+            reviewNote: "Rejected in bulk from Knowledge review.",
+          }),
+        },
+      );
+      cancelSuggestionEdit();
+      await refreshKnowledgeSuggestions(selectedTenant.id);
+      setStatus(
+        `${result.rejected} suggestions rejected, ${result.failed} failed`,
+      );
+    } catch (error) {
+      setStatus(readableError(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function updateHandoff(
     handoff: Handoff,
     statusValue: Handoff["status"],
@@ -4294,6 +4538,39 @@ export default function DashboardPage() {
           </div>
           <div className="rowActions">
             <span className="countPill">{knowledgeSuggestions.length}</span>
+            <button
+              className="secondaryButton"
+              type="button"
+              disabled={
+                busy || !canEditKnowledge || !knowledgeSuggestions.length
+              }
+              onClick={bulkDraftKnowledgeSuggestions}
+            >
+              <Sparkles size={15} />
+              Draft all
+            </button>
+            <button
+              className="primaryButton"
+              type="button"
+              disabled={
+                busy || !canEditKnowledge || !knowledgeSuggestions.length
+              }
+              onClick={bulkApproveKnowledgeSuggestions}
+            >
+              <CheckCircle2 size={15} />
+              Approve all
+            </button>
+            <button
+              className="dangerButton"
+              type="button"
+              disabled={
+                busy || !canEditKnowledge || !knowledgeSuggestions.length
+              }
+              onClick={bulkRejectKnowledgeSuggestions}
+            >
+              <X size={15} />
+              Reject all
+            </button>
             <button
               className="secondaryButton"
               type="button"
@@ -6492,13 +6769,25 @@ export default function DashboardPage() {
           <div className="portalPreviewHero">
             <div>
               <span>Preview link</span>
-              <strong>{customerPortalPreview.url}</strong>
+              <strong>{lastPortalLink || customerPortalPreview.url}</strong>
             </div>
+            <button
+              className="primaryButton"
+              type="button"
+              disabled={busy || !canEditSettings || !selectedInboxItem}
+              onClick={createCustomerPortalLink}
+            >
+              <Link2 size={16} />
+              Create
+            </button>
             <button
               className="secondaryButton"
               type="button"
               onClick={() =>
-                copyText(customerPortalPreview.url, "Customer portal link")
+                copyText(
+                  lastPortalLink || customerPortalPreview.url,
+                  "Customer portal link",
+                )
               }
             >
               <Copy size={16} />
@@ -9020,6 +9309,15 @@ export default function DashboardPage() {
               {playbookPreview.completed}/{playbookPreview.total}
             </strong>
             <span>Next: {playbookPreview.nextStep}</span>
+            <button
+              className="primaryButton"
+              type="button"
+              disabled={busy || !canEditSettings}
+              onClick={applyAssadPlaybook}
+            >
+              <ClipboardCheck size={15} />
+              Apply
+            </button>
           </div>
           <div className="playbookStepGrid">
             {playbookPreview.steps.map((step) => (

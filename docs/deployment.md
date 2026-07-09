@@ -23,9 +23,12 @@ Set these on every runtime unless noted otherwise:
 ```text
 NODE_ENV=production
 SERVICE=api|admin|widget|voice|workers
-DATABASE_URL=postgresql://...
-REDIS_URL=redis://...
+DATABASE_URL=${{Postgres.DATABASE_URL}}
 ```
+
+`DATABASE_URL` should point at Railway Postgres on API, voice, workers, and
+migration jobs. Admin and widget do not need database credentials. Set
+`REDIS_URL=${{Redis.REDIS_URL}}` on API and workers.
 
 API:
 
@@ -34,17 +37,18 @@ ADMIN_API_TOKEN=<random 32+ byte token>
 WIDGET_ALLOWED_ORIGINS=https://your-admin-domain,https://your-widget-domain,https://customer-site.example
 API_PUBLIC_URL=https://your-api-domain
 ADMIN_PUBLIC_URL=https://your-admin-domain
-SUPABASE_URL=https://<project-ref>.supabase.co
-SUPABASE_PUBLISHABLE_KEY=<publishable-or-legacy-anon-key>
-SUPABASE_SERVICE_ROLE_KEY=<server-only-service-role-or-secret-key>
 META_VERIFY_TOKEN=<random verify token>
 META_GRAPH_API_VERSION=v25.0
 CHANNEL_CREDENTIAL_MASTER_KEY=base64:<32-byte-base64-key>
 WHATSAPP_ACCESS_TOKEN=<only when WhatsApp sending is enabled>
 MESSENGER_PAGE_ACCESS_TOKEN=<only when Messenger/Instagram sending is enabled>
+REDIS_URL=${{Redis.REDIS_URL}}
 ```
 
-`ADMIN_API_TOKEN` remains the root/bootstrap fallback. Normal project users log in through Supabase Auth; the Admin dashboard sends Supabase access tokens to the API as `Authorization: Bearer <token>`. The API still owns tenant authorization through `users`, `roles`, and `memberships`.
+`ADMIN_API_TOKEN` remains the root/bootstrap fallback. With Supabase variables
+unset, project users log in through the API's legacy email/password session
+flow. The API owns tenant authorization through `users`, `roles`, and
+`memberships`.
 
 `CHANNEL_CREDENTIAL_MASTER_KEY` enables app-managed encryption for channel
 tokens saved in Postgres. Generate a 32-byte key, store it only in the platform
@@ -76,9 +80,10 @@ Admin:
 
 ```text
 NEXT_PUBLIC_API_BASE_URL=https://your-api-domain
-NEXT_PUBLIC_SUPABASE_URL=https://<project-ref>.supabase.co
-NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<publishable-or-legacy-anon-key>
 ```
+
+Leave `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
+unset for the Railway-only session flow.
 
 Voice:
 
@@ -221,6 +226,7 @@ railway add --service assaddar-admin
 railway add --service assaddar-widget
 railway add --service assaddar-voice
 railway add --service assaddar-workers
+railway add --database postgres
 railway add --database redis
 ```
 
@@ -251,6 +257,32 @@ WIDGET_ALLOWED_ORIGINS=https://your-admin-domain,https://your-widget-domain,http
 ```
 
 Then redeploy API and admin.
+
+For production defense in depth, provision the non-owner Postgres app role from
+`scripts/create-app-role.sql`, set `APP_DATABASE_URL` on API and voice, run
+`scripts/enable-force-rls.sql`, and verify with:
+
+```bash
+REQUIRE_DB_RLS=true pnpm db:check
+```
+
+## Optional Supabase Auth
+
+Supabase Auth remains supported but is not part of the Railway-only production
+path. To enable it later, set `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, and
+`SUPABASE_SERVICE_ROLE_KEY` on API, plus `NEXT_PUBLIC_SUPABASE_URL` and
+`NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` on admin, then rebuild admin.
+
+## Voice Edge
+
+`apps/voice` runs on Railway. `apps/voice-edge` is a SIP/RTP edge for providers
+such as easybell and needs UDP media ports for RTP. Railway public networking is
+HTTP and raw TCP proxying, so keep the SIP/RTP edge on a VM or redesign the
+telephone provider path before moving that edge into Railway.
+
+The GitHub production workflow deploys Railway services by default. Set the
+repository variable `DEPLOY_VOICE_EDGE=true` only when the external SIP/RTP edge
+should also be deployed.
 
 ## Smoke Checks
 

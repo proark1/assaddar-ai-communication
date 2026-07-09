@@ -8,3 +8,10 @@ func TestExtractUserFromHeader(t *testing.T) {
 		t.Fatalf("user = %q", user)
 	}
 }
+
+func TestHeaderParamExtractsCaseInsensitiveQuotedValues(t *testing.T) {
+	value := HeaderParam(`"Caller" <sip:+4917@example.com>;Tag="abc";transport=udp`, "tag")
+	if value != "abc" {
+		t.Fatalf("tag = %q", value)
+	}
+}

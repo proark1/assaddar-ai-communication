@@ -131,6 +131,23 @@ class MemoryPlatformStore
     createdAt: Date;
     updatedAt: Date;
   }> = [];
+  portalLinkProjections: Array<{
+    id: string;
+    tenantId: string;
+    onebrainRecordId: string;
+    tokenHash: string;
+    conversationId?: string | null;
+    contactId?: string | null;
+    scope: string;
+    status: string;
+    expiresAt: Date;
+    disabledAt?: Date | null;
+    lastUsedAt?: Date | null;
+    metadata?: Record<string, unknown>;
+    createdByUserId?: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+  }> = [];
   whatsappTemplates: Array<{
     id: string;
     tenantId: string;
@@ -2044,6 +2061,16 @@ class MemoryPlatformStore
     );
   }
 
+  async getConversation(tenantId: string, conversationId: string) {
+    return (
+      this.conversations.find(
+        (conversation) =>
+          conversation.tenantId === tenantId &&
+          conversation.id === conversationId,
+      ) ?? null
+    );
+  }
+
   async listUnifiedInbox(tenantId: string) {
     return this.conversations
       .filter((conversation) => conversation.tenantId === tenantId)
@@ -2073,6 +2100,89 @@ class MemoryPlatformStore
 
   async listContacts(tenantId: string) {
     return this.contacts.filter((contact) => contact.tenantId === tenantId);
+  }
+
+  async getContact(tenantId: string, contactId: string) {
+    return (
+      this.contacts.find(
+        (contact) => contact.tenantId === tenantId && contact.id === contactId,
+      ) ?? null
+    );
+  }
+
+  async createPortalLinkProjection(
+    tenantId: string,
+    input: {
+      onebrainRecordId: string;
+      tokenHash: string;
+      conversationId?: string | null;
+      contactId?: string | null;
+      scope?: "conversation" | "contact";
+      expiresAt: Date;
+      createdByUserId?: string | null;
+      metadata?: Record<string, unknown>;
+    },
+  ) {
+    const projection = {
+      id: crypto.randomUUID(),
+      tenantId,
+      onebrainRecordId: input.onebrainRecordId,
+      tokenHash: input.tokenHash,
+      conversationId: input.conversationId ?? null,
+      contactId: input.contactId ?? null,
+      scope: input.scope ?? "conversation",
+      status: "active",
+      expiresAt: input.expiresAt,
+      disabledAt: null,
+      lastUsedAt: null,
+      createdByUserId: input.createdByUserId ?? null,
+      metadata: input.metadata ?? {},
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    this.portalLinkProjections.push(projection);
+    return projection;
+  }
+
+  async getPortalLinkProjectionByTokenHash(
+    tenantId: string,
+    tokenHash: string,
+  ) {
+    return (
+      this.portalLinkProjections.find(
+        (projection) =>
+          projection.tenantId === tenantId &&
+          projection.tokenHash === tokenHash,
+      ) ?? null
+    );
+  }
+
+  async getPortalLinkProjection(tenantId: string, linkId: string) {
+    return (
+      this.portalLinkProjections.find(
+        (projection) =>
+          projection.tenantId === tenantId && projection.id === linkId,
+      ) ?? null
+    );
+  }
+
+  async disablePortalLinkProjection(tenantId: string, linkId: string) {
+    const projection = await this.getPortalLinkProjection(tenantId, linkId);
+    if (!projection) {
+      return null;
+    }
+    projection.status = "disabled";
+    projection.disabledAt = new Date();
+    projection.updatedAt = new Date();
+    return projection;
+  }
+
+  async markPortalLinkProjectionUsed(tenantId: string, linkId: string) {
+    const projection = await this.getPortalLinkProjection(tenantId, linkId);
+    if (projection) {
+      projection.lastUsedAt = new Date();
+      projection.updatedAt = new Date();
+    }
   }
 
   async deleteContact(
@@ -2601,6 +2711,40 @@ function fakeOneBrainProvider(ask: BrainProvider["ask"]): BrainProvider {
   };
 }
 
+function fakeOneBrainDataLayer() {
+  const provider: BrainProvider = {
+    kind: "onebrain",
+    async intake(input) {
+      return {
+        record: {
+          id: crypto.randomUUID(),
+          tenant_id: input.scope.tenantId,
+          account_id: input.scope.accountId,
+          space_id: input.scope.spaceId ?? "",
+          app_id: input.scope.appId ?? "communication",
+          purpose: input.scope.purpose ?? "",
+          source: input.source ?? "communication",
+          source_ref: input.sourceRef ?? "",
+          record_type: input.recordType ?? "document",
+          intent: input.intent ?? "knowledge_update",
+          classification: "test",
+          confidence: 1,
+          status: "synced",
+          title: input.title ?? "",
+          summary: "",
+          extracted_facts: {},
+          metadata: input.metadata ?? {},
+          created_at: new Date().toISOString(),
+        },
+      };
+    },
+    async ask() {
+      throw new Error("not used");
+    },
+  };
+  return { provider };
+}
+
 /**
  * Build a server plus a genuine tenant-member identity for the given tenant.
  * Returns headers that authenticate as that member via the Supabase bearer
@@ -2619,6 +2763,7 @@ async function buildServerWithMember(
     adminToken: "test-token",
     allowedOrigins: ["*"],
     supabaseAuth: memberSupabaseAuth(authUserId),
+    oneBrainDataLayer: fakeOneBrainDataLayer(),
   });
   await store.upsertTenantUser(tenantId, {
     email: "member@example.com",
@@ -2690,6 +2835,7 @@ describe("API", () => {
       store,
       adminToken: "test-token",
       allowedOrigins: ["*"],
+      oneBrainDataLayer: fakeOneBrainDataLayer(),
     });
     const assignedTenant = await store.createTenant({
       name: "Assigned",
@@ -2877,6 +3023,7 @@ describe("API", () => {
       store,
       adminToken: "test-token",
       allowedOrigins: ["*"],
+      oneBrainDataLayer: fakeOneBrainDataLayer(),
     });
     const tenant = await store.createTenant({
       name: "Tenant One",
@@ -3425,6 +3572,7 @@ describe("API", () => {
       store,
       adminToken: "test-token",
       allowedOrigins: ["*"],
+      oneBrainDataLayer: fakeOneBrainDataLayer(),
     });
     const tenant = await store.createTenant({
       name: "Tenant One",

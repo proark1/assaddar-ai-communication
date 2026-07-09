@@ -162,6 +162,10 @@ async function main() {
       provider: oneBrainProvider,
       env: process.env,
     };
+    serverOptions.oneBrainDataLayer = {
+      provider: oneBrainProvider,
+      env: process.env,
+    };
   }
 
   const app = await buildServer(serverOptions);

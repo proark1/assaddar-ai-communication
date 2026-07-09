@@ -54,6 +54,14 @@ export const ParamsKnowledgeSuggestionSchema = ParamsTenantSchema.extend({
   suggestionId: z.string().uuid(),
 });
 
+export const ParamsPortalLinkSchema = ParamsTenantSchema.extend({
+  linkId: z.string().uuid(),
+});
+
+export const ParamsPortalTokenSchema = z.object({
+  token: z.string().min(32).max(1200),
+});
+
 export const ParamsConversationSchema = ParamsTenantSchema.extend({
   conversationId: z.string().uuid(),
 });
@@ -221,6 +229,16 @@ export const ReviewKnowledgeSuggestionSchema = z.object({
   reviewNote: z.string().trim().max(1000).optional(),
 });
 
+export const BulkKnowledgeSuggestionsSchema = z.object({
+  suggestionIds: z.array(z.string().uuid()).min(1).max(50),
+  reviewNote: z.string().trim().max(1000).optional(),
+});
+
+export const BulkApproveKnowledgeSuggestionsSchema =
+  BulkKnowledgeSuggestionsSchema.extend({
+    tags: z.array(z.string().trim().min(1).max(60)).max(20).optional(),
+  });
+
 export const KnowledgeDocumentUploadSchema = z.object({
   fileName: z.string().trim().min(1).max(240),
   contentType: z.string().trim().min(1).max(120),
@@ -299,6 +317,40 @@ export const WidgetEventSchema = z.object({
     "intake_mode_selected",
   ]),
   metadata: z.record(z.string(), z.unknown()).optional(),
+});
+
+export const WidgetConsentSchema = z.object({
+  assistantId: z.string().min(8),
+  conversationId: z.string().min(8).max(80).optional(),
+  visitorId: z.string().min(1).max(120).optional(),
+  locale: z.string().min(2).max(16).optional(),
+  text: z.string().trim().min(1).max(1000),
+  textVersion: z.string().trim().min(1).max(80).default("default"),
+  source: z.enum(["widget", "portal"]).default("widget"),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+});
+
+export const PlaybookKeySchema = z.enum(["assad_dar_ai_consultancy"]);
+
+export const PlaybookPreviewSchema = z.object({
+  playbookKey: PlaybookKeySchema.default("assad_dar_ai_consultancy"),
+  overwrite: z.boolean().default(false),
+});
+
+export const PlaybookApplySchema = PlaybookPreviewSchema.extend({
+  confirmed: z.boolean().default(false),
+});
+
+export const CreatePortalLinkSchema = z.object({
+  conversationId: z.string().uuid(),
+  contactId: z.string().uuid().nullable().optional(),
+  scope: z.enum(["conversation", "contact"]).default("conversation"),
+  expiresInDays: z.number().int().min(1).max(90).default(14),
+});
+
+export const PortalDetailsSchema = z.object({
+  fields: z.record(z.string(), z.string().trim().max(1000)).default({}),
+  message: z.string().trim().max(2000).optional(),
 });
 
 export const MetaWebhookQuerySchema = z.object({
@@ -596,6 +648,12 @@ export type CreateKnowledgeSuggestionInput = z.infer<
 export type ReviewKnowledgeSuggestionInput = z.infer<
   typeof ReviewKnowledgeSuggestionSchema
 >;
+export type BulkKnowledgeSuggestionsInput = z.infer<
+  typeof BulkKnowledgeSuggestionsSchema
+>;
+export type BulkApproveKnowledgeSuggestionsInput = z.infer<
+  typeof BulkApproveKnowledgeSuggestionsSchema
+>;
 export type KnowledgeDocumentUploadInput = z.infer<
   typeof KnowledgeDocumentUploadSchema
 >;
@@ -606,5 +664,9 @@ export type UpdateHandoffInput = z.infer<typeof UpdateHandoffSchema>;
 export type ChannelConnectionInput = z.infer<typeof ChannelConnectionSchema>;
 export type WhatsappTemplateInput = z.infer<typeof WhatsappTemplateSchema>;
 export type WidgetThemeInput = z.infer<typeof WidgetThemeSchema>;
+export type WidgetConsentInput = z.infer<typeof WidgetConsentSchema>;
+export type PlaybookPreviewInput = z.infer<typeof PlaybookPreviewSchema>;
+export type PlaybookApplyInput = z.infer<typeof PlaybookApplySchema>;
+export type CreatePortalLinkInput = z.infer<typeof CreatePortalLinkSchema>;
 export type RoleName = z.infer<typeof RoleNameSchema>;
 export type TenantRoleName = z.infer<typeof TenantRoleNameSchema>;

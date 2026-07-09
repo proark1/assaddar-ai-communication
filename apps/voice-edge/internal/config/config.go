@@ -13,24 +13,25 @@ import (
 )
 
 type Config struct {
-	HTTPAddr      string
-	PublicIP      string
-	SIPBind       string
-	RTPPortMin    int
-	RTPPortMax    int
-	AnswerDelay   time.Duration
-	GreetingDelay time.Duration
-	GreetingText  string
-	ThinkingText  string
-	Easybell      EasybellConfig
-	VoiceTurnURL  string
-	VoiceSecret   string
-	AssistantID   string
-	Gemini            GeminiConfig
-	DefaultLocale     string
-	SIPAllowedSources []net.IPNet
-	MaxSessions       int
-	MaxCallDuration   time.Duration
+	HTTPAddr             string
+	PublicIP             string
+	SIPBind              string
+	RTPPortMin           int
+	RTPPortMax           int
+	AnswerDelay          time.Duration
+	GreetingDelay        time.Duration
+	GreetingText         string
+	ThinkingText         string
+	Easybell             EasybellConfig
+	VoiceTurnURL         string
+	VoiceSecret          string
+	AssistantID          string
+	Gemini               GeminiConfig
+	DefaultLocale        string
+	SIPAllowedSources    []net.IPNet
+	MaxSessions          int
+	MaxCallDuration      time.Duration
+	RTPInactivityTimeout time.Duration
 }
 
 type EasybellConfig struct {
@@ -81,8 +82,9 @@ func Load(getenv func(string) string) (Config, error) {
 			TTSVoice: envDefault(getenv, "GEMINI_TTS_VOICE", "Kore"),
 		},
 		DefaultLocale:   envDefault(getenv, "VOICE_LOCALE", "de-DE"),
-		MaxSessions:     envIntDefault(getenv, "VOICE_EDGE_MAX_SESSIONS", 0),
-		MaxCallDuration: time.Duration(envIntDefault(getenv, "VOICE_EDGE_MAX_CALL_DURATION_MS", 1800000)) * time.Millisecond,
+		MaxSessions:          envIntDefault(getenv, "VOICE_EDGE_MAX_SESSIONS", 0),
+		MaxCallDuration:      time.Duration(envIntDefault(getenv, "VOICE_EDGE_MAX_CALL_DURATION_MS", 1800000)) * time.Millisecond,
+		RTPInactivityTimeout: time.Duration(envIntDefault(getenv, "VOICE_EDGE_RTP_INACTIVITY_TIMEOUT_MS", 120000)) * time.Millisecond,
 	}
 	sources, err := parseIPNetworks(getenv("VOICE_EDGE_SIP_ALLOWED_SOURCES"))
 	if err != nil {
@@ -148,6 +150,9 @@ func (cfg Config) Validate() error {
 	}
 	if cfg.GreetingDelay < 0 {
 		return errors.New("VOICE_EDGE_GREETING_DELAY_MS must be zero or positive")
+	}
+	if cfg.RTPInactivityTimeout < 0 {
+		return errors.New("VOICE_EDGE_RTP_INACTIVITY_TIMEOUT_MS must be zero or positive")
 	}
 	if cfg.VoiceTurnURL != "" {
 		parsed, err := url.Parse(cfg.VoiceTurnURL)
