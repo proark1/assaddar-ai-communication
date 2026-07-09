@@ -14,6 +14,7 @@ import {
   and,
   desc,
   eq,
+  gt,
   gte,
   inArray,
   isNotNull,
@@ -4276,8 +4277,9 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     conversationId: string;
     channel: Channel;
     direction: "inbound" | "outbound";
-    role: "user" | "assistant" | "system";
+    role: "user" | "assistant" | "system" | "operator";
     content: string;
+    authorUserId?: string | null;
     trace?: Record<string, unknown>;
   }): Promise<MessageRecord> {
     assertTenantId(input.tenantId);
@@ -4295,6 +4297,7 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
         direction: input.direction,
         role: input.role,
         content: input.content,
+        authorUserId: input.authorUserId ?? null,
         trace: input.trace ?? {},
       })
       .returning();
@@ -4477,6 +4480,167 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
         ),
       )
       .orderBy(messages.createdAt);
+  }
+
+  /**
+   * Update the human-takeover state of a conversation. Any field left undefined
+   * is preserved. When `stampFirstHumanResponse` is true and no first human turn
+   * has been recorded yet, `first_human_response_at` is set to now() so
+   * first-response time can be measured from the first operator reply.
+   */
+  async setConversationHandling(input: {
+    tenantId: string;
+    conversationId: string;
+    aiPaused?: boolean;
+    assignedUserId?: string | null;
+    stampFirstHumanResponse?: boolean;
+  }): Promise<ConversationRecord | null> {
+    assertTenantId(input.tenantId);
+    if (this.needsTenantScope(input.tenantId)) {
+      return this.withTenantScope<ConversationRecord | null>(
+        input.tenantId,
+        (repo) => repo.setConversationHandling(input),
+      );
+    }
+    const patch: Partial<typeof conversations.$inferInsert> = {
+      updatedAt: new Date(),
+    };
+    if (input.aiPaused !== undefined) {
+      patch.aiPaused = input.aiPaused;
+    }
+    if (input.assignedUserId !== undefined) {
+      patch.assignedUserId = input.assignedUserId;
+    }
+    if (input.stampFirstHumanResponse) {
+      // Only stamp the first human turn once; keep the original timestamp on
+      // later replies so the metric reflects time-to-first-response.
+      patch.firstHumanResponseAt =
+        sql`coalesce(${conversations.firstHumanResponseAt}, now())` as unknown as Date;
+    }
+    const [updated] = await this.db
+      .update(conversations)
+      .set(patch)
+      .where(
+        and(
+          eq(conversations.tenantId, input.tenantId),
+          eq(conversations.id, input.conversationId),
+        ),
+      )
+      .returning();
+    return updated ?? null;
+  }
+
+  /**
+   * Resolve everything an operator reply needs to reach the customer on the
+   * conversation's channel: the conversation itself, the provider account id and
+   * recipient recovered from the most recent inbound message, and when that
+   * inbound arrived (for the Meta 24-hour customer-service window check).
+   */
+  async getConversationReplyContext(input: {
+    tenantId: string;
+    conversationId: string;
+  }): Promise<{
+    conversation: ConversationRecord;
+    lastInboundAt: Date | null;
+    providerAccountId: string | null;
+    externalUserId: string | null;
+    externalConversationId: string | null;
+  } | null> {
+    assertTenantId(input.tenantId);
+    if (this.needsTenantScope(input.tenantId)) {
+      return this.withTenantScope(input.tenantId, (repo) =>
+        repo.getConversationReplyContext(input),
+      );
+    }
+    const [conversation] = await this.db
+      .select()
+      .from(conversations)
+      .where(
+        and(
+          eq(conversations.tenantId, input.tenantId),
+          eq(conversations.id, input.conversationId),
+        ),
+      )
+      .limit(1);
+    if (!conversation) {
+      return null;
+    }
+    const [lastInbound] = await this.db
+      .select()
+      .from(messages)
+      .where(
+        and(
+          eq(messages.tenantId, input.tenantId),
+          eq(messages.conversationId, input.conversationId),
+          eq(messages.direction, "inbound"),
+        ),
+      )
+      .orderBy(desc(messages.createdAt))
+      .limit(1);
+    const trace = (lastInbound?.trace ?? {}) as Record<string, unknown>;
+    return {
+      conversation,
+      lastInboundAt: lastInbound?.createdAt ?? null,
+      providerAccountId: readStringOrNull(trace.providerAccountId),
+      externalUserId:
+        conversation.externalUserId ?? readStringOrNull(trace.externalUserId),
+      externalConversationId: readStringOrNull(trace.externalConversationId),
+    };
+  }
+
+  /**
+   * The operator ("human takeover") turns a website widget must render for a
+   * visitor. Scoped by the opaque conversation public id the widget already
+   * holds, and to a single tenant, so one visitor can only ever pull their own
+   * conversation. Only outbound operator messages are returned — never inbound
+   * or AI turns (the widget already has those) — and never message traces.
+   */
+  async listOperatorRepliesForWidget(input: {
+    tenantId: string;
+    conversationPublicId: string;
+    since?: Date;
+    limit: number;
+  }): Promise<Array<{ id: string; text: string; createdAt: Date }>> {
+    assertTenantId(input.tenantId);
+    if (this.needsTenantScope(input.tenantId)) {
+      return this.withTenantScope(input.tenantId, (repo) =>
+        repo.listOperatorRepliesForWidget(input),
+      );
+    }
+    const [conversation] = await this.db
+      .select({ id: conversations.id })
+      .from(conversations)
+      .where(
+        and(
+          eq(conversations.tenantId, input.tenantId),
+          eq(conversations.publicId, input.conversationPublicId),
+          eq(conversations.channel, "website"),
+        ),
+      )
+      .limit(1);
+    if (!conversation) {
+      return [];
+    }
+    const conditions = [
+      eq(messages.tenantId, input.tenantId),
+      eq(messages.conversationId, conversation.id),
+      eq(messages.role, "operator"),
+      eq(messages.direction, "outbound"),
+    ];
+    if (input.since) {
+      conditions.push(gt(messages.createdAt, input.since));
+    }
+    const rows = await this.db
+      .select({
+        id: messages.id,
+        text: messages.content,
+        createdAt: messages.createdAt,
+      })
+      .from(messages)
+      .where(and(...conditions))
+      .orderBy(messages.createdAt)
+      .limit(Math.max(1, Math.min(input.limit, 100)));
+    return rows;
   }
 
   async listConversations(

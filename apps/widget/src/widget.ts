@@ -36,6 +36,13 @@ type ChatResponse = {
   status: "answered" | "refused" | "handoff";
   reply: string;
   handoffRecommended: boolean;
+  // "human" when an operator has taken over the conversation: the AI stays
+  // silent (empty reply) and the operator's replies arrive via polling.
+  handledBy?: "ai" | "human";
+};
+
+type OperatorMessagesResponse = {
+  messages: Array<{ id: string; text: string; createdAt: string }>;
 };
 
 type LeadCaptureResponse = {
@@ -64,6 +71,11 @@ type WidgetState = {
   leadCaptured?: boolean;
   readinessCaptured?: boolean;
   openTracked?: boolean;
+  // True once an operator has taken over, so the "connected to our team" note is
+  // only shown once.
+  humanHandling?: boolean;
+  // ISO timestamp of the newest operator reply already shown; the poll cursor.
+  operatorCursor?: string;
   sentAt: number[];
   messages: StoredMessage[];
   updatedAt: number;
@@ -123,6 +135,7 @@ type StringKey =
   | "chatError"
   | "chatRateLimited"
   | "typing"
+  | "humanConnected"
   | "openingMessage"
   | "leadFieldName"
   | "leadFieldEmail"
@@ -200,6 +213,8 @@ const STRINGS: Record<string, StringSet> = {
     chatRateLimited:
       "Bitte warten Sie einen Moment, bevor Sie weitere Nachrichten senden.",
     typing: "Schreibt ...",
+    humanConnected:
+      "Sie sind jetzt mit unserem Team verbunden. Wir antworten hier in Kürze.",
     openingMessage: "Hallo, wie kann ich helfen?",
     leadFieldName: "Name",
     leadFieldEmail: "E-Mail",
@@ -271,6 +286,8 @@ const STRINGS: Record<string, StringSet> = {
     chatError: "I can't send this message right now. Please try again later.",
     chatRateLimited: "Please wait a moment before sending more messages.",
     typing: "Typing ...",
+    humanConnected:
+      "You're now connected to our team. We'll reply here shortly.",
     openingMessage: "Hi, how can I help?",
     leadFieldName: "Name",
     leadFieldEmail: "Email",
@@ -293,6 +310,9 @@ const DEFAULT_LOCALE = "de";
 const STATE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const MAX_STORED_MESSAGES = 50;
 const MAX_STORED_MESSAGE_LENGTH = 4000;
+// How often the widget polls for operator ("human takeover") replies while the
+// panel is open.
+const OPERATOR_POLL_INTERVAL_MS = 5000;
 
 function resolveLocale(locale?: string) {
   if (!locale) {
@@ -885,6 +905,8 @@ void (() => {
         persistState(context.config.assistantId, state);
         void trackWidgetEvent(context, state, "widget_open");
       }
+      // Watch for operator ("human takeover") replies while the panel is open.
+      startOperatorPolling();
     }
 
     function closePanel() {
@@ -892,6 +914,7 @@ void (() => {
       launcherEl.style.display = "inline-flex";
       launcherEl.setAttribute("aria-expanded", "false");
       launcherEl.focus();
+      stopOperatorPolling();
     }
 
     launcher.addEventListener("click", openPanel);
@@ -1176,6 +1199,61 @@ void (() => {
       }
     });
 
+    let operatorPollTimer: ReturnType<typeof setInterval> | undefined;
+
+    function startOperatorPolling() {
+      if (operatorPollTimer || !state.conversationId) {
+        return;
+      }
+      // Poll once immediately so a reply that landed while the panel was closed
+      // appears on open, then keep polling on an interval.
+      void pollOperatorRepliesOnce();
+      operatorPollTimer = setInterval(() => {
+        void pollOperatorRepliesOnce();
+      }, OPERATOR_POLL_INTERVAL_MS);
+    }
+
+    function stopOperatorPolling() {
+      if (operatorPollTimer) {
+        clearInterval(operatorPollTimer);
+        operatorPollTimer = undefined;
+      }
+    }
+
+    async function pollOperatorRepliesOnce() {
+      const conversationId = state.conversationId;
+      if (!conversationId) {
+        return;
+      }
+      let response: OperatorMessagesResponse;
+      try {
+        const params = new URLSearchParams({
+          assistantId: context.config.assistantId,
+        });
+        if (state.operatorCursor) {
+          params.set("since", state.operatorCursor);
+        }
+        response = await fetchJson<OperatorMessagesResponse>(
+          `${context.apiBase}/widget/conversations/${encodeURIComponent(
+            conversationId,
+          )}/messages?${params.toString()}`,
+        );
+      } catch {
+        // A transient failure is fine; the next tick retries.
+        return;
+      }
+      if (!response.messages.length) {
+        return;
+      }
+      for (const message of response.messages) {
+        state.messages.push({ role: "assistant", text: message.text });
+        state.operatorCursor = message.createdAt;
+      }
+      state.humanHandling = true;
+      persistState(context.config.assistantId, state);
+      drawMessages(messagesEl, state.messages, context.config.theme);
+    }
+
     async function sendChatMessage(text: string) {
       if (!text) {
         return;
@@ -1220,8 +1298,19 @@ void (() => {
         );
 
         state.conversationId = response.conversationId;
-        state.messages.push({ role: "assistant", text: response.reply });
+        if (response.handledBy === "human" && !state.humanHandling) {
+          // A human has taken over; note it once. The AI sends no reply now, so
+          // there is no assistant bubble to add — the operator's replies arrive
+          // through polling below.
+          state.humanHandling = true;
+          state.messages.push({ role: "assistant", text: t("humanConnected") });
+        }
+        if (response.reply) {
+          state.messages.push({ role: "assistant", text: response.reply });
+        }
         persistState(context.config.assistantId, state);
+        // Ensure we are watching for the operator's reply (the panel is open).
+        startOperatorPolling();
       } catch {
         state.messages.push({
           role: "assistant",
@@ -1301,6 +1390,8 @@ void (() => {
     delete state.leadCaptured;
     delete state.readinessCaptured;
     delete state.openTracked;
+    delete state.humanHandling;
+    delete state.operatorCursor;
     state.sentAt = next.sentAt;
     state.messages = next.messages;
     state.updatedAt = next.updatedAt;
@@ -1434,6 +1525,10 @@ void (() => {
       ...(value.leadCaptured === true ? { leadCaptured: true } : {}),
       ...(value.readinessCaptured === true ? { readinessCaptured: true } : {}),
       ...(value.openTracked === true ? { openTracked: true } : {}),
+      ...(value.humanHandling === true ? { humanHandling: true } : {}),
+      ...(typeof value.operatorCursor === "string"
+        ? { operatorCursor: value.operatorCursor }
+        : {}),
       sentAt,
       messages,
       updatedAt:

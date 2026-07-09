@@ -2,6 +2,7 @@ import {
   MetaMessengerAdapter,
   type NormalizedInboundEvent,
   type DeliveryResult,
+  type OutboundMessage,
   verifyMetaSignature,
   WhatsAppCloudAdapter,
   WebsiteAdapter,
@@ -81,6 +82,8 @@ import {
   KnowledgeDocumentUploadSchema,
   ScanKnowledgeSuggestionsSchema,
   UpdateHandoffSchema,
+  OperatorReplySchema,
+  UpdateConversationHandlingSchema,
   TestAssistantSchema,
   WidgetChatSchema,
   WidgetLeadSchema,
@@ -92,6 +95,8 @@ import {
   CreatePortalLinkSchema,
   PortalDetailsSchema,
   MetaWebhookQuerySchema,
+  ParamsWidgetConversationSchema,
+  WidgetMessagesQuerySchema,
   ChannelConnectionSchema,
   TelephoneProviderSchema,
   TelephoneNumberTypeSchema,
@@ -682,7 +687,44 @@ export type PlatformStore = AnswerDataStore &
       externalUserId?: string;
       locale?: string;
       contact?: ContactProfileInput;
-    }): Promise<{ id: string; publicId: string }>;
+    }): Promise<{ id: string; publicId: string; aiPaused: boolean }>;
+    setConversationHandling(input: {
+      tenantId: string;
+      conversationId: string;
+      aiPaused?: boolean;
+      assignedUserId?: string | null;
+      stampFirstHumanResponse?: boolean;
+    }): Promise<{
+      id: string;
+      publicId: string;
+      aiPaused: boolean;
+      assignedUserId: string | null;
+      firstHumanResponseAt: Date | null;
+    } | null>;
+    getConversationReplyContext(input: {
+      tenantId: string;
+      conversationId: string;
+    }): Promise<{
+      conversation: {
+        id: string;
+        publicId: string;
+        channel: string;
+        externalUserId: string | null;
+        aiPaused: boolean;
+        assignedUserId: string | null;
+        firstHumanResponseAt: Date | null;
+      };
+      lastInboundAt: Date | null;
+      providerAccountId: string | null;
+      externalUserId: string | null;
+      externalConversationId: string | null;
+    } | null>;
+    listOperatorRepliesForWidget(input: {
+      tenantId: string;
+      conversationPublicId: string;
+      since?: Date;
+      limit: number;
+    }): Promise<Array<{ id: string; text: string; createdAt: Date }>>;
     captureWebsiteLead(input: {
       tenantId: string;
       channel: Channel;
@@ -704,8 +746,9 @@ export type PlatformStore = AnswerDataStore &
       conversationId: string;
       channel: Channel;
       direction: "inbound" | "outbound";
-      role: "user" | "assistant" | "system";
+      role: "user" | "assistant" | "system" | "operator";
       content: string;
+      authorUserId?: string | null;
       trace?: Record<string, unknown>;
     }): Promise<unknown>;
     logUsage(input: {
@@ -3665,6 +3708,142 @@ export async function buildServer(
     },
   );
 
+  // Operator human-takeover reply: send a human message to the customer on the
+  // conversation's own channel. Sending takes over the conversation (pausing the
+  // AI and assigning it to the acting operator). `allowPlatformBypass:false`
+  // keeps this behind a real tenant membership — the platform admin token, which
+  // holds no membership, cannot reach it (the R4 privacy boundary).
+  app.post(
+    "/admin/tenants/:tenantId/conversations/:conversationId/messages",
+    {
+      preHandler: requireTenantAccess(options, "operator", {
+        allowPlatformBypass: false,
+      }),
+    },
+    async (request, reply) => {
+      const { tenantId, conversationId } = ParamsConversationSchema.parse(
+        request.params,
+      );
+      const body = OperatorReplySchema.parse(request.body);
+      const auth = getRequestAuth(request);
+      const operatorUserId = auth.kind === "user" ? auth.user.id : null;
+
+      const context = await options.store.getConversationReplyContext({
+        tenantId,
+        conversationId,
+      });
+      if (!context) {
+        return reply.code(404).send({ error: "Conversation not found." });
+      }
+
+      const channel = context.conversation.channel as Channel;
+      const adapter =
+        channel === "whatsapp" ||
+        channel === "messenger" ||
+        channel === "instagram"
+          ? metaAdapters[channel]
+          : channel === "website"
+            ? websiteAdapter
+            : null;
+      if (!adapter) {
+        return reply.code(400).send({
+          error: `Human replies are not supported on the ${channel} channel yet.`,
+        });
+      }
+
+      await options.store.setConversationHandling({
+        tenantId,
+        conversationId,
+        aiPaused: true,
+        assignedUserId: operatorUserId,
+        stampFirstHumanResponse: true,
+      });
+
+      const { delivery, message } = await deliverOutbound({
+        store: options.store,
+        adapter,
+        tenantId,
+        conversationId,
+        channel,
+        text: body.text,
+        role: "operator",
+        authorUserId: operatorUserId,
+        routing: {
+          providerAccountId: context.providerAccountId,
+          externalConversationId: context.externalConversationId,
+          externalUserId: context.externalUserId,
+        },
+        lastInboundAt: context.lastInboundAt ?? new Date(),
+      });
+
+      await recordPiiAccess(
+        options,
+        request,
+        tenantId,
+        "conversation.operator_reply.sent",
+        "conversation",
+        conversationId,
+        { channel, deliveryStatus: delivery.status },
+      );
+
+      return reply.code(201).send({
+        conversationId,
+        message,
+        delivery: {
+          status: delivery.status,
+          detail: delivery.detail ?? null,
+          providerMessageId: delivery.providerMessageId ?? null,
+        },
+      });
+    },
+  );
+
+  // Take over a conversation from the AI (aiPaused=true, assigned to the acting
+  // operator) or hand it back (aiPaused=false, assignee cleared).
+  app.patch(
+    "/admin/tenants/:tenantId/conversations/:conversationId/handling",
+    {
+      preHandler: requireTenantAccess(options, "operator", {
+        allowPlatformBypass: false,
+      }),
+    },
+    async (request, reply) => {
+      const { tenantId, conversationId } = ParamsConversationSchema.parse(
+        request.params,
+      );
+      const body = UpdateConversationHandlingSchema.parse(request.body);
+      const auth = getRequestAuth(request);
+      const operatorUserId = auth.kind === "user" ? auth.user.id : null;
+
+      const updated = await options.store.setConversationHandling({
+        tenantId,
+        conversationId,
+        aiPaused: body.aiPaused,
+        assignedUserId: body.aiPaused ? operatorUserId : null,
+      });
+      if (!updated) {
+        return reply.code(404).send({ error: "Conversation not found." });
+      }
+
+      await recordPiiAccess(
+        options,
+        request,
+        tenantId,
+        body.aiPaused ? "conversation.taken_over" : "conversation.released",
+        "conversation",
+        conversationId,
+        {},
+      );
+
+      return {
+        conversationId,
+        aiPaused: updated.aiPaused,
+        assignedUserId: updated.assignedUserId,
+        firstHumanResponseAt: updated.firstHumanResponseAt,
+      };
+    },
+  );
+
   app.post(
     "/admin/tenants/:tenantId/test-assistant",
     {
@@ -4156,6 +4335,19 @@ export async function buildServer(
         content: event.text,
       });
 
+      // Human takeover: when an operator owns the conversation the AI stays
+      // silent. The visitor's message is recorded above; the operator's reply is
+      // delivered to the widget by polling the messages endpoint below.
+      if (conversation.aiPaused) {
+        return {
+          conversationId: conversation.publicId,
+          status: "handoff" as const,
+          reply: "",
+          handoffRecommended: true,
+          handledBy: "human" as const,
+        };
+      }
+
       const answerStartedAtMs = Date.now();
       let answer: AnswerResult;
       try {
@@ -4216,6 +4408,60 @@ export async function buildServer(
         reply: answer.text,
         citations: answer.citations,
         handoffRecommended: answer.handoffRecommended,
+        handledBy: "ai" as const,
+      };
+    },
+  );
+
+  // Widget poll for operator ("human takeover") replies. The visitor's widget
+  // calls this on an interval while the panel is open, passing the opaque
+  // conversation public id it already holds and a `since` cursor. Returns only
+  // the business's operator turns after that cursor — never inbound content, AI
+  // turns, or message traces — scoped to the one conversation and tenant.
+  app.get(
+    "/widget/conversations/:conversationId/messages",
+    {
+      config: {
+        // A polling client is chattier than a sender; allow more headroom than
+        // /widget/chat but still bound one visitor's request rate.
+        rateLimit: { max: 120, timeWindow: "1 minute" },
+      },
+    },
+    async (request, reply) => {
+      const { conversationId } = ParamsWidgetConversationSchema.parse(
+        request.params,
+      );
+      const query = WidgetMessagesQuerySchema.parse(request.query);
+      const tenant = await options.store.getTenantByPublicId(query.assistantId);
+      if (!tenant) {
+        return reply.code(404).send({ error: "Assistant not found." });
+      }
+
+      const listInput: {
+        tenantId: string;
+        conversationPublicId: string;
+        since?: Date;
+        limit: number;
+      } = {
+        tenantId: tenant.id,
+        conversationPublicId: conversationId,
+        limit: 50,
+      };
+      if (query.since) {
+        listInput.since = new Date(query.since);
+      }
+      const messages =
+        await options.store.listOperatorRepliesForWidget(listInput);
+
+      return {
+        messages: messages.map((item) => ({
+          id: item.id,
+          text: item.text,
+          createdAt:
+            item.createdAt instanceof Date
+              ? item.createdAt.toISOString()
+              : item.createdAt,
+        })),
       };
     },
   );
@@ -6514,6 +6760,99 @@ function buildChannelConnectionDashboard(input: {
   ];
 }
 
+/**
+ * Send one outbound turn on a channel and durably record it: run the channel
+ * messaging-window policy, hand the text to the adapter, persist the outbound
+ * message (attributed to the AI or a human operator), and record the delivery
+ * outcome for analytics and retry. Shared by the inbound AI pipeline and the
+ * operator-reply route so both deliver through identical send + persist logic.
+ */
+async function deliverOutbound(input: {
+  store: PlatformStore;
+  adapter: ChannelAdapter;
+  tenantId: string;
+  conversationId: string;
+  channel: Channel;
+  text: string;
+  role: "assistant" | "operator";
+  authorUserId?: string | null;
+  routing: {
+    providerAccountId?: string | null | undefined;
+    externalConversationId?: string | null | undefined;
+    externalUserId?: string | null | undefined;
+  };
+  lastInboundAt: Date;
+  trace?: Record<string, unknown>;
+}): Promise<{
+  delivery: DeliveryResult;
+  message: unknown;
+  sendPolicy: { allowed: boolean; reason?: string };
+}> {
+  const outboundMessage: OutboundMessage = {
+    tenantId: input.tenantId,
+    channel: input.channel,
+    provider: input.adapter.provider,
+    text: input.text,
+  };
+  if (input.routing.providerAccountId) {
+    outboundMessage.providerAccountId = input.routing.providerAccountId;
+  }
+  if (input.routing.externalConversationId) {
+    outboundMessage.externalConversationId =
+      input.routing.externalConversationId;
+  }
+  if (input.routing.externalUserId) {
+    outboundMessage.externalUserId = input.routing.externalUserId;
+  }
+
+  const sendPolicy = evaluateAutomatedReplyPolicy({
+    channel: input.channel,
+    provider: input.adapter.provider,
+    lastInboundAt: input.lastInboundAt,
+  });
+  const delivery: DeliveryResult = sendPolicy.allowed
+    ? await input.adapter.sendMessage(outboundMessage)
+    : {
+        status: "skipped" as const,
+        detail:
+          sendPolicy.reason ?? "Outbound reply blocked by channel policy.",
+      };
+
+  const message = await input.store.addMessage({
+    tenantId: input.tenantId,
+    conversationId: input.conversationId,
+    channel: input.channel,
+    direction: "outbound",
+    role: input.role,
+    content: input.text,
+    authorUserId: input.authorUserId ?? null,
+    trace: { ...(input.trace ?? {}), delivery, sendPolicy },
+  });
+
+  await input.store.recordMessageDelivery({
+    tenantId: input.tenantId,
+    messageId: getStringProperty(message, "id") ?? null,
+    conversationId: input.conversationId,
+    channel: input.channel,
+    provider: input.adapter.provider,
+    providerMessageId: delivery.providerMessageId ?? null,
+    status: delivery.status,
+    detail: delivery.detail ?? null,
+    metadata: {
+      providerAccountId: input.routing.providerAccountId ?? undefined,
+      externalConversationId: input.routing.externalConversationId ?? undefined,
+      externalUserId: input.routing.externalUserId ?? undefined,
+      sendPolicy,
+      // Persist retry eligibility and an attempt counter so the delivery-retry
+      // worker can pick up transient failures and re-send them.
+      retryable: delivery.status === "failed" && delivery.retryable === true,
+      attempts: 0,
+    },
+  });
+
+  return { delivery, message, sendPolicy };
+}
+
 async function processChannelInboundEvent(input: {
   options: BuildServerOptions;
   engine: ReturnType<typeof createAnswerEngine>;
@@ -6551,9 +6890,24 @@ async function processChannelInboundEvent(input: {
     trace: {
       provider: input.event.provider,
       providerAccountId: input.event.providerAccountId,
+      externalConversationId: input.event.externalConversationId,
+      externalUserId: input.event.externalUserId,
       raw: input.event.raw,
     },
   });
+
+  // Human takeover: when an operator owns the conversation the answer engine
+  // stays silent. The inbound message is already recorded above, so it surfaces
+  // in the inbox for the operator to answer; we send nothing automatically.
+  if (conversation.aiPaused) {
+    return {
+      conversationId: conversation.publicId,
+      answerStatus: "paused" as const,
+      deliveryStatus: "skipped" as const,
+      deliveryDetail:
+        "Conversation is handled by a human operator; automated reply suppressed.",
+    };
+  }
 
   const inboundMessage = InboundMessageSchema.parse({
     tenantId: input.tenant.id,
@@ -6578,73 +6932,21 @@ async function processChannelInboundEvent(input: {
     status: answer.status,
   });
 
-  const outboundMessage = {
+  const { delivery } = await deliverOutbound({
+    store: input.options.store,
+    adapter: input.adapter,
     tenantId: input.tenant.id,
+    conversationId: conversation.id,
     channel: input.event.channel,
-    provider: input.adapter.provider,
     text: answer.text,
-  };
-  if (input.event.providerAccountId) {
-    Object.assign(outboundMessage, {
-      providerAccountId: input.event.providerAccountId,
-    });
-  }
-  if (input.event.externalConversationId) {
-    Object.assign(outboundMessage, {
-      externalConversationId: input.event.externalConversationId,
-    });
-  }
-  if (input.event.externalUserId) {
-    Object.assign(outboundMessage, {
-      externalUserId: input.event.externalUserId,
-    });
-  }
-  const sendPolicy = evaluateAutomatedReplyPolicy({
-    channel: input.event.channel,
-    provider: input.adapter.provider,
-    lastInboundAt: getDateProperty(inboundRecord, "createdAt") ?? new Date(),
-  });
-  const delivery: DeliveryResult = sendPolicy.allowed
-    ? await input.adapter.sendMessage(outboundMessage)
-    : {
-        status: "skipped" as const,
-        detail:
-          sendPolicy.reason ?? "Outbound reply blocked by channel policy.",
-      };
-
-  const outboundRecord = await input.options.store.addMessage({
-    tenantId: input.tenant.id,
-    conversationId: conversation.id,
-    channel: input.event.channel,
-    direction: "outbound",
     role: "assistant",
-    content: answer.text,
-    trace: {
-      answer,
-      delivery,
-      sendPolicy,
-    },
-  });
-
-  await input.options.store.recordMessageDelivery({
-    tenantId: input.tenant.id,
-    messageId: getStringProperty(outboundRecord, "id") ?? null,
-    conversationId: conversation.id,
-    channel: input.event.channel,
-    provider: input.adapter.provider,
-    providerMessageId: delivery.providerMessageId ?? null,
-    status: delivery.status,
-    detail: delivery.detail ?? null,
-    metadata: {
+    routing: {
       providerAccountId: input.event.providerAccountId,
       externalConversationId: input.event.externalConversationId,
       externalUserId: input.event.externalUserId,
-      sendPolicy,
-      // Persist retry eligibility and an attempt counter so the delivery-retry
-      // worker can pick up transient failures and re-send them.
-      retryable: delivery.status === "failed" && delivery.retryable === true,
-      attempts: 0,
     },
+    lastInboundAt: getDateProperty(inboundRecord, "createdAt") ?? new Date(),
+    trace: { answer },
   });
   input.metrics.messageDeliveryTotal.inc({
     channel: input.event.channel,

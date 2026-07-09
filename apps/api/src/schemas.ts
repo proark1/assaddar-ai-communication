@@ -271,6 +271,19 @@ export const TestAssistantSchema = z.object({
   locale: z.string().min(2).max(16).optional(),
 });
 
+// An operator's human-takeover reply, sent back to the customer on the
+// conversation's own channel.
+export const OperatorReplySchema = z.object({
+  text: z.string().trim().min(1).max(4000),
+});
+
+// Toggle whether the AI or a human owns a conversation. Pausing the AI assigns
+// the conversation to the acting operator; resuming hands it back and clears the
+// assignee (handled in the route).
+export const UpdateConversationHandlingSchema = z.object({
+  aiPaused: z.boolean(),
+});
+
 export const WidgetChatSchema = z.object({
   assistantId: z.string().min(8),
   message: z.string().min(1).max(1200),
@@ -355,6 +368,18 @@ export const PortalDetailsSchema = z.object({
 
 export const MetaWebhookQuerySchema = z.object({
   assistantId: z.string().min(8).optional(),
+});
+
+// Widget poll for operator ("human takeover") replies. The opaque conversation
+// public id in the path plus the assistant id in the query together scope the
+// lookup to one visitor's own conversation.
+export const ParamsWidgetConversationSchema = z.object({
+  conversationId: z.string().min(8).max(80),
+});
+
+export const WidgetMessagesQuerySchema = z.object({
+  assistantId: z.string().min(8),
+  since: z.string().datetime().optional(),
 });
 
 export const ChannelConnectionSchema = z.object({

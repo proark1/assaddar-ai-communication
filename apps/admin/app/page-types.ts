@@ -91,6 +91,11 @@ export type Conversation = {
   externalUserId?: string | null;
   status: string;
   locale: string;
+  // Human-takeover state: aiPaused true means an operator owns the conversation
+  // and the AI stays silent. assignedUserId is the teammate handling it.
+  aiPaused?: boolean;
+  assignedUserId?: string | null;
+  firstHumanResponseAt?: string | null;
   createdAt: string;
   updatedAt?: string;
 };

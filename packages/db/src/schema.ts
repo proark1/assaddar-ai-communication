@@ -962,6 +962,18 @@ export const conversations = pgTable(
     status: text("status").notNull().default("open"),
     locale: text("locale").notNull().default("en"),
     summary: text("summary"),
+    // Human takeover state. While aiPaused is true the answer engine stays silent
+    // for this conversation and only an operator's reply reaches the customer.
+    aiPaused: boolean("ai_paused").notNull().default(false),
+    // The teammate currently handling the conversation (a real users FK, unlike
+    // the advisory free-text handoffRequests.assignedTo). Null when the AI owns it.
+    assignedUserId: uuid("assigned_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    // Timestamp of the first human turn, used to measure first-response time.
+    firstHumanResponseAt: timestamp("first_human_response_at", {
+      withTimezone: true,
+    }),
     metadata: jsonb("metadata")
       .$type<Record<string, unknown>>()
       .notNull()
@@ -1016,6 +1028,11 @@ export const messages = pgTable(
     role: text("role").notNull(),
     content: text("content").notNull(),
     status: text("status").notNull().default("stored"),
+    // The operator who authored a human ("operator") turn. Null for AI
+    // ("assistant"), "user", and "system" messages.
+    authorUserId: uuid("author_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
     trace: jsonb("trace")
       .$type<Record<string, unknown>>()
       .notNull()
@@ -1030,6 +1047,10 @@ export const messages = pgTable(
       table.conversationId,
     ),
     index("messages_created_idx").on(table.createdAt),
+    // Website widget poll path: operator turns in one conversation, by time.
+    index("messages_conversation_operator_idx")
+      .on(table.conversationId, table.createdAt)
+      .where(sql`${table.role} = 'operator'`),
   ],
 );
 
