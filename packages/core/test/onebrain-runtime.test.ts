@@ -123,6 +123,38 @@ describe("answerWithOneBrainFallback", () => {
     });
   });
 
+  it("fails closed when OneBrain is required and provider is not configured", async () => {
+    let localCalled = false;
+    const result = await answerWithOneBrainFallback({
+      tenant: { id: tenantId, slug: "tenant-one" },
+      message,
+      oneBrain: {
+        enabled: true,
+        provider: null,
+        env: { ONEBRAIN_REQUIRED: "true" },
+      },
+      localAnswer: async () => {
+        localCalled = true;
+        return localAnswer("Should not be used.");
+      },
+    });
+
+    expect(localCalled).toBe(false);
+    expect(result).toMatchObject({
+      status: "handoff",
+      intent: "onebrain_unavailable",
+      handoffRecommended: true,
+      handoffReason: "onebrain_required",
+      trace: [
+        {
+          step: "onebrain_answer",
+          outcome: "failed",
+          detail: "not_configured",
+        },
+      ],
+    });
+  });
+
   it("falls back locally when OneBrain returns an empty answer", async () => {
     const provider: BrainProvider = {
       kind: "onebrain",
@@ -175,6 +207,46 @@ describe("answerWithOneBrainFallback", () => {
       step: "onebrain_answer",
       outcome: "failed",
       detail: "error",
+    });
+  });
+
+  it("fails closed when fallback is disabled and OneBrain fails", async () => {
+    let localCalled = false;
+    const provider: BrainProvider = {
+      kind: "onebrain",
+      async intake() {
+        throw new Error("not used");
+      },
+      async ask() {
+        throw new Error("service unavailable");
+      },
+    };
+
+    const result = await answerWithOneBrainFallback({
+      tenant: { id: tenantId, slug: "tenant-one" },
+      message,
+      oneBrain: {
+        enabled: true,
+        provider,
+        env: { ONEBRAIN_FALLBACK_ENABLED: "false" },
+      },
+      localAnswer: async () => {
+        localCalled = true;
+        return localAnswer("Should not be used.");
+      },
+    });
+
+    expect(localCalled).toBe(false);
+    expect(result).toMatchObject({
+      status: "handoff",
+      intent: "onebrain_unavailable",
+      trace: [
+        {
+          step: "onebrain_answer",
+          outcome: "failed",
+          detail: "error",
+        },
+      ],
     });
   });
 

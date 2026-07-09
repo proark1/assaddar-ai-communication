@@ -141,9 +141,11 @@ exists:
 
 ```text
 ONEBRAIN_API_BASE_URL=https://your-onebrain-api-domain
-ONEBRAIN_SERVICE_KEY=obk_...
+ONEBRAIN_SERVICE_KEY=sk_...
 ONEBRAIN_SPACE_ID=sp_customer_service
 ONEBRAIN_ANSWER_ENABLED=true
+ONEBRAIN_REQUIRED=true
+ONEBRAIN_FALLBACK_ENABLED=false
 ONEBRAIN_SYNC_ENABLED=true
 ONEBRAIN_SYNC_INTERVAL_MS=3600000
 ONEBRAIN_KNOWLEDGE_EXPORT_LIMIT=50
@@ -185,6 +187,9 @@ Rollout checklist:
    ```bash
    ONEBRAIN_SMOKE_INTAKE=true pnpm smoke:onebrain
    ```
+
+   Leave synthetic intake enabled for staging checks and disabled for routine
+   production liveness unless smoke records are covered by cleanup/retention.
 
 7. Enable runtime answering with `ONEBRAIN_ANSWER_ENABLED=true` on API and
    voice. Confirm answer traces show `onebrain_answer` passed, skipped, or

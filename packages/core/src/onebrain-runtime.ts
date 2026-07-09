@@ -20,6 +20,8 @@ export type OneBrainRuntimeTenant = {
 
 export type OneBrainRuntimeAnswerEnv = {
   ONEBRAIN_ACCOUNT_ID?: string | undefined;
+  ONEBRAIN_FALLBACK_ENABLED?: string | undefined;
+  ONEBRAIN_REQUIRED?: string | undefined;
   ONEBRAIN_SPACE_ID?: string | undefined;
 };
 
@@ -45,7 +47,12 @@ export async function answerWithOneBrainFallback(
     return input.localAnswer();
   }
 
+  const fallbackEnabled = isOneBrainFallbackEnabled(settings.env);
+  const required = isOneBrainRequired(settings.env);
   if (!settings.enabled) {
+    if (required || !fallbackEnabled) {
+      return oneBrainUnavailableResult(input, "disabled");
+    }
     return withOneBrainTrace(await input.localAnswer(), {
       step: "onebrain_answer",
       outcome: "skipped",
@@ -54,6 +61,9 @@ export async function answerWithOneBrainFallback(
   }
 
   if (!settings.provider) {
+    if (required || !fallbackEnabled) {
+      return oneBrainUnavailableResult(input, "not_configured");
+    }
     return withOneBrainTrace(await input.localAnswer(), {
       step: "onebrain_answer",
       outcome: "skipped",
@@ -68,6 +78,9 @@ export async function answerWithOneBrainFallback(
     });
     const answer = sanitizeOneBrainAnswer(result.answer);
     if (!answer) {
+      if (required || !fallbackEnabled) {
+        return oneBrainUnavailableResult(input, "empty_answer");
+      }
       return withOneBrainTrace(await input.localAnswer(), {
         step: "onebrain_answer",
         outcome: "failed",
@@ -95,12 +108,42 @@ export async function answerWithOneBrainFallback(
     };
   } catch (error) {
     input.onOneBrainError?.(error);
+    if (required || !fallbackEnabled) {
+      return oneBrainUnavailableResult(input, "error");
+    }
     return withOneBrainTrace(await input.localAnswer(), {
       step: "onebrain_answer",
       outcome: "failed",
       detail: "error",
     });
   }
+}
+
+function oneBrainUnavailableResult(
+  input: OneBrainRuntimeAnswerInput,
+  detail: string,
+): AnswerResult {
+  const text =
+    "OneBrain is temporarily unavailable, so this conversation needs human follow-up.";
+  return {
+    status: "handoff",
+    tenantId: input.message.tenantId,
+    channel: input.message.channel,
+    text,
+    confidence: 0,
+    intent: "onebrain_unavailable",
+    citations: [],
+    handoffRecommended: true,
+    handoffReason: "onebrain_required",
+    usage: estimateOneBrainUsage(input.message.text, text),
+    trace: [
+      {
+        step: "onebrain_answer",
+        outcome: "failed",
+        detail,
+      },
+    ],
+  };
 }
 
 export function buildOneBrainRuntimeScope(
@@ -138,6 +181,28 @@ function withOneBrainTrace(
 function sanitizeOneBrainAnswer(value: string | null | undefined) {
   const trimmed = value?.trim() ?? "";
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function isOneBrainRequired(env: OneBrainRuntimeAnswerEnv | undefined) {
+  return parseBoolean(env?.ONEBRAIN_REQUIRED, false);
+}
+
+function isOneBrainFallbackEnabled(env: OneBrainRuntimeAnswerEnv | undefined) {
+  return parseBoolean(env?.ONEBRAIN_FALLBACK_ENABLED, true);
+}
+
+function parseBoolean(value: string | undefined, fallback: boolean) {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) {
+    return fallback;
+  }
+  if (["1", "true", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "no", "off"].includes(normalized)) {
+    return false;
+  }
+  return fallback;
 }
 
 function estimateOneBrainUsage(input: string, output: string): UsageEstimate {
