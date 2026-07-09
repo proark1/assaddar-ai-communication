@@ -54,6 +54,20 @@ export type WebhookVerificationRequest = {
   challenge?: string;
 };
 
+/**
+ * A provider delivery/read receipt for a previously-sent outbound message,
+ * matched back to a stored delivery by `providerMessageId`. `status` is the new
+ * lifecycle state; callers advance a delivery only forwards
+ * (sent → delivered → read) and treat `failed` as a terminal async rejection.
+ */
+export type DeliveryStatusUpdate = {
+  providerMessageId: string;
+  status: "sent" | "delivered" | "read" | "failed";
+  timestamp?: string;
+  recipientId?: string;
+  error?: { code?: number; title?: string; detail?: string };
+};
+
 export type ChannelAdapter = {
   channel: Channel;
   provider: string;
@@ -62,6 +76,11 @@ export type ChannelAdapter = {
     payload: unknown,
     tenantId: string,
   ): NormalizedInboundEvent[];
+  /**
+   * Parse provider delivery/read status callbacks out of a webhook payload.
+   * Optional: channels without status callbacks (website, voice) omit it.
+   */
+  normalizeStatusUpdates?(payload: unknown): DeliveryStatusUpdate[];
   sendMessage(message: OutboundMessage): Promise<DeliveryResult>;
 };
 

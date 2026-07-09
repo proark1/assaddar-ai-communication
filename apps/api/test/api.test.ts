@@ -414,7 +414,11 @@ class MemoryPlatformStore
       (delivery) => delivery.status === "failed",
     ).length;
     const deliveriesSent = this.deliveries.filter(
-      (delivery) => delivery.status === "sent" || delivery.status === "queued",
+      (delivery) =>
+        delivery.status === "sent" ||
+        delivery.status === "queued" ||
+        delivery.status === "delivered" ||
+        delivery.status === "read",
     ).length;
     const attempted = deliveriesFailed + deliveriesSent;
     return {
@@ -2681,6 +2685,45 @@ class MemoryPlatformStore
         updatedAt: new Date(),
       });
     }
+  }
+
+  async applyDeliveryStatusCallback(input: Record<string, unknown>) {
+    const delivery = this.deliveries.find(
+      (item) =>
+        item.tenantId === input.tenantId &&
+        item.providerMessageId != null &&
+        item.providerMessageId === input.providerMessageId,
+    );
+    if (!delivery) {
+      return { matched: false, applied: false };
+    }
+    const rank = (status: unknown) => {
+      switch (status) {
+        case "queued":
+        case "pending":
+          return 0;
+        case "sent":
+          return 1;
+        case "delivered":
+          return 2;
+        case "read":
+          return 3;
+        default:
+          return -1;
+      }
+    };
+    if (delivery.status === "read" || delivery.status === "failed") {
+      return { matched: true, applied: false };
+    }
+    if (
+      input.status !== "failed" &&
+      rank(input.status) <= rank(delivery.status)
+    ) {
+      return { matched: true, applied: false };
+    }
+    delivery.status = input.status;
+    delivery.updatedAt = new Date();
+    return { matched: true, applied: true };
   }
 
   async listWhatsappTemplates(tenantId: string) {
@@ -5825,6 +5868,131 @@ describe("API", () => {
     expect(
       store.messages.filter((message) => message.direction === "outbound"),
     ).toHaveLength(1);
+    await app.close();
+  });
+
+  it("advances a delivery through provider status callbacks", async () => {
+    const store = new MemoryPlatformStore();
+    globalThis.fetch = vi.fn(async () => {
+      return new Response(JSON.stringify({ messages: [{ id: "wamid.ok" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+      whatsappAccessToken: "whatsapp-token",
+    });
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+    await store.addFaq(tenant.id, {
+      question: "What do you do?",
+      answer: "We implement practical AI automation.",
+    });
+    await store.upsertChannelConnection(tenant.id, {
+      channel: "whatsapp",
+      provider: "meta-whatsapp-cloud",
+      externalAccountId: "phone-number-1",
+      status: "connected",
+    });
+
+    // Inbound message → AI reply → a delivery is recorded with the provider id.
+    await app.inject({
+      method: "POST",
+      url: "/webhooks/meta/whatsapp",
+      payload: {
+        entry: [
+          {
+            changes: [
+              {
+                value: {
+                  metadata: { phone_number_id: "phone-number-1" },
+                  messages: [
+                    {
+                      id: "wamid.in",
+                      from: "491701234567",
+                      text: { body: "What do you do?" },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+    const findDelivery = () =>
+      store.deliveries.find((item) => item.providerMessageId === "wamid.ok");
+    expect(findDelivery()?.status).toBe("sent");
+
+    const statusPayload = (status: string) => ({
+      entry: [
+        {
+          changes: [
+            {
+              value: {
+                metadata: { phone_number_id: "phone-number-1" },
+                statuses: [
+                  { id: "wamid.ok", status, recipient_id: "491701234567" },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    const delivered = await app.inject({
+      method: "POST",
+      url: "/webhooks/meta/whatsapp",
+      payload: statusPayload("delivered"),
+    });
+    expect(delivered.json<{ statusApplied: number }>().statusApplied).toBe(1);
+    expect(findDelivery()?.status).toBe("delivered");
+
+    await app.inject({
+      method: "POST",
+      url: "/webhooks/meta/whatsapp",
+      payload: statusPayload("read"),
+    });
+    expect(findDelivery()?.status).toBe("read");
+
+    // A stale/out-of-order callback does not downgrade a delivery.
+    const stale = await app.inject({
+      method: "POST",
+      url: "/webhooks/meta/whatsapp",
+      payload: statusPayload("sent"),
+    });
+    expect(stale.json<{ statusApplied: number }>().statusApplied).toBe(0);
+    expect(findDelivery()?.status).toBe("read");
+
+    // An unknown message id matches nothing and is a safe no-op.
+    const unknown = await app.inject({
+      method: "POST",
+      url: "/webhooks/meta/whatsapp",
+      payload: {
+        entry: [
+          {
+            changes: [
+              {
+                value: {
+                  metadata: { phone_number_id: "phone-number-1" },
+                  statuses: [{ id: "wamid.unknown", status: "delivered" }],
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+    expect(
+      unknown.json<{ statusUpdates: number; statusApplied: number }>(),
+    ).toMatchObject({ statusUpdates: 1, statusApplied: 0 });
+
     await app.close();
   });
 

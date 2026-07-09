@@ -788,6 +788,14 @@ export type PlatformStore = AnswerDataStore &
       detail?: string | null;
       metadata?: Record<string, unknown>;
     }): Promise<void>;
+    applyDeliveryStatusCallback(input: {
+      tenantId: string;
+      providerMessageId: string;
+      status: "sent" | "delivered" | "read" | "failed";
+      timestamp?: string | null;
+      recipientId?: string | null;
+      error?: { code?: number; title?: string; detail?: string } | null;
+    }): Promise<{ matched: boolean; applied: boolean }>;
     listWhatsappTemplates(tenantId: string): Promise<unknown[]>;
     upsertWhatsappTemplate(
       tenantId: string,
@@ -4928,12 +4936,34 @@ export async function buildServer(
         }
       }
 
+      // Provider delivery/read status callbacks arrive on the same webhook but
+      // carry no message to answer. Advance the matching stored deliveries out
+      // of band (idempotent, so a provider replay is a safe no-op).
+      const statusUpdates =
+        adapter.normalizeStatusUpdates?.(request.body) ?? [];
+      let statusApplied = 0;
+      for (const update of statusUpdates) {
+        const outcome = await options.store.applyDeliveryStatusCallback({
+          tenantId: tenant.id,
+          providerMessageId: update.providerMessageId,
+          status: update.status,
+          timestamp: update.timestamp ?? null,
+          recipientId: update.recipientId ?? null,
+          error: update.error ?? null,
+        });
+        if (outcome.applied) {
+          statusApplied += 1;
+        }
+      }
+
       return {
         received: true,
         channel,
         provider: adapter.provider,
         routed: results.length,
         results,
+        statusUpdates: statusUpdates.length,
+        statusApplied,
       };
     },
   );

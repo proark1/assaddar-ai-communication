@@ -97,6 +97,7 @@ import {
   normalizePhone,
   normalizeRoleName,
   normalizeTemplateName,
+  deliveryStatusRank,
   readAttempts,
   readStringOrNull,
   rejectSecretSettings,
@@ -4467,6 +4468,101 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
   }
 
   /**
+   * Apply a provider delivery/read status callback to a stored delivery, matched
+   * by provider message id within the tenant. Advances the lifecycle forwards
+   * only (sent → delivered → read); a `failed` callback is a terminal async
+   * rejection that is not auto-retried. Idempotent: a replayed, stale, or
+   * out-of-order callback is a safe no-op. Returns whether a delivery matched
+   * and whether its status actually moved.
+   */
+  async applyDeliveryStatusCallback(input: {
+    tenantId: string;
+    providerMessageId: string;
+    status: "sent" | "delivered" | "read" | "failed";
+    timestamp?: string | null;
+    recipientId?: string | null;
+    error?: { code?: number; title?: string; detail?: string } | null;
+  }): Promise<{ matched: boolean; applied: boolean }> {
+    assertTenantId(input.tenantId);
+    if (this.needsTenantScope(input.tenantId)) {
+      return this.withTenantScope<{ matched: boolean; applied: boolean }>(
+        input.tenantId,
+        (repo) => repo.applyDeliveryStatusCallback(input),
+      );
+    }
+    const [delivery] = await this.db
+      .select({
+        id: messageDeliveries.id,
+        status: messageDeliveries.status,
+        detail: messageDeliveries.detail,
+        metadata: messageDeliveries.metadata,
+      })
+      .from(messageDeliveries)
+      .where(
+        and(
+          eq(messageDeliveries.tenantId, input.tenantId),
+          eq(messageDeliveries.providerMessageId, input.providerMessageId),
+        ),
+      )
+      .limit(1);
+    if (!delivery) {
+      return { matched: false, applied: false };
+    }
+
+    // "read" and "failed" are terminal — never move off them.
+    if (delivery.status === "read" || delivery.status === "failed") {
+      return { matched: true, applied: false };
+    }
+    // Success statuses advance forwards only; ignore a stale/duplicate callback.
+    if (
+      input.status !== "failed" &&
+      deliveryStatusRank(input.status) <= deliveryStatusRank(delivery.status)
+    ) {
+      return { matched: true, applied: false };
+    }
+
+    const metadata = {
+      ...((delivery.metadata ?? {}) as Record<string, unknown>),
+    };
+    const statusTimestamps = {
+      ...((metadata.statusTimestamps as Record<string, unknown> | undefined) ??
+        {}),
+    };
+    statusTimestamps[input.status] =
+      input.timestamp ?? new Date().toISOString();
+    metadata.statusTimestamps = statusTimestamps;
+    if (input.recipientId) {
+      metadata.recipientId = input.recipientId;
+    }
+    let detail = delivery.detail ?? null;
+    if (input.status === "failed") {
+      // A post-acceptance provider rejection is not auto-retried.
+      metadata.retryable = false;
+      if (input.error) {
+        metadata.error = input.error;
+        detail = input.error.detail ?? input.error.title ?? detail;
+      }
+    }
+
+    await this.db
+      .update(messageDeliveries)
+      .set({
+        status: input.status,
+        detail,
+        metadata,
+        updatedAt: sql`now()`,
+      })
+      .where(
+        and(
+          eq(messageDeliveries.tenantId, input.tenantId),
+          eq(messageDeliveries.id, delivery.id),
+        ),
+      );
+
+    return { matched: true, applied: true };
+  }
+
+  /**
    * System-wide (cross-tenant) sweep used by the delivery-retry worker: find
    * failed, retry-eligible outbound deliveries whose last attempt is older than
    * `before` and that have not yet exhausted `maxAttempts`. Not tenant-scoped
@@ -5779,7 +5875,12 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       0,
     );
     const deliveriesSent =
-      (deliveryByStatus.sent ?? 0) + (deliveryByStatus.queued ?? 0);
+      (deliveryByStatus.sent ?? 0) +
+      (deliveryByStatus.queued ?? 0) +
+      // A provider status callback advances a sent delivery to delivered/read;
+      // both are successful outcomes, not failures.
+      (deliveryByStatus.delivered ?? 0) +
+      (deliveryByStatus.read ?? 0);
     const deliveriesFailed = deliveryByStatus.failed ?? 0;
     const deliveriesSkipped = deliveryByStatus.skipped ?? 0;
 
@@ -5913,7 +6014,12 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     );
     const deliveriesFailed = deliveryByStatus.failed ?? 0;
     const deliveriesSent =
-      (deliveryByStatus.sent ?? 0) + (deliveryByStatus.queued ?? 0);
+      (deliveryByStatus.sent ?? 0) +
+      (deliveryByStatus.queued ?? 0) +
+      // A provider status callback advances a sent delivery to delivered/read;
+      // both are successful outcomes, not failures.
+      (deliveryByStatus.delivered ?? 0) +
+      (deliveryByStatus.read ?? 0);
     const attempted = deliveriesSent + deliveriesFailed;
 
     return {
