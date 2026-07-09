@@ -483,6 +483,29 @@ class MemoryPlatformStore
     );
   }
 
+  async createPasswordUser(input: {
+    email: string;
+    name: string;
+    passwordHash: string;
+  }) {
+    const email = input.email.toLowerCase();
+    if (this.users.some((user) => user.email === email)) {
+      throw new Error("Account already exists.");
+    }
+    const user = {
+      id: crypto.randomUUID(),
+      authUserId: null,
+      email,
+      name: input.name,
+      status: "active",
+      passwordHash: input.passwordHash,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    this.users.push(user);
+    return user;
+  }
+
   async createUserSession(input: {
     userId: string;
     tokenHash: string;
@@ -2901,6 +2924,96 @@ describe("API", () => {
       headers: { cookie: String(cookie) },
     });
     expect(blockedResponse.statusCode).toBe(403);
+    await app.close();
+  });
+
+  it("lets new users register, start a session, and create their first project", async () => {
+    const store = new MemoryPlatformStore();
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+    });
+
+    const registerResponse = await app.inject({
+      method: "POST",
+      url: "/auth/register",
+      payload: {
+        name: "Project Owner",
+        email: "owner@example.com",
+        password: "secure-password",
+      },
+    });
+    expect(registerResponse.statusCode).toBe(201);
+    expect(registerResponse.json()).toMatchObject({
+      authType: "user_session",
+      user: {
+        email: "owner@example.com",
+        name: "Project Owner",
+        role: "viewer",
+      },
+      memberships: [],
+    });
+    const cookie = registerResponse.headers["set-cookie"];
+    expect(cookie).toBeTruthy();
+
+    const projectResponse = await app.inject({
+      method: "POST",
+      url: "/onboarding/projects",
+      headers: { cookie: String(cookie) },
+      payload: {
+        name: "Self Service GmbH",
+        slug: "self-service-gmbh",
+        defaultLocale: "de-DE",
+      },
+    });
+    expect(projectResponse.statusCode).toBe(201);
+    const tenant = projectResponse.json<{ id: string; status: string }>();
+    expect(tenant.status).toBe("setup_pending");
+
+    const tenantsResponse = await app.inject({
+      method: "GET",
+      url: "/admin/tenants",
+      headers: { cookie: String(cookie) },
+    });
+    expect(tenantsResponse.statusCode).toBe(200);
+    expect(tenantsResponse.json<Array<{ id: string }>>()).toEqual([
+      expect.objectContaining({ id: tenant.id }),
+    ]);
+
+    await app.close();
+  });
+
+  it("rejects duplicate internal registrations", async () => {
+    const store = new MemoryPlatformStore();
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+    });
+
+    const payload = {
+      name: "Project Owner",
+      email: "owner@example.com",
+      password: "secure-password",
+    };
+    const firstResponse = await app.inject({
+      method: "POST",
+      url: "/auth/register",
+      payload,
+    });
+    expect(firstResponse.statusCode).toBe(201);
+
+    const duplicateResponse = await app.inject({
+      method: "POST",
+      url: "/auth/register",
+      payload,
+    });
+    expect(duplicateResponse.statusCode).toBe(409);
+    expect(duplicateResponse.json()).toMatchObject({
+      error: "Account already exists. Use login or ask for an invite.",
+    });
+
     await app.close();
   });
 

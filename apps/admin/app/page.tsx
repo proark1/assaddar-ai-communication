@@ -51,7 +51,6 @@ import {
   useState,
 } from "react";
 import { APP_CONFIG } from "./config";
-import { getSupabaseClient } from "./supabase-client";
 import { AdminSidebar } from "./AdminSidebar";
 import { DeleteKnowledgeModal } from "./DeleteKnowledgeModal";
 import { DashboardMetrics } from "./DashboardMetrics";
@@ -225,7 +224,6 @@ export default function DashboardPage() {
   const [deepLink] = useState<AdminDeepLink>(() => readAdminDeepLink());
   const [apiBase, setApiBase] = useState(defaultApiBase);
   const [adminToken, setAdminToken] = useState("");
-  const [supabaseAccessToken, setSupabaseAccessToken] = useState("");
   const [adminSession, setAdminSession] = useState<AdminSession | null>(null);
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
@@ -1360,38 +1358,6 @@ export default function DashboardPage() {
   }, [adminToken]);
 
   useEffect(() => {
-    const supabase = getSupabaseClient();
-    if (!supabase) {
-      return;
-    }
-
-    let active = true;
-    void supabase.auth.getSession().then(({ data }) => {
-      if (active) {
-        setSupabaseAccessToken(data.session?.access_token ?? "");
-      }
-    });
-    const { data } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSupabaseAccessToken(session?.access_token ?? "");
-    });
-    return () => {
-      active = false;
-      data.subscription.unsubscribe();
-    };
-  }, []);
-
-  useEffect(() => {
-    if (
-      supabaseAccessToken &&
-      !adminToken &&
-      !adminSession &&
-      !connectionAttempted
-    ) {
-      void refreshTenants();
-    }
-  }, [adminToken, adminSession, connectionAttempted, supabaseAccessToken]);
-
-  useEffect(() => {
     if (normalizedApiBase) {
       window.localStorage.setItem("assaddar_api_base", normalizedApiBase);
     }
@@ -1611,9 +1577,6 @@ export default function DashboardPage() {
     const headers = {
       "content-type": "application/json",
       ...(adminToken ? { "x-admin-token": adminToken } : {}),
-      ...(!adminToken && supabaseAccessToken
-        ? { authorization: `Bearer ${supabaseAccessToken}` }
-        : {}),
       ...(init?.headers ?? {}),
     };
     const canDedupe = method === "GET" && !init?.body;
@@ -1699,40 +1662,20 @@ export default function DashboardPage() {
 
     setBusy(true);
     try {
-      const supabase = getSupabaseClient();
-      const authHeaders: HeadersInit = {};
-      let session: AdminSession;
-      if (supabase) {
-        const { data, error } = await supabase.auth.signInWithPassword({
+      const session = await apiFetch<AdminSession>("/auth/login", {
+        method: "POST",
+        body: JSON.stringify({
           email: loginEmail,
           password: loginPassword,
-        });
-        if (error || !data.session?.access_token) {
-          throw error ?? new Error("Login failed.");
-        }
-        authHeaders.authorization = `Bearer ${data.session.access_token}`;
-        setSupabaseAccessToken(data.session.access_token);
-        session = await apiFetch<AdminSession>("/admin/session", {
-          headers: authHeaders,
-        });
-      } else {
-        session = await apiFetch<AdminSession>("/auth/login", {
-          method: "POST",
-          body: JSON.stringify({
-            email: loginEmail,
-            password: loginPassword,
-          }),
-        });
-      }
+        }),
+      });
       setAdminToken("");
       window.sessionStorage.removeItem("assaddar_admin_token");
       window.localStorage.removeItem("assaddar_admin_token");
       setAdminSession(session);
       setConnectionAttempted(true);
       setLoginPassword("");
-      const nextTenants = await apiFetch<Tenant[]>("/admin/tenants", {
-        headers: authHeaders,
-      });
+      const nextTenants = await apiFetch<Tenant[]>("/admin/tenants");
       setTenants(nextTenants);
       if (nextTenants[0]) {
         setSelectedTenantId(nextTenants[0].id);
@@ -1752,47 +1695,27 @@ export default function DashboardPage() {
       return;
     }
 
-    const supabase = getSupabaseClient();
-    if (!supabase) {
-      setStatus("Registration needs Supabase Auth to be configured.");
-      return;
-    }
-
     setBusy(true);
     try {
-      const { data, error } = await supabase.auth.signUp({
-        email: signupEmail,
-        password: signupPassword,
-        options: {
-          data: {
-            name: signupName,
-          },
-        },
+      const session = await apiFetch<AdminSession>("/auth/register", {
+        method: "POST",
+        body: JSON.stringify({
+          name: signupName,
+          email: signupEmail,
+          password: signupPassword,
+        }),
       });
-      if (error) {
-        throw error;
-      }
       setLoginEmail(signupEmail);
-      setSignupPassword("");
-      if (!data.session?.access_token) {
-        setAuthMode("login");
-        setStatus("Account created. Confirm your email, then log in.");
-        return;
-      }
-
-      const authHeaders = {
-        authorization: `Bearer ${data.session.access_token}`,
-      };
-      setSupabaseAccessToken(data.session.access_token);
-      const session = await apiFetch<AdminSession>("/admin/session", {
-        headers: authHeaders,
-      });
-      const nextTenants = await apiFetch<Tenant[]>("/admin/tenants", {
-        headers: authHeaders,
-      });
+      setAdminToken("");
+      window.sessionStorage.removeItem("assaddar_admin_token");
+      window.localStorage.removeItem("assaddar_admin_token");
       setAdminSession(session);
-      setTenants(nextTenants);
       setConnectionAttempted(true);
+      setSignupName("");
+      setSignupEmail("");
+      setSignupPassword("");
+      const nextTenants = await apiFetch<Tenant[]>("/admin/tenants");
+      setTenants(nextTenants);
       if (nextTenants[0]) {
         setSelectedTenantId(nextTenants[0].id);
       }
@@ -1807,17 +1730,11 @@ export default function DashboardPage() {
   async function logout() {
     setBusy(true);
     try {
-      const supabase = getSupabaseClient();
-      if (supabase) {
-        await supabase.auth.signOut();
-      } else {
-        await apiFetch("/auth/logout", { method: "POST" });
-      }
+      await apiFetch("/auth/logout", { method: "POST" });
     } catch {
       // Local cleanup still matters even if the network request fails.
     } finally {
       setAdminSession(null);
-      setSupabaseAccessToken("");
       setTenants([]);
       setSelectedTenantId("");
       setConnectionAttempted(false);
@@ -10289,7 +10206,7 @@ export default function DashboardPage() {
             </span>
             <div>
               <strong>{APP_CONFIG.brand.name}</strong>
-              <span>Consultancy assistant admin</span>
+              <span>Owner and operator login</span>
             </div>
           </div>
 

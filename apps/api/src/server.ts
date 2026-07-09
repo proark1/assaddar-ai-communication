@@ -113,6 +113,7 @@ import {
   WebsiteImportSchema,
   InstallCheckSchema,
   LoginSchema,
+  RegisterSchema,
   CreateTenantUserSchema,
   CreateTenantInviteSchema,
   AcceptTenantInviteSchema,
@@ -241,6 +242,11 @@ export type PlatformStore = AnswerDataStore &
     getTenantByPublicId(publicId: string): Promise<StoreTenant | null>;
     getWidgetConfig(publicId: string): Promise<unknown | null>;
     findUserByEmailForAuth(email: string): Promise<StoreAuthUser | null>;
+    createPasswordUser(input: {
+      email: string;
+      name: string;
+      passwordHash: string;
+    }): Promise<StoreAuthUser>;
     createUserSession(input: {
       userId: string;
       tokenHash: string;
@@ -1150,6 +1156,54 @@ export async function buildServer(
         return reply.code(500).send({ error: "Failed to create session." });
       }
       return buildUserSessionPayload(session);
+    },
+  );
+
+  app.post(
+    "/auth/register",
+    {
+      config: {
+        // Registration writes a new password login, so keep it tighter than
+        // normal API traffic and separate from the login limiter.
+        rateLimit: { max: 5, timeWindow: "10 minutes" },
+      },
+    },
+    async (request, reply) => {
+      if (!isTrustedStateChangeOrigin(request, options)) {
+        return reply.code(403).send({ error: "Untrusted request origin." });
+      }
+      const body = RegisterSchema.parse(request.body);
+      const existingUser = await options.store.findUserByEmailForAuth(
+        body.email,
+      );
+      if (existingUser) {
+        return reply.code(409).send({
+          error: "Account already exists. Use login or ask for an invite.",
+        });
+      }
+
+      const user = await options.store.createPasswordUser({
+        email: body.email,
+        name: body.name,
+        passwordHash: await hashPassword(body.password),
+      });
+
+      const token = createSessionToken();
+      const expiresAt = new Date(Date.now() + sessionDurationMs());
+      await options.store.createUserSession({
+        userId: user.id,
+        tokenHash: hashSecret(token),
+        expiresAt,
+        userAgent: request.headers["user-agent"] ?? null,
+        ipAddress: request.ip,
+      });
+      setSessionCookie(reply, token, expiresAt);
+
+      const session = await options.store.getAuthSession(hashSecret(token));
+      if (!session) {
+        return reply.code(500).send({ error: "Failed to create session." });
+      }
+      return reply.code(201).send(buildUserSessionPayload(session));
     },
   );
 

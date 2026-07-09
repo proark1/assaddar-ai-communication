@@ -154,6 +154,12 @@ export type UpsertTenantUserInput = {
   passwordHash?: string | null | undefined;
 };
 
+export type CreatePasswordUserInput = {
+  email: string;
+  name: string;
+  passwordHash: string;
+};
+
 export type SupabaseAuthUserInput = {
   authUserId: string;
   email: string;
@@ -1863,6 +1869,42 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       .where(eq(users.authUserId, authUserId))
       .limit(1);
     return user ?? null;
+  }
+
+  async createPasswordUser(
+    input: CreatePasswordUserInput,
+  ): Promise<AuthUserRecord> {
+    const email = normalizeEmail(input.email);
+    if (!email) {
+      throw new Error("Valid email is required.");
+    }
+    const existing = await this.findUserByEmailForAuth(email);
+    if (existing) {
+      throw new Error("Account already exists.");
+    }
+
+    const [user] = await this.db
+      .insert(users)
+      .values({
+        email,
+        name: input.name.trim() || email,
+        passwordHash: input.passwordHash,
+        emailVerifiedAt: sql`now()`,
+      })
+      .returning({
+        id: users.id,
+        authUserId: users.authUserId,
+        email: users.email,
+        name: users.name,
+        status: users.status,
+        passwordHash: users.passwordHash,
+      });
+
+    if (!user) {
+      throw new Error("Failed to create user.");
+    }
+
+    return user;
   }
 
   async createUserSession(input: {

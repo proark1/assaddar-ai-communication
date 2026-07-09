@@ -617,6 +617,10 @@ export const LoginSchema = z.object({
   password: z.string().min(8).max(200),
 });
 
+export const RegisterSchema = LoginSchema.extend({
+  name: z.string().min(1).max(160),
+});
+
 export const CreateTenantUserSchema = z.object({
   email: z.string().email().max(240),
   name: z.string().min(1).max(160),

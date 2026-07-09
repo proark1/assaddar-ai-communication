@@ -12,7 +12,6 @@
     "test:coverage": "vitest run --coverage --coverage.provider=v8 --coverage.reporter=text --coverage.reporter=html --coverage.reportsDirectory=../../coverage/admin"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.110.0",
     "lucide-react": "^1.23.0",
     "next": "^16.2.10",
     "react": "^19.0.0",
