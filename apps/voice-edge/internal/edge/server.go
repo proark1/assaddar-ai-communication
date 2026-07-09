@@ -47,6 +47,9 @@ type Server struct {
 	thinkingCache     pcmCache
 	sessionsMu        sync.Mutex
 	sessions          map[string]*CallSession
+	allowedSourcesMu  sync.Mutex
+	allowedSourceIPs  []net.IP
+	allowedSourcesAt  time.Time
 	registerResponses chan sip.Message
 	conn              *net.UDPConn
 	registrarAddr     *net.UDPAddr
@@ -1220,11 +1223,11 @@ func (server *Server) activeSessionCount() int {
 
 // sourceAllowed reports whether a SIP request from remote may be processed. With
 // no allowlist configured it accepts everything (unchanged default); when
-// VOICE_EDGE_SIP_ALLOWED_SOURCES is set, only requests from those IPs/CIDRs are
-// accepted, so a stranger who reaches the SIP port cannot originate calls or
-// tear down other callers' sessions.
+// VOICE_EDGE_SIP_ALLOWED_SOURCES is set, only requests from those IPs, CIDRs, or
+// resolved hostnames are accepted, so a stranger who reaches the SIP port cannot
+// originate calls or tear down other callers' sessions.
 func (server *Server) sourceAllowed(remote *net.UDPAddr) bool {
-	if len(server.cfg.SIPAllowedSources) == 0 {
+	if len(server.cfg.SIPAllowedSources) == 0 && len(server.cfg.SIPAllowedSourceHosts) == 0 {
 		return true
 	}
 	if remote == nil {
@@ -1235,7 +1238,39 @@ func (server *Server) sourceAllowed(remote *net.UDPAddr) bool {
 			return true
 		}
 	}
+	for _, ip := range server.allowedSourceHostIPs() {
+		if ip.Equal(remote.IP) {
+			return true
+		}
+	}
 	return false
+}
+
+func (server *Server) allowedSourceHostIPs() []net.IP {
+	if len(server.cfg.SIPAllowedSourceHosts) == 0 {
+		return nil
+	}
+	now := time.Now()
+	server.allowedSourcesMu.Lock()
+	defer server.allowedSourcesMu.Unlock()
+	if !server.allowedSourcesAt.IsZero() && now.Sub(server.allowedSourcesAt) < registerRefreshEvery {
+		return append([]net.IP(nil), server.allowedSourceIPs...)
+	}
+	resolved := make([]net.IP, 0, len(server.cfg.SIPAllowedSourceHosts))
+	for _, host := range server.cfg.SIPAllowedSourceHosts {
+		ips, err := net.LookupIP(host)
+		if err != nil {
+			server.logger.Warn("failed to resolve sip allowed source host", "host", host, "error", err)
+			continue
+		}
+		resolved = append(resolved, ips...)
+	}
+	if len(resolved) == 0 && len(server.allowedSourceIPs) > 0 {
+		return append([]net.IP(nil), server.allowedSourceIPs...)
+	}
+	server.allowedSourceIPs = resolved
+	server.allowedSourcesAt = now
+	return append([]net.IP(nil), server.allowedSourceIPs...)
 }
 
 // expireOverdueSession force-ends a call that has run past the configured hard

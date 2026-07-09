@@ -83,3 +83,25 @@ func TestLoadGreetingConfig(t *testing.T) {
 		t.Fatalf("ThinkingText = %q", cfg.ThinkingText)
 	}
 }
+
+func TestLoadSIPAllowedSourcesSupportsHostnames(t *testing.T) {
+	env := map[string]string{
+		"VOICE_EDGE_SIP_ALLOWED_SOURCES": "192.0.2.10, 2001:db8::1, 198.51.100.0/24, voip.easybell.de, sip:pbx.easybell.de:5060",
+	}
+	cfg, err := Load(func(key string) string { return env[key] })
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if len(cfg.SIPAllowedSources) != 3 {
+		t.Fatalf("SIPAllowedSources length = %d", len(cfg.SIPAllowedSources))
+	}
+	if len(cfg.SIPAllowedSourceHosts) != 2 {
+		t.Fatalf("SIPAllowedSourceHosts length = %d", len(cfg.SIPAllowedSourceHosts))
+	}
+	if cfg.SIPAllowedSourceHosts[0] != "voip.easybell.de" {
+		t.Fatalf("first source host = %q", cfg.SIPAllowedSourceHosts[0])
+	}
+	if cfg.SIPAllowedSourceHosts[1] != "pbx.easybell.de" {
+		t.Fatalf("second source host = %q", cfg.SIPAllowedSourceHosts[1])
+	}
+}

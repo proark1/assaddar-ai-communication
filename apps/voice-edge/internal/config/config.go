@@ -13,25 +13,26 @@ import (
 )
 
 type Config struct {
-	HTTPAddr             string
-	PublicIP             string
-	SIPBind              string
-	RTPPortMin           int
-	RTPPortMax           int
-	AnswerDelay          time.Duration
-	GreetingDelay        time.Duration
-	GreetingText         string
-	ThinkingText         string
-	Easybell             EasybellConfig
-	VoiceTurnURL         string
-	VoiceSecret          string
-	AssistantID          string
-	Gemini               GeminiConfig
-	DefaultLocale        string
-	SIPAllowedSources    []net.IPNet
-	MaxSessions          int
-	MaxCallDuration      time.Duration
-	RTPInactivityTimeout time.Duration
+	HTTPAddr              string
+	PublicIP              string
+	SIPBind               string
+	RTPPortMin            int
+	RTPPortMax            int
+	AnswerDelay           time.Duration
+	GreetingDelay         time.Duration
+	GreetingText          string
+	ThinkingText          string
+	Easybell              EasybellConfig
+	VoiceTurnURL          string
+	VoiceSecret           string
+	AssistantID           string
+	Gemini                GeminiConfig
+	DefaultLocale         string
+	SIPAllowedSources     []net.IPNet
+	SIPAllowedSourceHosts []string
+	MaxSessions           int
+	MaxCallDuration       time.Duration
+	RTPInactivityTimeout  time.Duration
 }
 
 type EasybellConfig struct {
@@ -86,50 +87,82 @@ func Load(getenv func(string) string) (Config, error) {
 		MaxCallDuration:      time.Duration(envIntDefault(getenv, "VOICE_EDGE_MAX_CALL_DURATION_MS", 1800000)) * time.Millisecond,
 		RTPInactivityTimeout: time.Duration(envIntDefault(getenv, "VOICE_EDGE_RTP_INACTIVITY_TIMEOUT_MS", 120000)) * time.Millisecond,
 	}
-	sources, err := parseIPNetworks(getenv("VOICE_EDGE_SIP_ALLOWED_SOURCES"))
+	sources, sourceHosts, err := parseSIPAllowedSources(getenv("VOICE_EDGE_SIP_ALLOWED_SOURCES"))
 	if err != nil {
 		return Config{}, err
 	}
 	cfg.SIPAllowedSources = sources
+	cfg.SIPAllowedSourceHosts = sourceHosts
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
 }
 
-// parseIPNetworks parses a comma-separated list of IPs or CIDRs into networks.
+// parseSIPAllowedSources parses a comma-separated list of IPs, CIDRs, or hostnames.
 // An empty value yields nil (SIP source filtering disabled — accept all). Bare
 // IPs become a host-sized network (/32 for IPv4, /128 for IPv6).
-func parseIPNetworks(raw string) ([]net.IPNet, error) {
+func parseSIPAllowedSources(raw string) ([]net.IPNet, []string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 	var networks []net.IPNet
+	var hosts []string
 	for _, entry := range strings.Split(raw, ",") {
 		entry = strings.TrimSpace(entry)
 		if entry == "" {
 			continue
 		}
+		entry = strings.TrimPrefix(entry, "sip:")
+		if host, _, err := net.SplitHostPort(entry); err == nil {
+			entry = host
+		}
 		if strings.Contains(entry, "/") {
 			_, network, err := net.ParseCIDR(entry)
 			if err != nil {
-				return nil, fmt.Errorf("VOICE_EDGE_SIP_ALLOWED_SOURCES: invalid CIDR %q: %w", entry, err)
+				return nil, nil, fmt.Errorf("VOICE_EDGE_SIP_ALLOWED_SOURCES: invalid CIDR %q: %w", entry, err)
 			}
 			networks = append(networks, *network)
 			continue
 		}
 		ip := net.ParseIP(entry)
-		if ip == nil {
-			return nil, fmt.Errorf("VOICE_EDGE_SIP_ALLOWED_SOURCES: invalid IP %q", entry)
+		if ip != nil {
+			bits := 32
+			if ip.To4() == nil {
+				bits = 128
+			}
+			networks = append(networks, net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)})
+			continue
 		}
-		bits := 32
-		if ip.To4() == nil {
-			bits = 128
+		entry = strings.TrimSuffix(strings.ToLower(entry), ".")
+		if !isHostnameAllowlistEntry(entry) {
+			return nil, nil, fmt.Errorf("VOICE_EDGE_SIP_ALLOWED_SOURCES: invalid source %q", entry)
 		}
-		networks = append(networks, net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)})
+		hosts = append(hosts, entry)
 	}
-	return networks, nil
+	return networks, hosts, nil
+}
+
+func isHostnameAllowlistEntry(host string) bool {
+	if host == "" || len(host) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if label == "" || len(label) > 63 {
+			return false
+		}
+		if label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, ch := range label {
+			if (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-' {
+				continue
+			}
+			return false
+		}
+	}
+	return true
 }
 
 func (cfg Config) Validate() error {

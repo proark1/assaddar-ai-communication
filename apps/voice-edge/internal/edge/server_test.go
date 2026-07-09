@@ -29,6 +29,21 @@ func TestResolveRegistrarAddsDefaultPort(t *testing.T) {
 	}
 }
 
+func TestSourceAllowedResolvesHostAllowlist(t *testing.T) {
+	cfg := testConfig()
+	cfg.SIPAllowedSourceHosts = []string{"localhost"}
+	server, err := New(cfg, nil)
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	if !server.sourceAllowed(&net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 5060}) {
+		t.Fatal("expected localhost IPv4 to be allowed")
+	}
+	if server.sourceAllowed(&net.UDPAddr{IP: net.ParseIP("192.0.2.55"), Port: 5060}) {
+		t.Fatal("expected unrelated IPv4 source to be rejected")
+	}
+}
+
 func TestHandleInviteRejectsUnsupportedCodec(t *testing.T) {
 	server, err := New(testConfig(), nil)
 	if err != nil {
