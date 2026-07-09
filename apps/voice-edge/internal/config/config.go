@@ -81,7 +81,7 @@ func Load(getenv func(string) string) (Config, error) {
 			TTSModel: envDefault(getenv, "GEMINI_TTS_MODEL", "gemini-3.1-flash-tts-preview"),
 			TTSVoice: envDefault(getenv, "GEMINI_TTS_VOICE", "Kore"),
 		},
-		DefaultLocale:   envDefault(getenv, "VOICE_LOCALE", "de-DE"),
+		DefaultLocale:        envDefault(getenv, "VOICE_LOCALE", "de-DE"),
 		MaxSessions:          envIntDefault(getenv, "VOICE_EDGE_MAX_SESSIONS", 0),
 		MaxCallDuration:      time.Duration(envIntDefault(getenv, "VOICE_EDGE_MAX_CALL_DURATION_MS", 1800000)) * time.Millisecond,
 		RTPInactivityTimeout: time.Duration(envIntDefault(getenv, "VOICE_EDGE_RTP_INACTIVITY_TIMEOUT_MS", 120000)) * time.Millisecond,

@@ -213,12 +213,18 @@ func TestGreetingIsSentAfterACKWithoutInboundRTP(t *testing.T) {
 	server.handleInvite(testContext(t), request, client.LocalAddr().(*net.UDPAddr))
 	t.Cleanup(func() { server.endSession("call-greeting") })
 
-	responses := strings.Join(readSIPResponses(t, client, 3), "\n")
+	rawResponses := readSIPResponses(t, client, 3)
+	responses := strings.Join(rawResponses, "\n")
 	if !strings.Contains(responses, "SIP/2.0 200 OK") {
 		t.Fatalf("expected 200 OK answer, got:\n%s", responses)
 	}
 
-	ack := mustParseSIP(t, "ACK sip:asst_123@voice-edge.assaddar.de SIP/2.0\r\nVia: SIP/2.0/UDP client;branch=z9hG4bK-ack\r\nFrom: <sip:+491701234567@example.com>;tag=caller\r\nTo: <sip:asst_123@voice-edge.assaddar.de>;tag=edge\r\nCall-ID: call-greeting\r\nCSeq: 1 ACK\r\nContent-Length: 0\r\n\r\n")
+	answer := mustParseSIP(t, rawResponses[len(rawResponses)-1])
+	toTag := sip.HeaderParam(answer.Header("To"), "tag")
+	if toTag == "" {
+		t.Fatalf("expected 200 OK to include To tag, got:\n%s", rawResponses[len(rawResponses)-1])
+	}
+	ack := mustParseSIP(t, fmt.Sprintf("ACK sip:asst_123@voice-edge.assaddar.de SIP/2.0\r\nVia: SIP/2.0/UDP client;branch=z9hG4bK-ack\r\nFrom: <sip:+491701234567@example.com>;tag=caller\r\nTo: <sip:asst_123@voice-edge.assaddar.de>;tag=%s\r\nCall-ID: call-greeting\r\nCSeq: 1 ACK\r\nContent-Length: 0\r\n\r\n", toTag))
 	server.handleMessage(testContext(t), ack, client.LocalAddr().(*net.UDPAddr))
 
 	if packet, ok := readOptionalRTPPacket(t, rtpReceiver, 30*time.Millisecond); ok {
