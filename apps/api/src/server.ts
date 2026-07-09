@@ -31,7 +31,13 @@ import Fastify, {
 } from "fastify";
 import Redis from "ioredis";
 import { Buffer } from "node:buffer";
-import { createHash, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
+import {
+  createHash,
+  createHmac,
+  randomBytes,
+  scrypt,
+  timingSafeEqual,
+} from "node:crypto";
 import { lookup } from "node:dns/promises";
 import net from "node:net";
 import { Readable } from "node:stream";
@@ -54,6 +60,8 @@ import {
   ParamsTenantSchema,
   ParamsKnowledgeSchema,
   ParamsKnowledgeSuggestionSchema,
+  ParamsPortalLinkSchema,
+  ParamsPortalTokenSchema,
   ParamsContactSchema,
   ParamsConversationSchema,
   ParamsHandoffSchema,
@@ -68,6 +76,8 @@ import {
   UpsertBrainOnboardingSchema,
   CreateKnowledgeSuggestionSchema,
   ReviewKnowledgeSuggestionSchema,
+  BulkKnowledgeSuggestionsSchema,
+  BulkApproveKnowledgeSuggestionsSchema,
   KnowledgeDocumentUploadSchema,
   ScanKnowledgeSuggestionsSchema,
   UpdateHandoffSchema,
@@ -76,6 +86,11 @@ import {
   WidgetLeadSchema,
   WidgetReadinessSchema,
   WidgetEventSchema,
+  WidgetConsentSchema,
+  PlaybookPreviewSchema,
+  PlaybookApplySchema,
+  CreatePortalLinkSchema,
+  PortalDetailsSchema,
   MetaWebhookQuerySchema,
   ChannelConnectionSchema,
   TelephoneProviderSchema,
@@ -116,6 +131,14 @@ import {
   type RoleName,
   type TenantRoleName,
 } from "./schemas";
+import {
+  writeOneBrainDataRecord,
+  type OneBrainDataLayer,
+} from "./onebrain-data-layer";
+import {
+  ASSAD_DAR_AI_CONSULTANCY_PLAYBOOK,
+  buildPlaybookPreview,
+} from "./playbooks";
 
 const scryptAsync = promisify(scrypt);
 
@@ -285,6 +308,79 @@ export type PlatformStore = AnswerDataStore &
       tenantId: string,
       limit?: number,
     ): Promise<OneBrainSyncSummary>;
+    createPortalLinkProjection(
+      tenantId: string,
+      input: {
+        onebrainRecordId: string;
+        tokenHash: string;
+        conversationId?: string | null;
+        contactId?: string | null;
+        scope?: "conversation" | "contact";
+        expiresAt: Date;
+        createdByUserId?: string | null;
+        metadata?: Record<string, unknown>;
+      },
+    ): Promise<{
+      id: string;
+      tenantId: string;
+      onebrainRecordId: string;
+      tokenHash: string;
+      conversationId?: string | null;
+      contactId?: string | null;
+      scope: string;
+      status: string;
+      expiresAt: Date;
+      disabledAt?: Date | null;
+      lastUsedAt?: Date | null;
+      createdAt: Date;
+      updatedAt: Date;
+    }>;
+    getPortalLinkProjectionByTokenHash(
+      tenantId: string,
+      tokenHash: string,
+    ): Promise<{
+      id: string;
+      tenantId: string;
+      onebrainRecordId: string;
+      tokenHash: string;
+      conversationId?: string | null;
+      contactId?: string | null;
+      scope: string;
+      status: string;
+      expiresAt: Date;
+      disabledAt?: Date | null;
+      lastUsedAt?: Date | null;
+      metadata?: Record<string, unknown>;
+      createdAt: Date;
+      updatedAt: Date;
+    } | null>;
+    getPortalLinkProjection(
+      tenantId: string,
+      linkId: string,
+    ): Promise<{
+      id: string;
+      tenantId: string;
+      onebrainRecordId: string;
+      tokenHash: string;
+      conversationId?: string | null;
+      contactId?: string | null;
+      scope: string;
+      status: string;
+      expiresAt: Date;
+      disabledAt?: Date | null;
+      lastUsedAt?: Date | null;
+      metadata?: Record<string, unknown>;
+      createdAt: Date;
+      updatedAt: Date;
+    } | null>;
+    disablePortalLinkProjection(
+      tenantId: string,
+      linkId: string,
+    ): Promise<unknown | null>;
+    markPortalLinkProjectionUsed(
+      tenantId: string,
+      linkId: string,
+    ): Promise<void>;
     listBrainOnboardingAnswers(tenantId: string): Promise<unknown[]>;
     upsertBrainOnboardingAnswers(
       tenantId: string,
@@ -337,9 +433,14 @@ export type PlatformStore = AnswerDataStore &
     ): Promise<{
       id: string;
       status: string;
+      sourceType?: string | null;
+      sourceConversationId?: string | null;
+      sourceMessageId?: string | null;
+      sourceDocumentId?: string | null;
       suggestedQuestion?: string | null;
       suggestedTitle?: string | null;
       suggestedAnswer?: string | null;
+      suggestedTags?: string[];
       suggestedMetadata?: Record<string, unknown>;
     } | null>;
     saveKnowledgeSuggestionDraft(
@@ -365,6 +466,10 @@ export type PlatformStore = AnswerDataStore &
       tenantId: string,
       options?: PaginationOptions,
     ): Promise<unknown[]>;
+    getConversation(
+      tenantId: string,
+      conversationId: string,
+    ): Promise<unknown | null>;
     listUnifiedInbox(
       tenantId: string,
       options?: PaginationOptions,
@@ -373,6 +478,7 @@ export type PlatformStore = AnswerDataStore &
       tenantId: string,
       options?: PaginationOptions,
     ): Promise<unknown[]>;
+    getContact(tenantId: string, contactId: string): Promise<unknown | null>;
     deleteContact(
       tenantId: string,
       contactId: string,
@@ -697,6 +803,12 @@ export type BuildServerOptions = {
     provider?: BrainProvider | null | undefined;
     env?: OneBrainRuntimeAnswerEnv | undefined;
   };
+  /**
+   * Optional OneBrain data-layer provider. Release-train durable records
+   * (playbooks, portal links, consent, audit mirrors) write through this
+   * server-side boundary. Browser/widget/admin clients never receive it.
+   */
+  oneBrainDataLayer?: OneBrainDataLayer | undefined;
   /**
    * Optional ungrounded draft writer used to propose a candidate answer for an
    * unanswered-question suggestion. Its output is for human review only and is
@@ -2219,15 +2331,350 @@ export async function buildServer(
   );
 
   app.post(
+    "/admin/tenants/:tenantId/knowledge/suggestions/bulk-draft",
+    { preHandler: requireTenantAccess(options, "tenant_admin") },
+    async (request, reply) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      const body = BulkKnowledgeSuggestionsSchema.parse(request.body ?? {});
+      if (!options.draftGenerator) {
+        return reply
+          .status(503)
+          .send({ error: "AI answer drafting is not configured." });
+      }
+      const tenant = await options.store.getTenant(tenantId);
+      if (!tenant) {
+        return reply.code(404).send({ error: "Tenant not found." });
+      }
+
+      const results = [];
+      for (const suggestionId of body.suggestionIds) {
+        const suggestion = await options.store.getKnowledgeSuggestion(
+          tenantId,
+          suggestionId,
+        );
+        if (!suggestion) {
+          results.push({
+            suggestionId,
+            status: "failed",
+            error: "Knowledge suggestion not found.",
+          });
+          continue;
+        }
+        if (suggestion.status !== "pending") {
+          results.push({
+            suggestionId,
+            status: "skipped",
+            reason: "Only pending suggestions can be drafted.",
+          });
+          continue;
+        }
+        if (suggestion.suggestedAnswer?.trim()) {
+          results.push({
+            suggestionId,
+            status: "skipped",
+            reason: "This suggestion already has an answer.",
+          });
+          continue;
+        }
+        const question = (
+          suggestion.suggestedQuestion ??
+          suggestion.suggestedTitle ??
+          ""
+        ).trim();
+        if (!question) {
+          results.push({
+            suggestionId,
+            status: "failed",
+            error: "This suggestion has no question to draft from.",
+          });
+          continue;
+        }
+
+        try {
+          const draft = await options.draftGenerator({
+            question,
+            ...(tenant.name ? { businessContext: tenant.name } : {}),
+          });
+          if (!draft) {
+            results.push({
+              suggestionId,
+              status: "failed",
+              error: "The model could not propose a draft.",
+            });
+            continue;
+          }
+          const result = await options.store.saveKnowledgeSuggestionDraft(
+            tenantId,
+            suggestionId,
+            {
+              answer: draft,
+              model: process.env.GEMINI_TEXT_MODEL ?? null,
+            },
+          );
+          results.push({ suggestionId, status: "drafted", result });
+        } catch (error) {
+          request.log.warn(
+            { err: error, tenantId, suggestionId },
+            "bulk knowledge suggestion draft failed",
+          );
+          results.push({
+            suggestionId,
+            status: "failed",
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+
+      return {
+        requested: body.suggestionIds.length,
+        drafted: results.filter((item) => item.status === "drafted").length,
+        skipped: results.filter((item) => item.status === "skipped").length,
+        failed: results.filter((item) => item.status === "failed").length,
+        results,
+      };
+    },
+  );
+
+  app.post(
+    "/admin/tenants/:tenantId/knowledge/suggestions/bulk-approve",
+    { preHandler: requireTenantAccess(options, "tenant_admin") },
+    async (request, reply) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      const body = BulkApproveKnowledgeSuggestionsSchema.parse(
+        request.body ?? {},
+      );
+      const dataLayer = requireOneBrainDataLayer(options, reply);
+      if (!dataLayer) {
+        return;
+      }
+      const tenant = await options.store.getTenant(tenantId);
+      if (!tenant) {
+        return reply.code(404).send({ error: "Tenant not found." });
+      }
+      const auth = getRequestAuth(request);
+      const reviewedByUserId = auth.kind === "user" ? auth.user.id : null;
+
+      const results = [];
+      for (const suggestionId of body.suggestionIds) {
+        const suggestion = await options.store.getKnowledgeSuggestion(
+          tenantId,
+          suggestionId,
+        );
+        if (!suggestion) {
+          results.push({
+            suggestionId,
+            status: "failed",
+            error: "Knowledge suggestion not found.",
+          });
+          continue;
+        }
+        if (suggestion.status !== "pending") {
+          results.push({
+            suggestionId,
+            status: "skipped",
+            reason: "Only pending suggestions can be approved.",
+          });
+          continue;
+        }
+        const review = {
+          ...(body.tags ? { tags: body.tags } : {}),
+          ...(body.reviewNote ? { reviewNote: body.reviewNote } : {}),
+          reviewedByUserId,
+        };
+        try {
+          const oneBrain = await writeKnowledgeSuggestionDecisionToOneBrain({
+            dataLayer,
+            tenant,
+            suggestion,
+            decision: "approved",
+            review,
+          });
+          if (!oneBrain.ok) {
+            results.push({
+              suggestionId,
+              status: "failed",
+              error: "OneBrain data layer is not configured.",
+            });
+            continue;
+          }
+          const result = await options.store.approveKnowledgeSuggestion(
+            tenantId,
+            suggestionId,
+            review,
+          );
+          results.push({ suggestionId, status: "approved", oneBrain, result });
+        } catch (error) {
+          request.log.warn(
+            { err: error, tenantId, suggestionId },
+            "bulk knowledge suggestion approval failed",
+          );
+          results.push({
+            suggestionId,
+            status: "failed",
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+
+      return {
+        requested: body.suggestionIds.length,
+        approved: results.filter((item) => item.status === "approved").length,
+        skipped: results.filter((item) => item.status === "skipped").length,
+        failed: results.filter((item) => item.status === "failed").length,
+        results,
+      };
+    },
+  );
+
+  app.post(
+    "/admin/tenants/:tenantId/knowledge/suggestions/bulk-reject",
+    { preHandler: requireTenantAccess(options, "tenant_admin") },
+    async (request, reply) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      const body = BulkKnowledgeSuggestionsSchema.parse(request.body ?? {});
+      const dataLayer = requireOneBrainDataLayer(options, reply);
+      if (!dataLayer) {
+        return;
+      }
+      const tenant = await options.store.getTenant(tenantId);
+      if (!tenant) {
+        return reply.code(404).send({ error: "Tenant not found." });
+      }
+      const auth = getRequestAuth(request);
+      const reviewedByUserId = auth.kind === "user" ? auth.user.id : null;
+
+      const results = [];
+      for (const suggestionId of body.suggestionIds) {
+        const suggestion = await options.store.getKnowledgeSuggestion(
+          tenantId,
+          suggestionId,
+        );
+        if (!suggestion) {
+          results.push({
+            suggestionId,
+            status: "failed",
+            error: "Knowledge suggestion not found.",
+          });
+          continue;
+        }
+        if (suggestion.status !== "pending") {
+          results.push({
+            suggestionId,
+            status: "skipped",
+            reason: "Only pending suggestions can be rejected.",
+          });
+          continue;
+        }
+        const review = {
+          ...(body.reviewNote ? { reviewNote: body.reviewNote } : {}),
+          reviewedByUserId,
+        };
+        try {
+          const oneBrain = await writeKnowledgeSuggestionDecisionToOneBrain({
+            dataLayer,
+            tenant,
+            suggestion,
+            decision: "rejected",
+            review,
+          });
+          if (!oneBrain.ok) {
+            results.push({
+              suggestionId,
+              status: "failed",
+              error: "OneBrain data layer is not configured.",
+            });
+            continue;
+          }
+          const result = await options.store.rejectKnowledgeSuggestion(
+            tenantId,
+            suggestionId,
+            review,
+          );
+          results.push({ suggestionId, status: "rejected", oneBrain, result });
+        } catch (error) {
+          request.log.warn(
+            { err: error, tenantId, suggestionId },
+            "bulk knowledge suggestion rejection failed",
+          );
+          results.push({
+            suggestionId,
+            status: "failed",
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+
+      return {
+        requested: body.suggestionIds.length,
+        rejected: results.filter((item) => item.status === "rejected").length,
+        skipped: results.filter((item) => item.status === "skipped").length,
+        failed: results.filter((item) => item.status === "failed").length,
+        results,
+      };
+    },
+  );
+
+  app.post(
     "/admin/tenants/:tenantId/knowledge/suggestions/:suggestionId/approve",
     { preHandler: requireTenantAccess(options, "tenant_admin") },
-    async (request) => {
+    async (request, reply) => {
       const { tenantId, suggestionId } = ParamsKnowledgeSuggestionSchema.parse(
         request.params,
       );
       const body = ReviewKnowledgeSuggestionSchema.parse(request.body ?? {});
+      const dataLayer = requireOneBrainDataLayer(options, reply);
+      if (!dataLayer) {
+        return;
+      }
+      const tenant = await options.store.getTenant(tenantId);
+      if (!tenant) {
+        return reply.code(404).send({ error: "Tenant not found." });
+      }
+      const suggestion = await options.store.getKnowledgeSuggestion(
+        tenantId,
+        suggestionId,
+      );
+      if (!suggestion) {
+        return reply
+          .status(404)
+          .send({ error: "Knowledge suggestion not found." });
+      }
+      if (suggestion.status !== "pending") {
+        return reply
+          .status(409)
+          .send({ error: "Only pending suggestions can be approved." });
+      }
       const auth = getRequestAuth(request);
       const reviewedByUserId = auth.kind === "user" ? auth.user.id : null;
+      try {
+        const oneBrain = await writeKnowledgeSuggestionDecisionToOneBrain({
+          dataLayer,
+          tenant,
+          suggestion,
+          decision: "approved",
+          review: body,
+        });
+        if (!oneBrain.ok) {
+          return reply.code(503).send({
+            error: "OneBrain data layer is not configured.",
+            code: "onebrain_data_layer_not_configured",
+          });
+        }
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          /question\/title and answer/.test(error.message)
+        ) {
+          return reply.status(422).send({ error: error.message });
+        }
+        request.log.error(
+          { err: error, tenantId, suggestionId },
+          "OneBrain knowledge approval write failed",
+        );
+        return reply
+          .status(502)
+          .send({ error: "OneBrain data layer write failed." });
+      }
       return options.store.approveKnowledgeSuggestion(tenantId, suggestionId, {
         ...body,
         reviewedByUserId,
@@ -2238,13 +2685,58 @@ export async function buildServer(
   app.post(
     "/admin/tenants/:tenantId/knowledge/suggestions/:suggestionId/reject",
     { preHandler: requireTenantAccess(options, "tenant_admin") },
-    async (request) => {
+    async (request, reply) => {
       const { tenantId, suggestionId } = ParamsKnowledgeSuggestionSchema.parse(
         request.params,
       );
       const body = ReviewKnowledgeSuggestionSchema.parse(request.body ?? {});
+      const dataLayer = requireOneBrainDataLayer(options, reply);
+      if (!dataLayer) {
+        return;
+      }
+      const tenant = await options.store.getTenant(tenantId);
+      if (!tenant) {
+        return reply.code(404).send({ error: "Tenant not found." });
+      }
+      const suggestion = await options.store.getKnowledgeSuggestion(
+        tenantId,
+        suggestionId,
+      );
+      if (!suggestion) {
+        return reply
+          .status(404)
+          .send({ error: "Knowledge suggestion not found." });
+      }
+      if (suggestion.status !== "pending") {
+        return reply
+          .status(409)
+          .send({ error: "Only pending suggestions can be rejected." });
+      }
       const auth = getRequestAuth(request);
       const reviewedByUserId = auth.kind === "user" ? auth.user.id : null;
+      try {
+        const oneBrain = await writeKnowledgeSuggestionDecisionToOneBrain({
+          dataLayer,
+          tenant,
+          suggestion,
+          decision: "rejected",
+          review: body,
+        });
+        if (!oneBrain.ok) {
+          return reply.code(503).send({
+            error: "OneBrain data layer is not configured.",
+            code: "onebrain_data_layer_not_configured",
+          });
+        }
+      } catch (error) {
+        request.log.error(
+          { err: error, tenantId, suggestionId },
+          "OneBrain knowledge rejection write failed",
+        );
+        return reply
+          .status(502)
+          .send({ error: "OneBrain data layer write failed." });
+      }
       return options.store.rejectKnowledgeSuggestion(tenantId, suggestionId, {
         ...body,
         reviewedByUserId,
@@ -2379,6 +2871,408 @@ export async function buildServer(
       );
       await options.store.deleteKnowledge(tenantId, knowledgeId);
       return reply.code(204).send();
+    },
+  );
+
+  app.post(
+    "/admin/tenants/:tenantId/playbooks/preview",
+    { preHandler: requireTenantAccess(options, "tenant_admin") },
+    async (request, reply) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      const body = PlaybookPreviewSchema.parse(request.body ?? {});
+      const tenant = await options.store.getTenant(tenantId);
+      if (!tenant) {
+        return reply.code(404).send({ error: "Tenant not found." });
+      }
+      const knowledge = await options.store.listKnowledge(tenantId, {
+        limit: 100,
+      });
+      return buildPlaybookPreview(ASSAD_DAR_AI_CONSULTANCY_PLAYBOOK, {
+        tenant,
+        knowledge: knowledge.map((item) => {
+          const record = asRecord(item);
+          return {
+            id: String(record.id ?? ""),
+            title: typeof record.title === "string" ? record.title : null,
+            content: typeof record.content === "string" ? record.content : null,
+            metadata: isRecord(record.metadata)
+              ? asRecord(record.metadata)
+              : null,
+          };
+        }),
+        overwrite: body.overwrite,
+      });
+    },
+  );
+
+  app.post(
+    "/admin/tenants/:tenantId/playbooks/apply",
+    { preHandler: requireTenantAccess(options, "tenant_admin") },
+    async (request, reply) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      const body = PlaybookApplySchema.parse(request.body ?? {});
+      const dataLayer = requireOneBrainDataLayer(options, reply);
+      if (!dataLayer) {
+        return;
+      }
+      const tenant = await options.store.getTenant(tenantId);
+      if (!tenant) {
+        return reply.code(404).send({ error: "Tenant not found." });
+      }
+      const knowledge = await options.store.listKnowledge(tenantId, {
+        limit: 100,
+      });
+      const preview = buildPlaybookPreview(ASSAD_DAR_AI_CONSULTANCY_PLAYBOOK, {
+        tenant,
+        knowledge: knowledge.map((item) => {
+          const record = asRecord(item);
+          return {
+            id: String(record.id ?? ""),
+            title: typeof record.title === "string" ? record.title : null,
+            content: typeof record.content === "string" ? record.content : null,
+            metadata: isRecord(record.metadata)
+              ? asRecord(record.metadata)
+              : null,
+          };
+        }),
+        overwrite: body.overwrite,
+      });
+      if (!body.confirmed) {
+        return reply.code(409).send({
+          error: "Playbook application must be confirmed.",
+          preview,
+        });
+      }
+
+      const playbook = ASSAD_DAR_AI_CONSULTANCY_PLAYBOOK;
+      const oneBrainWrites = [];
+      try {
+        const actionWrite = await writeOneBrainDataRecord(dataLayer, {
+          tenant,
+          type: "playbook_application",
+          id: `${playbook.key}:${playbook.version}:${Date.now()}`,
+          title: `${playbook.title} playbook applied`,
+          content: JSON.stringify(
+            {
+              playbookKey: playbook.key,
+              version: playbook.version,
+              overwrite: body.overwrite,
+              summary: preview.summary,
+            },
+            null,
+            2,
+          ),
+          recordType: "action",
+          intent: "settings_update",
+          metadata: {
+            playbookKey: playbook.key,
+            version: playbook.version,
+            overwrite: body.overwrite,
+            preview,
+          },
+        });
+        if (!actionWrite.ok) {
+          return reply.code(503).send({
+            error: "OneBrain data layer is not configured.",
+            code: "onebrain_data_layer_not_configured",
+          });
+        }
+        oneBrainWrites.push(actionWrite);
+
+        const themeChange = preview.changes.find(
+          (change) =>
+            change.type === "theme" &&
+            (change.action === "create" || change.action === "overwrite"),
+        );
+        if (themeChange) {
+          const themeWrite = await writeOneBrainDataRecord(dataLayer, {
+            tenant,
+            type: "playbook_theme",
+            id: `${playbook.key}:theme:${playbook.version}`,
+            title: `${playbook.title} widget theme`,
+            content: JSON.stringify(playbook.theme, null, 2),
+            recordType: "assistant_setting",
+            intent: "settings_update",
+            metadata: {
+              playbookKey: playbook.key,
+              version: playbook.version,
+              action: themeChange.action,
+            },
+          });
+          if (!themeWrite.ok) {
+            return reply.code(503).send({
+              error: "OneBrain data layer is not configured.",
+              code: "onebrain_data_layer_not_configured",
+            });
+          }
+          oneBrainWrites.push(themeWrite);
+        }
+
+        for (const faq of playbook.faqs) {
+          const change = preview.changes.find(
+            (item) => item.type === "faq" && item.label === faq.question,
+          );
+          if (change?.action !== "create") {
+            continue;
+          }
+          const faqWrite = await writeOneBrainDataRecord(dataLayer, {
+            tenant,
+            type: "playbook_faq",
+            id: `${playbook.key}:faq:${hashSecret(faq.question).slice(0, 24)}`,
+            title: faq.question,
+            content: `Question: ${faq.question}\nAnswer: ${faq.answer}`,
+            recordType: "document",
+            intent: "knowledge_update",
+            metadata: {
+              playbookKey: playbook.key,
+              version: playbook.version,
+              tags: faq.tags,
+            },
+          });
+          if (!faqWrite.ok) {
+            return reply.code(503).send({
+              error: "OneBrain data layer is not configured.",
+              code: "onebrain_data_layer_not_configured",
+            });
+          }
+          oneBrainWrites.push(faqWrite);
+        }
+      } catch (error) {
+        request.log.error(
+          { err: error, tenantId, playbookKey: body.playbookKey },
+          "OneBrain playbook apply write failed",
+        );
+        return reply
+          .code(502)
+          .send({ error: "OneBrain data layer write failed." });
+      }
+
+      const appliedFaqs = [];
+      const themeChange = preview.changes.find(
+        (change) =>
+          change.type === "theme" &&
+          (change.action === "create" || change.action === "overwrite"),
+      );
+      if (themeChange) {
+        await options.store.updateTenant(tenantId, {
+          theme: body.overwrite
+            ? playbook.theme
+            : { ...(tenant.theme ?? {}), ...playbook.theme },
+        });
+      }
+      for (const faq of playbook.faqs) {
+        const change = preview.changes.find(
+          (item) => item.type === "faq" && item.label === faq.question,
+        );
+        if (change?.action !== "create") {
+          continue;
+        }
+        appliedFaqs.push(
+          await options.store.addFaq(tenantId, {
+            question: faq.question,
+            answer: faq.answer,
+            tags: faq.tags,
+          }),
+        );
+      }
+      await options.store.recordAuditEvent(tenantId, {
+        action: "playbook.applied",
+        targetType: "tenant",
+        targetId: tenantId,
+        actorType: auditActorFromRequest(request).actorType,
+        actorId: auditActorFromRequest(request).actorId,
+        metadata: {
+          playbookKey: playbook.key,
+          version: playbook.version,
+          overwrite: body.overwrite,
+          summary: preview.summary,
+        },
+      });
+
+      return {
+        playbookKey: playbook.key,
+        version: playbook.version,
+        preview,
+        applied: {
+          theme: Boolean(themeChange),
+          faqs: appliedFaqs.length,
+        },
+        oneBrain: oneBrainWrites,
+      };
+    },
+  );
+
+  app.post(
+    "/admin/tenants/:tenantId/portal-links",
+    { preHandler: requireTenantAccess(options, "tenant_admin") },
+    async (request, reply) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      const body = CreatePortalLinkSchema.parse(request.body ?? {});
+      const dataLayer = requireOneBrainDataLayer(options, reply);
+      if (!dataLayer) {
+        return;
+      }
+      const tenant = await options.store.getTenant(tenantId);
+      if (!tenant) {
+        return reply.code(404).send({ error: "Tenant not found." });
+      }
+      const conversation = await options.store.getConversation(
+        tenantId,
+        body.conversationId,
+      );
+      if (!conversation) {
+        return reply.code(404).send({ error: "Conversation not found." });
+      }
+      if (body.contactId) {
+        const contact = await options.store.getContact(
+          tenantId,
+          body.contactId,
+        );
+        if (!contact) {
+          return reply.code(404).send({ error: "Contact not found." });
+        }
+      }
+
+      const auth = getRequestAuth(request);
+      const createdByUserId = auth.kind === "user" ? auth.user.id : null;
+      const expiresAt = new Date(
+        Date.now() + body.expiresInDays * 24 * 60 * 60 * 1000,
+      );
+      const { token, nonce } = createPortalToken(
+        tenantId,
+        portalTokenSecret(options),
+      );
+      const tokenHash = hashSecret(token);
+
+      let oneBrain;
+      try {
+        oneBrain = await writeOneBrainDataRecord(dataLayer, {
+          tenant,
+          type: "portal_link",
+          id: `${body.conversationId}:${nonce}`,
+          title: "Portal access link",
+          content:
+            "A scoped portal access link was created. The raw token is not stored.",
+          recordType: "secret_reference",
+          intent: "sync_state",
+          metadata: {
+            tokenHash,
+            conversationId: body.conversationId,
+            contactId: body.contactId ?? null,
+            scope: body.scope,
+            expiresAt: expiresAt.toISOString(),
+            createdByUserId,
+          },
+        });
+      } catch (error) {
+        request.log.error(
+          { err: error, tenantId, conversationId: body.conversationId },
+          "OneBrain portal link write failed",
+        );
+        return reply
+          .code(502)
+          .send({ error: "OneBrain data layer write failed." });
+      }
+      if (!oneBrain.ok) {
+        return reply.code(503).send({
+          error: "OneBrain data layer is not configured.",
+          code: "onebrain_data_layer_not_configured",
+        });
+      }
+
+      const projection = await options.store.createPortalLinkProjection(
+        tenantId,
+        {
+          onebrainRecordId: oneBrain.externalId,
+          tokenHash,
+          conversationId: body.conversationId,
+          contactId: body.contactId ?? null,
+          scope: body.scope,
+          expiresAt,
+          createdByUserId,
+          metadata: {
+            onebrainStatus: oneBrain.status,
+            onebrainAsync: oneBrain.async,
+          },
+        },
+      );
+
+      return reply.code(201).send({
+        link: sanitizePortalLinkProjection(projection),
+        token,
+        url: buildPortalConversationUrl(options, token),
+        oneBrain,
+      });
+    },
+  );
+
+  app.post(
+    "/admin/tenants/:tenantId/portal-links/:linkId/disable",
+    { preHandler: requireTenantAccess(options, "tenant_admin") },
+    async (request, reply) => {
+      const { tenantId, linkId } = ParamsPortalLinkSchema.parse(request.params);
+      const dataLayer = requireOneBrainDataLayer(options, reply);
+      if (!dataLayer) {
+        return;
+      }
+      const tenant = await options.store.getTenant(tenantId);
+      if (!tenant) {
+        return reply.code(404).send({ error: "Tenant not found." });
+      }
+      const projection = await options.store.getPortalLinkProjection(
+        tenantId,
+        linkId,
+      );
+      if (!projection) {
+        return reply.code(404).send({ error: "Portal link not found." });
+      }
+      if (projection.status !== "active" || projection.disabledAt) {
+        return reply
+          .code(409)
+          .send({ error: "Portal link is already disabled." });
+      }
+
+      let oneBrain;
+      try {
+        oneBrain = await writeOneBrainDataRecord(dataLayer, {
+          tenant,
+          type: "portal_link_disable",
+          id: linkId,
+          title: "Portal access link disabled",
+          content: `Portal access link ${linkId} was disabled.`,
+          recordType: "action_audit",
+          intent: "sync_state",
+          metadata: {
+            portalLinkId: linkId,
+            onebrainRecordId: projection.onebrainRecordId,
+            conversationId: projection.conversationId ?? null,
+            contactId: projection.contactId ?? null,
+          },
+        });
+      } catch (error) {
+        request.log.error(
+          { err: error, tenantId, linkId },
+          "OneBrain portal link disable write failed",
+        );
+        return reply
+          .code(502)
+          .send({ error: "OneBrain data layer write failed." });
+      }
+      if (!oneBrain.ok) {
+        return reply.code(503).send({
+          error: "OneBrain data layer is not configured.",
+          code: "onebrain_data_layer_not_configured",
+        });
+      }
+
+      const disabled = await options.store.disablePortalLinkProjection(
+        tenantId,
+        linkId,
+      );
+      return {
+        link: sanitizePortalLinkProjection(disabled),
+        oneBrain,
+      };
     },
   );
 
@@ -2766,6 +3660,10 @@ export async function buildServer(
             "OneBrain answer failed; falling back to local Project Brain",
           ),
       });
+      metrics.answerOutcomeTotal.inc({
+        channel: "admin_test",
+        status: answer.status,
+      });
 
       await options.store.addMessage({
         tenantId,
@@ -2918,6 +3816,239 @@ export async function buildServer(
   );
 
   app.post(
+    "/widget/consent",
+    {
+      config: {
+        rateLimit: { max: 30, timeWindow: "1 minute" },
+      },
+    },
+    async (request, reply) => {
+      const body = WidgetConsentSchema.parse(request.body);
+      const tenant = await options.store.getTenantByPublicId(body.assistantId);
+      if (!tenant) {
+        return reply.code(404).send({ error: "Assistant not found." });
+      }
+
+      let oneBrain: Awaited<ReturnType<typeof writeOneBrainDataRecord>> | null =
+        null;
+      try {
+        oneBrain = await writeOneBrainDataRecord(options.oneBrainDataLayer, {
+          tenant,
+          type: "widget_consent",
+          id: `${body.source}:${Date.now()}:${hashSecret(
+            `${body.conversationId ?? ""}:${body.visitorId ?? ""}:${body.textVersion}`,
+          ).slice(0, 16)}`,
+          title: "Widget consent accepted",
+          content: body.text,
+          recordType: "policy_decision",
+          intent: "security_decision",
+          metadata: {
+            assistantId: body.assistantId,
+            conversationId: body.conversationId ?? null,
+            visitorId: body.visitorId ?? null,
+            locale: body.locale ?? tenant.defaultLocale,
+            textVersion: body.textVersion,
+            source: body.source,
+            ...(body.metadata ?? {}),
+          },
+        });
+      } catch (error) {
+        request.log.warn(
+          { err: error, tenantId: tenant.id },
+          "OneBrain widget consent write failed",
+        );
+      }
+
+      await options.store.logUsage({
+        tenantId: tenant.id,
+        channel: "website",
+        eventType: "consent_accepted",
+        credits: 0,
+        metadata: {
+          conversationId: body.conversationId,
+          visitorId: body.visitorId,
+          locale: body.locale ?? tenant.defaultLocale,
+          textVersion: body.textVersion,
+          source: body.source,
+          persisted: Boolean(oneBrain?.ok),
+        },
+      });
+
+      return reply.code(202).send({
+        received: true,
+        persisted: Boolean(oneBrain?.ok),
+        reason:
+          oneBrain && !oneBrain.ok && oneBrain.skipped
+            ? oneBrain.reason
+            : undefined,
+      });
+    },
+  );
+
+  app.get("/portal/conversations/:token", async (request, reply) => {
+    const { token } = ParamsPortalTokenSchema.parse(request.params);
+    const access = await resolvePortalAccess(options, reply, token);
+    if (!access) {
+      return;
+    }
+    const { tenant, projection } = access;
+    if (!projection.conversationId) {
+      return reply
+        .code(404)
+        .send({ error: "Portal link is not attached to a conversation." });
+    }
+    const conversation = await options.store.getConversation(
+      tenant.id,
+      projection.conversationId,
+    );
+    if (!conversation) {
+      return reply.code(404).send({ error: "Conversation not found." });
+    }
+    const [messages, contact] = await Promise.all([
+      options.store.listConversationMessages(
+        tenant.id,
+        projection.conversationId,
+      ),
+      projection.contactId
+        ? options.store.getContact(tenant.id, projection.contactId)
+        : Promise.resolve(null),
+    ]);
+    await options.store.markPortalLinkProjectionUsed(tenant.id, projection.id);
+    return {
+      tenant: {
+        id: tenant.publicId,
+        name: tenant.name,
+      },
+      link: sanitizePortalLinkProjection(projection),
+      conversation: sanitizePortalConversation(conversation),
+      contact: sanitizePortalContact(contact),
+      messages: messages.map(sanitizePortalMessage),
+    };
+  });
+
+  app.post(
+    "/portal/conversations/:token/details",
+    {
+      config: {
+        rateLimit: { max: 10, timeWindow: "1 minute" },
+      },
+    },
+    async (request, reply) => {
+      const { token } = ParamsPortalTokenSchema.parse(request.params);
+      const body = PortalDetailsSchema.parse(request.body ?? {});
+      const dataLayer = requireOneBrainDataLayer(options, reply);
+      if (!dataLayer) {
+        return;
+      }
+      const access = await resolvePortalAccess(options, reply, token);
+      if (!access) {
+        return;
+      }
+      const { tenant, projection } = access;
+      if (!projection.conversationId) {
+        return reply
+          .code(404)
+          .send({ error: "Portal link is not attached to a conversation." });
+      }
+      const conversation = await options.store.getConversation(
+        tenant.id,
+        projection.conversationId,
+      );
+      if (!conversation) {
+        return reply.code(404).send({ error: "Conversation not found." });
+      }
+      const fieldEntries = Object.entries(body.fields).filter(([, value]) =>
+        value.trim(),
+      );
+      if (fieldEntries.length === 0 && !body.message?.trim()) {
+        return reply
+          .code(422)
+          .send({ error: "Details or message content is required." });
+      }
+
+      let oneBrain;
+      try {
+        oneBrain = await writeOneBrainDataRecord(dataLayer, {
+          tenant,
+          type: "portal_details",
+          id: `${projection.id}:${Date.now()}`,
+          title: "Portal details submitted",
+          content: JSON.stringify(
+            {
+              fields: Object.fromEntries(fieldEntries),
+              message: body.message ?? null,
+            },
+            null,
+            2,
+          ),
+          recordType: fieldEntries.length > 0 ? "contact" : "message",
+          intent: "sales_lead",
+          metadata: {
+            portalLinkId: projection.id,
+            conversationId: projection.conversationId,
+            contactId: projection.contactId ?? null,
+          },
+        });
+      } catch (error) {
+        request.log.error(
+          { err: error, tenantId: tenant.id, portalLinkId: projection.id },
+          "OneBrain portal details write failed",
+        );
+        return reply
+          .code(502)
+          .send({ error: "OneBrain data layer write failed." });
+      }
+      if (!oneBrain.ok) {
+        return reply.code(503).send({
+          error: "OneBrain data layer is not configured.",
+          code: "onebrain_data_layer_not_configured",
+        });
+      }
+
+      const channel = (getStringProperty(conversation, "channel") ??
+        "website") as Channel;
+      let contact = null;
+      if (fieldEntries.length > 0) {
+        contact = await options.store.enrichConversationContact({
+          tenantId: tenant.id,
+          conversationId: projection.conversationId,
+          channel,
+          contact: contactProfileFromFields(Object.fromEntries(fieldEntries), {
+            source: "portal_details",
+            portalLinkId: projection.id,
+          }),
+        });
+      }
+      let message = null;
+      if (body.message?.trim()) {
+        message = await options.store.addMessage({
+          tenantId: tenant.id,
+          conversationId: projection.conversationId,
+          channel,
+          direction: "inbound",
+          role: "user",
+          content: body.message.trim(),
+          trace: {
+            type: "portal_details",
+            portalLinkId: projection.id,
+          },
+        });
+      }
+      await options.store.markPortalLinkProjectionUsed(
+        tenant.id,
+        projection.id,
+      );
+
+      return reply.code(202).send({
+        received: true,
+        oneBrain,
+        contact: sanitizePortalContact(contact),
+        message: message ? sanitizePortalMessage(message) : null,
+      });
+    },
+  );
+
+  app.post(
     "/widget/chat",
     {
       config: {
@@ -2995,6 +4126,10 @@ export async function buildServer(
             ),
         });
         metrics.observeOperation("widget_answer", "success", answerStartedAtMs);
+        metrics.answerOutcomeTotal.inc({
+          channel: "website",
+          status: answer.status,
+        });
       } catch (error) {
         metrics.observeOperation("widget_answer", "error", answerStartedAtMs);
         throw error;
@@ -3450,6 +4585,7 @@ export async function buildServer(
           const result = await processChannelInboundEvent({
             options,
             engine,
+            metrics,
             adapter,
             tenant,
             event,
@@ -3805,6 +4941,93 @@ async function recordPiiAccess(
   }
 }
 
+type ReviewableKnowledgeSuggestion = NonNullable<
+  Awaited<ReturnType<PlatformStore["getKnowledgeSuggestion"]>>
+>;
+
+function resolveKnowledgeApprovalFields(
+  suggestion: ReviewableKnowledgeSuggestion,
+  input: ReviewKnowledgeSuggestionInput = {},
+) {
+  const question = (
+    input.question ??
+    suggestion.suggestedQuestion ??
+    suggestion.suggestedTitle ??
+    ""
+  ).trim();
+  const answer = (input.answer ?? suggestion.suggestedAnswer ?? "").trim();
+  const title = (input.title ?? suggestion.suggestedTitle ?? question).trim();
+  const tags = input.tags?.length
+    ? input.tags
+    : Array.isArray(suggestion.suggestedTags)
+      ? suggestion.suggestedTags
+      : [];
+  return { question, answer, title, tags };
+}
+
+async function writeKnowledgeSuggestionDecisionToOneBrain(input: {
+  dataLayer: OneBrainDataLayer;
+  tenant: StoreTenant;
+  suggestion: ReviewableKnowledgeSuggestion;
+  decision: "approved" | "rejected";
+  review: ReviewKnowledgeSuggestionInput;
+}) {
+  if (input.decision === "approved") {
+    const fields = resolveKnowledgeApprovalFields(
+      input.suggestion,
+      input.review,
+    );
+    if (!fields.question || !fields.answer) {
+      throw new Error("A question/title and answer are required to approve.");
+    }
+    return writeOneBrainDataRecord(input.dataLayer, {
+      tenant: input.tenant,
+      type: "knowledge_suggestion",
+      id: input.suggestion.id,
+      title: fields.title || fields.question,
+      content: `Question: ${fields.question}\nAnswer: ${fields.answer}`,
+      recordType: "document",
+      intent: "knowledge_update",
+      metadata: {
+        decision: "approved",
+        sourceType: input.suggestion.sourceType,
+        sourceConversationId: input.suggestion.sourceConversationId ?? null,
+        sourceMessageId: input.suggestion.sourceMessageId ?? null,
+        sourceDocumentId: input.suggestion.sourceDocumentId ?? null,
+        suggestedTags: fields.tags,
+        reviewNote: input.review.reviewNote ?? null,
+      },
+    });
+  }
+
+  const title =
+    input.suggestion.suggestedTitle ??
+    input.suggestion.suggestedQuestion ??
+    `Knowledge suggestion ${input.suggestion.id}`;
+  return writeOneBrainDataRecord(input.dataLayer, {
+    tenant: input.tenant,
+    type: "knowledge_suggestion",
+    id: input.suggestion.id,
+    title: `Rejected: ${title}`,
+    content: [
+      `Rejected knowledge suggestion ${input.suggestion.id}.`,
+      input.review.reviewNote ? `Review note: ${input.review.reviewNote}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    recordType: "action_audit",
+    intent: "approval",
+    metadata: {
+      decision: "rejected",
+      sourceType: input.suggestion.sourceType,
+      sourceConversationId: input.suggestion.sourceConversationId ?? null,
+      sourceMessageId: input.suggestion.sourceMessageId ?? null,
+      sourceDocumentId: input.suggestion.sourceDocumentId ?? null,
+      reviewNote: input.review.reviewNote ?? null,
+    },
+  });
+}
+
 function getRequestAuth(request: FastifyRequest) {
   const auth = requestAuthContext.get(request);
   if (!auth) {
@@ -3878,6 +5101,203 @@ function createSessionToken() {
 
 function hashSecret(value: string) {
   return createHash("sha256").update(value).digest("hex");
+}
+
+function requireOneBrainDataLayer(
+  options: BuildServerOptions,
+  reply: FastifyReply,
+): OneBrainDataLayer | null {
+  if (!options.oneBrainDataLayer?.provider) {
+    reply.code(503).send({
+      error: "OneBrain data layer is not configured.",
+      code: "onebrain_data_layer_not_configured",
+    });
+    return null;
+  }
+  return options.oneBrainDataLayer;
+}
+
+type PortalTokenPayload = {
+  v: 1;
+  tenantId: string;
+  nonce: string;
+};
+
+const PortalTokenPayloadSchema = z.object({
+  v: z.literal(1),
+  tenantId: z.string().uuid(),
+  nonce: z.string().min(16).max(160),
+});
+
+function portalTokenSecret(options: BuildServerOptions) {
+  return process.env.PORTAL_TOKEN_SECRET?.trim() || options.adminToken;
+}
+
+function createPortalToken(tenantId: string, secret: string) {
+  const payload: PortalTokenPayload = {
+    v: 1,
+    tenantId,
+    nonce: randomBytes(32).toString("base64url"),
+  };
+  const encodedPayload = Buffer.from(JSON.stringify(payload)).toString(
+    "base64url",
+  );
+  const signature = signPortalTokenPayload(encodedPayload, secret);
+  return {
+    token: `plt_${encodedPayload}.${signature}`,
+    nonce: payload.nonce,
+  };
+}
+
+function verifyPortalToken(
+  token: string,
+  secret: string,
+): PortalTokenPayload | null {
+  if (!token.startsWith("plt_")) {
+    return null;
+  }
+  const [encodedPayload, signature] = token.slice(4).split(".");
+  if (!encodedPayload || !signature) {
+    return null;
+  }
+  const expected = signPortalTokenPayload(encodedPayload, secret);
+  const providedBuffer = Buffer.from(signature);
+  const expectedBuffer = Buffer.from(expected);
+  if (
+    providedBuffer.length !== expectedBuffer.length ||
+    !timingSafeEqual(providedBuffer, expectedBuffer)
+  ) {
+    return null;
+  }
+  try {
+    const decoded = JSON.parse(
+      Buffer.from(encodedPayload, "base64url").toString("utf8"),
+    );
+    return PortalTokenPayloadSchema.parse(decoded);
+  } catch {
+    return null;
+  }
+}
+
+function signPortalTokenPayload(encodedPayload: string, secret: string) {
+  return createHmac("sha256", secret)
+    .update(encodedPayload)
+    .digest("base64url");
+}
+
+function buildPortalConversationUrl(
+  options: BuildServerOptions,
+  token: string,
+) {
+  const base =
+    process.env.PUBLIC_PORTAL_BASE_URL?.trim() ||
+    options.adminPublicUrl ||
+    defaultAdminPublicUrl;
+  return new URL(
+    `/portal/conversations/${encodeURIComponent(token)}`,
+    base,
+  ).toString();
+}
+
+type PortalAccess = {
+  tenant: StoreTenant;
+  projection: NonNullable<
+    Awaited<ReturnType<PlatformStore["getPortalLinkProjectionByTokenHash"]>>
+  >;
+};
+
+async function resolvePortalAccess(
+  options: BuildServerOptions,
+  reply: FastifyReply,
+  token: string,
+): Promise<PortalAccess | null> {
+  const payload = verifyPortalToken(token, portalTokenSecret(options));
+  if (!payload) {
+    reply.code(401).send({ error: "Invalid portal token." });
+    return null;
+  }
+  const projection = await options.store.getPortalLinkProjectionByTokenHash(
+    payload.tenantId,
+    hashSecret(token),
+  );
+  if (!projection) {
+    reply.code(404).send({ error: "Portal link not found." });
+    return null;
+  }
+  const expiresAt = getDateProperty(projection, "expiresAt");
+  if (
+    projection.status !== "active" ||
+    projection.disabledAt ||
+    !expiresAt ||
+    expiresAt.getTime() <= Date.now()
+  ) {
+    reply.code(410).send({ error: "Portal link is no longer active." });
+    return null;
+  }
+  const tenant = await options.store.getTenant(payload.tenantId);
+  if (!tenant) {
+    reply.code(404).send({ error: "Tenant not found." });
+    return null;
+  }
+  return { tenant, projection };
+}
+
+function sanitizePortalLinkProjection(value: unknown) {
+  const record = asRecord(value);
+  return {
+    id: getStringProperty(record, "id") ?? null,
+    tenantId: getStringProperty(record, "tenantId") ?? null,
+    onebrainRecordId: getStringProperty(record, "onebrainRecordId") ?? null,
+    conversationId: getStringProperty(record, "conversationId") ?? null,
+    contactId: getStringProperty(record, "contactId") ?? null,
+    scope: getStringProperty(record, "scope") ?? "conversation",
+    status: getStringProperty(record, "status") ?? "unknown",
+    expiresAt: getDateProperty(record, "expiresAt")?.toISOString() ?? null,
+    disabledAt: getDateProperty(record, "disabledAt")?.toISOString() ?? null,
+    lastUsedAt: getDateProperty(record, "lastUsedAt")?.toISOString() ?? null,
+    createdAt: getDateProperty(record, "createdAt")?.toISOString() ?? null,
+    updatedAt: getDateProperty(record, "updatedAt")?.toISOString() ?? null,
+  };
+}
+
+function sanitizePortalConversation(value: unknown) {
+  const record = asRecord(value);
+  return {
+    id: getStringProperty(record, "id") ?? null,
+    publicId: getStringProperty(record, "publicId") ?? null,
+    channel: getStringProperty(record, "channel") ?? null,
+    status: getStringProperty(record, "status") ?? null,
+    locale: getStringProperty(record, "locale") ?? null,
+    summary: getStringProperty(record, "summary") ?? null,
+    createdAt: getDateProperty(record, "createdAt")?.toISOString() ?? null,
+    updatedAt: getDateProperty(record, "updatedAt")?.toISOString() ?? null,
+  };
+}
+
+function sanitizePortalContact(value: unknown) {
+  if (!value) {
+    return null;
+  }
+  const record = asRecord(value);
+  return {
+    id: getStringProperty(record, "id") ?? null,
+    displayName: getStringProperty(record, "displayName") ?? null,
+    email: getStringProperty(record, "email") ?? null,
+    phone: getStringProperty(record, "phone") ?? null,
+    company: getStringProperty(record, "company") ?? null,
+    status: getStringProperty(record, "status") ?? null,
+  };
+}
+
+function sanitizePortalMessage(value: unknown) {
+  const record = asRecord(value);
+  return {
+    id: getStringProperty(record, "id") ?? null,
+    direction: getStringProperty(record, "direction") ?? null,
+    role: getStringProperty(record, "role") ?? null,
+    content: getStringProperty(record, "content") ?? "",
+    createdAt: getDateProperty(record, "createdAt")?.toISOString() ?? null,
+  };
 }
 
 function sessionDurationMs() {
@@ -5043,6 +6463,7 @@ function buildChannelConnectionDashboard(input: {
 async function processChannelInboundEvent(input: {
   options: BuildServerOptions;
   engine: ReturnType<typeof createAnswerEngine>;
+  metrics: MetricsRegistry;
   adapter: ChannelAdapter;
   tenant: StoreTenant;
   event: NormalizedInboundEvent;
@@ -5097,6 +6518,10 @@ async function processChannelInboundEvent(input: {
     engine: input.engine,
     tenant: input.tenant,
     message: inboundMessage,
+  });
+  input.metrics.answerOutcomeTotal.inc({
+    channel: input.event.channel,
+    status: answer.status,
   });
 
   const outboundMessage = {
@@ -5166,6 +6591,11 @@ async function processChannelInboundEvent(input: {
       retryable: delivery.status === "failed" && delivery.retryable === true,
       attempts: 0,
     },
+  });
+  input.metrics.messageDeliveryTotal.inc({
+    channel: input.event.channel,
+    provider: input.adapter.provider,
+    status: delivery.status,
   });
 
   await input.options.store.logUsage({
@@ -5875,6 +7305,11 @@ function buildProductionReadiness(input: {
   const templateStats = asRecord(compliance.templates);
   const recentDeliveries = asArray(compliance.recentDeliveries);
   const theme = asRecord(tenant.theme);
+  const retentionCleanupFlag =
+    process.env.RETENTION_CLEANUP_ENABLED?.trim().toLowerCase();
+  const retentionCleanupEnabled = retentionCleanupFlag
+    ? retentionCleanupFlag === "true"
+    : process.env.NODE_ENV === "production";
 
   const approvedKnowledge =
     numberValue(analytics.approvedKnowledge) ??
@@ -6121,9 +7556,8 @@ function buildProductionReadiness(input: {
         id: "reliability.retention_job",
         title: "Retention cleanup job enabled",
         detail:
-          "Retention cleanup remains off until explicitly enabled because it deletes old conversation history.",
-        status:
-          process.env.RETENTION_CLEANUP_ENABLED === "true" ? "pass" : "warn",
+          "Retention cleanup defaults on in production and can be disabled only with an explicit environment flag.",
+        status: retentionCleanupEnabled ? "pass" : "warn",
         actionLabel: "Enable retention cleanup",
         weight: 3,
       }),

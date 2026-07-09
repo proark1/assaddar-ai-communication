@@ -18,7 +18,7 @@ The product runtime is intentionally separate from any marketing website. A publ
 - Manage WhatsApp templates and view the 24-hour response-window compliance state.
 - Record provider delivery outcomes for social messaging sends.
 - Surface workflow recommendations for handoffs, WhatsApp readiness, and contact completion.
-- Run on Supabase Postgres with `pgvector`, with local Docker Postgres as an optional fallback.
+- Run on Railway Postgres with `pgvector`, with local Docker Postgres as an optional fallback.
 - Use adapter interfaces for Website, WhatsApp, Instagram/Messenger, TikTok, and Telephone.
 - Run core guardrail and tenant-isolation tests without external credentials.
 
@@ -37,9 +37,12 @@ packages/channels Channel adapter contracts and mock/provider skeletons
 docs           Architecture, API, security/GDPR, integration notes
 ```
 
-## Supabase Postgres Setup
+## Railway Postgres Setup
 
-Supabase Postgres is the production database for this project. Railway hosts the API, admin dashboard, widget, voice, workers, and Redis queue. Copy the Supabase Postgres `DATABASE_URL` and use that same connection string for the API, workers, voice service, and migrations.
+Railway is the production runtime for this project: API, admin dashboard,
+widget, voice, workers, Postgres, and Redis all live in the Railway project.
+Use Railway Postgres for `DATABASE_URL` on API, workers, voice, and migration
+jobs. Use Railway Redis for `REDIS_URL` on API and workers.
 
 ```bash
 pnpm install
@@ -53,10 +56,10 @@ pnpm dev:api
 Set `DATABASE_URL` in `.env` before running the DB commands:
 
 ```bash
-DATABASE_URL='postgresql://USER:PASSWORD@HOST:PORT/postgres?sslmode=require'
+DATABASE_URL='postgresql://USER:PASSWORD@HOST:PORT/railway'
 ```
 
-See [docs/supabase.md](docs/supabase.md) for the Supabase Postgres and Auth setup notes.
+See [docs/deployment.md](docs/deployment.md) for the Railway setup notes.
 
 ## Optional Local Docker Setup
 
@@ -174,6 +177,6 @@ GitHub Actions runs `pnpm test`, `pnpm typecheck`, and `pnpm build` on pushes to
 - The MVP answer engine is extractive and deterministic. It does not use customer data to train shared models.
 - OpenAI integration is represented through provider interfaces and environment variables, but the local MVP does not require an API key.
 
-See [docs/architecture.md](docs/architecture.md), [docs/api.md](docs/api.md), [docs/security-gdpr.md](docs/security-gdpr.md), [docs/integrations.md](docs/integrations.md), and [docs/supabase.md](docs/supabase.md).
+See [docs/architecture.md](docs/architecture.md), [docs/api.md](docs/api.md), [docs/security-gdpr.md](docs/security-gdpr.md), and [docs/integrations.md](docs/integrations.md).
 
 Deployment setup is documented in [docs/deployment.md](docs/deployment.md).

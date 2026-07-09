@@ -22,3 +22,19 @@ func ExtractUserFromHeader(header string) string {
 	}
 	return user
 }
+
+func HeaderParam(header string, name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if header == "" || name == "" {
+		return ""
+	}
+	parts := strings.Split(header, ";")
+	for _, part := range parts[1:] {
+		key, value, ok := strings.Cut(strings.TrimSpace(part), "=")
+		if !ok || !strings.EqualFold(strings.TrimSpace(key), name) {
+			continue
+		}
+		return strings.Trim(strings.TrimSpace(value), `"`)
+	}
+	return ""
+}

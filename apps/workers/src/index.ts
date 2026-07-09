@@ -120,6 +120,17 @@ function parsePositiveIntEnv(value: string | undefined, fallback: number) {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+export function resolveRetentionCleanupEnabled(env: {
+  NODE_ENV?: string | undefined;
+  RETENTION_CLEANUP_ENABLED?: string | undefined;
+}) {
+  const raw = env.RETENTION_CLEANUP_ENABLED?.trim().toLowerCase();
+  if (!raw) {
+    return env.NODE_ENV === "production";
+  }
+  return raw === "true";
+}
+
 // Default: re-scan for missing embeddings every 5 minutes.
 const EMBEDDING_BACKFILL_INTERVAL_MS = parsePositiveIntEnv(
   process.env.EMBEDDING_BACKFILL_INTERVAL_MS,
@@ -156,11 +167,18 @@ const ONEBRAIN_SYNC_INTERVAL_MS = parsePositiveIntEnv(
   60 * 60 * 1000,
 );
 
-// Retention deletion is DESTRUCTIVE, so it is gated behind an explicit flag and
-// defaults to OFF. The repeatable job is only scheduled when this is enabled;
-// even if the job somehow runs, the handler re-checks the flag before deleting.
-const RETENTION_CLEANUP_ENABLED =
-  (process.env.RETENTION_CLEANUP_ENABLED ?? "").toLowerCase() === "true";
+// Retention deletion is DESTRUCTIVE, so it stays easy to disable in development,
+// but production defaults to ON to avoid silently retaining personal data
+// forever after deploy. The handler re-checks this value before deleting.
+const RETENTION_CLEANUP_ENABLED = resolveRetentionCleanupEnabled(process.env);
+if (
+  process.env.NODE_ENV === "production" &&
+  process.env.RETENTION_CLEANUP_ENABLED?.trim().toLowerCase() === "false"
+) {
+  console.warn(
+    "Retention cleanup is explicitly disabled in production. Old personal data will not be pruned.",
+  );
+}
 
 const worker = new Worker(
   QUEUE_NAME,

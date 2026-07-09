@@ -46,6 +46,7 @@ begin
     'brain_onboarding_answers',
     'knowledge_suggestions',
     'onebrain_sync_records',
+    'portal_link_projections',
     'allowed_intents',
     'blocked_topics',
     'business_hours',

@@ -1,13 +1,17 @@
-# Supabase Setup
+# Optional Supabase Setup
 
-This project uses Supabase for two backend responsibilities:
+The current production path is Railway-only: Railway Postgres stores product
+data and the Admin dashboard uses the API's legacy email/password session flow.
+Supabase remains an optional future identity provider.
 
-- Supabase Postgres is the production database behind `DATABASE_URL`.
-- Supabase Auth is the identity provider for Admin dashboard users.
+When enabled, Supabase can provide two backend responsibilities:
 
-Railway still hosts the runtime services: API, Admin dashboard, Widget, Voice,
-Workers, and Redis. Redis is used for worker queues and does not replace
-Postgres.
+- Supabase Postgres can be used as an alternate Postgres backend.
+- Supabase Auth can be used as the identity provider for Admin dashboard users.
+
+Railway hosts the runtime services: API, Admin dashboard, Widget, Voice,
+Workers, Postgres, and Redis. Redis is used for worker queues and does not
+replace Postgres.
 
 ## Database Setup
 

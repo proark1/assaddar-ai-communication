@@ -48,6 +48,7 @@ import {
   messageDeliveries,
   messages,
   memberships,
+  portalLinkProjections,
   roles,
   stripeWebhookEvents,
   tenantInvites,
@@ -316,6 +317,19 @@ export type KnowledgeSuggestionRecord =
 export type DocumentIngestionJobRecord =
   typeof documentIngestionJobs.$inferSelect;
 export type MessageDeliveryRecord = typeof messageDeliveries.$inferSelect;
+export type PortalLinkProjectionRecord =
+  typeof portalLinkProjections.$inferSelect;
+
+export type CreatePortalLinkProjectionInput = {
+  onebrainRecordId: string;
+  tokenHash: string;
+  conversationId?: string | null | undefined;
+  contactId?: string | null | undefined;
+  scope?: "conversation" | "contact" | undefined;
+  expiresAt: Date;
+  createdByUserId?: string | null | undefined;
+  metadata?: Record<string, unknown> | undefined;
+};
 
 /**
  * A failed outbound delivery that is eligible for an automatic re-send, joined
@@ -3511,6 +3525,134 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
         )
       : recordOneBrainSyncFailureRow(this.db, tenantId, input);
   }
+
+  async createPortalLinkProjection(
+    tenantId: string,
+    input: CreatePortalLinkProjectionInput,
+  ): Promise<PortalLinkProjectionRecord> {
+    assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope(tenantId, (repo) =>
+        repo.createPortalLinkProjection(tenantId, input),
+      );
+    }
+    const [record] = await this.db
+      .insert(portalLinkProjections)
+      .values({
+        tenantId,
+        onebrainRecordId: input.onebrainRecordId,
+        tokenHash: input.tokenHash,
+        conversationId: input.conversationId ?? null,
+        contactId: input.contactId ?? null,
+        scope: input.scope ?? "conversation",
+        expiresAt: input.expiresAt,
+        createdByUserId: input.createdByUserId ?? null,
+        metadata: input.metadata ?? {},
+      })
+      .returning();
+    if (!record) {
+      throw new Error("Failed to create portal link projection.");
+    }
+    return record;
+  }
+
+  async getPortalLinkProjectionByTokenHash(
+    tenantId: string,
+    tokenHash: string,
+  ): Promise<PortalLinkProjectionRecord | null> {
+    assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope(tenantId, (repo) =>
+        repo.getPortalLinkProjectionByTokenHash(tenantId, tokenHash),
+      );
+    }
+    const [record] = await this.db
+      .select()
+      .from(portalLinkProjections)
+      .where(
+        and(
+          eq(portalLinkProjections.tenantId, tenantId),
+          eq(portalLinkProjections.tokenHash, tokenHash),
+        ),
+      )
+      .limit(1);
+    return record ?? null;
+  }
+
+  async getPortalLinkProjection(
+    tenantId: string,
+    linkId: string,
+  ): Promise<PortalLinkProjectionRecord | null> {
+    assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope(tenantId, (repo) =>
+        repo.getPortalLinkProjection(tenantId, linkId),
+      );
+    }
+    const [record] = await this.db
+      .select()
+      .from(portalLinkProjections)
+      .where(
+        and(
+          eq(portalLinkProjections.tenantId, tenantId),
+          eq(portalLinkProjections.id, linkId),
+        ),
+      )
+      .limit(1);
+    return record ?? null;
+  }
+
+  async disablePortalLinkProjection(
+    tenantId: string,
+    linkId: string,
+  ): Promise<PortalLinkProjectionRecord | null> {
+    assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope(tenantId, (repo) =>
+        repo.disablePortalLinkProjection(tenantId, linkId),
+      );
+    }
+    const [record] = await this.db
+      .update(portalLinkProjections)
+      .set({
+        status: "disabled",
+        disabledAt: new Date(),
+        updatedAt: sql`now()`,
+      })
+      .where(
+        and(
+          eq(portalLinkProjections.tenantId, tenantId),
+          eq(portalLinkProjections.id, linkId),
+        ),
+      )
+      .returning();
+    return record ?? null;
+  }
+
+  async markPortalLinkProjectionUsed(
+    tenantId: string,
+    linkId: string,
+  ): Promise<void> {
+    assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<void>(tenantId, (repo) =>
+        repo.markPortalLinkProjectionUsed(tenantId, linkId),
+      );
+    }
+    await this.db
+      .update(portalLinkProjections)
+      .set({
+        lastUsedAt: new Date(),
+        updatedAt: sql`now()`,
+      })
+      .where(
+        and(
+          eq(portalLinkProjections.tenantId, tenantId),
+          eq(portalLinkProjections.id, linkId),
+        ),
+      );
+  }
+
   async updateFaq(
     tenantId: string,
     knowledgeId: string,
@@ -4327,6 +4469,29 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       .offset(offset);
   }
 
+  async getConversation(
+    tenantId: string,
+    conversationId: string,
+  ): Promise<ConversationRecord | null> {
+    assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<ConversationRecord | null>(tenantId, (repo) =>
+        repo.getConversation(tenantId, conversationId),
+      );
+    }
+    const [conversation] = await this.db
+      .select()
+      .from(conversations)
+      .where(
+        and(
+          eq(conversations.tenantId, tenantId),
+          eq(conversations.id, conversationId),
+        ),
+      )
+      .limit(1);
+    return conversation ?? null;
+  }
+
   async listUnifiedInbox(
     tenantId: string,
     options?: PaginationOptions,
@@ -4524,6 +4689,24 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       .orderBy(desc(contacts.updatedAt))
       .limit(limit)
       .offset(offset);
+  }
+
+  async getContact(
+    tenantId: string,
+    contactId: string,
+  ): Promise<ContactRecord | null> {
+    assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<ContactRecord | null>(tenantId, (repo) =>
+        repo.getContact(tenantId, contactId),
+      );
+    }
+    const [contact] = await this.db
+      .select()
+      .from(contacts)
+      .where(and(eq(contacts.tenantId, tenantId), eq(contacts.id, contactId)))
+      .limit(1);
+    return contact ?? null;
   }
 
   async listHandoffs(
