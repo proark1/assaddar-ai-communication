@@ -14,6 +14,47 @@ compliance controls, observability, and voice-edge safety changes affect
 different runtime surfaces and need separate contracts, tests, and rollout
 switches.
 
+## OneBrain Data-Layer Alignment
+
+OneBrain is the primary database and data layer for durable project, customer,
+knowledge, memory, consent, playbook, portal, privacy, and audit-of-record data
+introduced or expanded by this release train.
+
+The communication platform remains the real-time runtime and integration edge:
+channels, widgets, voice, provider webhooks, delivery retries, billing, operator
+workflows, and low-latency runtime projections. Its local Postgres database is
+not the new source of truth for durable business records. Local tables are
+allowed only when they are explicitly one of these:
+
+- Compatibility projections for existing communication runtime queries.
+- Provider/runtime state such as webhook idempotency, delivery retries, and
+  voice/session metadata.
+- Security indexes that must stay close to the API edge, such as hashed
+  portal token lookup, while the durable portal-link record still lives in
+  OneBrain.
+- Sync-status records that reconcile local runtime projections with OneBrain.
+
+All new durable repositories in this train use a OneBrain-first data-layer
+boundary. Browser, widget, and admin client code never call OneBrain directly
+and never receive OneBrain service keys. API, worker, and voice runtimes call
+OneBrain through the server-side provider in `packages/core`, using the
+canonical contract:
+
+- `ONEBRAIN_API_BASE_URL`
+- `ONEBRAIN_SERVICE_KEY`
+- `Authorization: Bearer <service key>`
+- explicit `account_id`, `space_id`, `app_id=communication`, and `purpose`
+
+Runtime answer reads use `purpose=customer_service_answer`. Knowledge, memory,
+consent, playbook, portal, and other durable communication writes use
+`purpose=customer_service_inbox` unless OneBrain introduces a more specific
+canonical purpose before implementation.
+
+If OneBrain lacks a structured operation required by this release train, the
+implementation plan must add or extend the OneBrain service contract first.
+Durable release-train records cannot be implemented as communication-local
+sources of truth.
+
 ## Current State
 
 Already implemented:
@@ -28,6 +69,9 @@ Already implemented:
 - Playbook and customer portal preview panels.
 - Existing metrics endpoint, retention cleanup primitives, audit logs, and
   tenant-scoped repository methods.
+- Canonical server-side OneBrain provider and sync path for approved knowledge,
+  with OneBrain as the source of truth for durable cross-app knowledge, memory,
+  permissioned retrieval, privacy, and audit-of-record.
 
 Still missing:
 
@@ -96,12 +140,21 @@ verification and rollback boundary.
 
 ## Data Model
 
+The objects below are logical records. Their primary persistence is OneBrain
+unless the subsection explicitly marks a field or table as a local operational
+projection. Local projections store OneBrain record IDs and stable
+`source_ref`/scope values so local runtime reads can reconcile back to the
+canonical OneBrain record.
+
 ### Applied Playbooks
 
-Add an `applied_playbooks` table:
+Add a OneBrain-backed `applied_playbook` record:
 
 - `id`
+- `onebrain_record_id`
 - `tenant_id`
+- `onebrain_project_id`
+- `onebrain_account_id`
 - `playbook_key`
 - `playbook_version`
 - `status`
@@ -114,12 +167,18 @@ Add an `applied_playbooks` table:
 The `(tenant_id, playbook_key, playbook_version)` combination is unique for
 applied records, so retries are idempotent.
 
+A local projection is allowed only to speed admin reads and deployment
+reconciliation. It stores the OneBrain record ID and is not authoritative.
+
 ### Portal Links
 
-Add a `portal_links` table:
+Add a OneBrain-backed `portal_link` record:
 
 - `id`
+- `onebrain_record_id`
 - `tenant_id`
+- `onebrain_project_id`
+- `onebrain_account_id`
 - `conversation_id`
 - `contact_id`
 - `token_hash`
@@ -131,13 +190,19 @@ Add a `portal_links` table:
 - `last_used_at`
 
 Only token hashes are stored. Raw tokens are shown once at creation time.
+Because token verification is latency- and security-sensitive, the API keeps a
+local hashed-token lookup projection. The durable portal-link lifecycle, scope,
+audit, and disablement state remains OneBrain-owned.
 
 ### Consent Events
 
-Add a `consent_events` table:
+Add a OneBrain-backed `consent_event` record:
 
 - `id`
+- `onebrain_record_id`
 - `tenant_id`
+- `onebrain_project_id`
+- `onebrain_account_id`
 - `conversation_id`
 - `contact_id`
 - `source`
@@ -150,11 +215,17 @@ Add a `consent_events` table:
 
 Consent events are append-only records. They are tenant-scoped, included in
 tenant export, and pruned by tenant retention cleanup using `created_at`.
+A local consent projection is not required. If one is created for export/cache
+compatibility, it is projection-only.
 
 ### Audit Enforcement
 
-Add a migration that prevents `UPDATE` and `DELETE` of `audit_logs` by the app
-role. The application keeps insert and read behavior unchanged.
+OneBrain is the audit-of-record. Existing local `audit_logs` remain as a
+runtime projection for current admin/API behavior and must become append-only by
+database enforcement. Add a migration that prevents `UPDATE` and `DELETE` of
+local `audit_logs` by the app role. The application keeps insert and read
+behavior unchanged while also writing durable audit events through the
+OneBrain-first data layer for new release-train actions.
 
 ## API Contracts
 
@@ -170,6 +241,11 @@ Approval remains explicit and tenant-admin-gated. Bulk endpoints return per-item
 success/failure results so one invalid suggestion does not hide the rest of the
 batch outcome.
 
+Approved knowledge and suggestion provenance are written through the
+OneBrain-first data layer. Local knowledge records remain runtime projections
+for the existing answer engine until the guarded OneBrain answer path fully
+replaces them.
+
 ### Playbooks
 
 Add:
@@ -183,7 +259,7 @@ Rules:
 - Apply is idempotent.
 - Existing tenant data is not overwritten unless the field is empty or an
   explicit `overwrite` option is provided.
-- Apply writes an audit event and an applied playbook record.
+- Apply writes a OneBrain audit event and an applied playbook record.
 
 ### Portal
 
@@ -200,6 +276,8 @@ Rules:
 - A token can access only its intended tenant/contact/conversation scope.
 - Portal endpoints do not require admin authentication and must fail closed.
 - Tenant portal disablement blocks access even for otherwise valid tokens.
+- Portal record lifecycle is OneBrain-owned; local token-hash lookup is an edge
+  projection.
 
 ### Consent
 
@@ -208,7 +286,8 @@ Add a lightweight public endpoint:
 - `POST /widget/consent`
 
 The widget calls this when a visitor accepts the consent notice. Widget UX does
-not block forever on failure, but failures are logged and counted.
+not block forever on failure, but failures are logged and counted. Accepted
+consent is persisted through OneBrain as the durable consent record.
 
 ### Metrics
 
@@ -325,15 +404,16 @@ Portal responses reveal only the scoped data needed for customer continuation.
 Playbook application:
 
 - Is idempotent.
-- Uses tenant-scoped repository methods.
+- Uses the OneBrain-first data layer and tenant-scoped local projections where
+  needed.
 - Does not overwrite live knowledge/settings without explicit permission.
-- Writes audit events.
+- Writes OneBrain audit events.
 
 ### Consent Safety
 
 Consent persistence:
 
-- Is append-only.
+- Is append-only in OneBrain.
 - Records the displayed text and source.
 - Logs and counts failures.
 - Does not block the visitor from continuing once accepted locally.
@@ -342,6 +422,7 @@ Consent persistence:
 
 Audit logs:
 
+- Use OneBrain as audit-of-record for new release-train actions.
 - Remain insertable by the app.
 - Become non-updatable and non-deletable by the app role.
 - Have tests covering blocked mutation.
@@ -383,6 +464,10 @@ Required checks:
 
 Focused coverage:
 
+- OneBrain data-layer routing for playbooks, portal links, consent events, and
+  audit writes.
+- No browser, widget, or admin client path exposes OneBrain credentials or calls
+  OneBrain directly.
 - Bulk knowledge selection and role gating.
 - Playbook dry-run/apply idempotency.
 - Portal token success, expiry, disablement, and scope rejection.
@@ -396,18 +481,21 @@ Focused coverage:
 
 Rollout order:
 
-1. Add migrations and repository contracts behind flags.
-2. Add API endpoints and tests.
-3. Wire admin surfaces behind flags.
-4. Add public portal endpoints and minimal portal UI.
-5. Enable compliance/ops behavior in non-production test environments.
-6. Enable voice-edge hardening with Go tests.
-7. Enable flags gradually for production tenants.
+1. Confirm or extend the OneBrain service contract for structured playbook,
+   portal, consent, memory, and audit records.
+2. Add OneBrain-first repository contracts and any local operational projection
+   migrations behind flags.
+3. Add API endpoints and tests.
+4. Wire admin surfaces behind flags.
+5. Add public portal endpoints and minimal portal UI.
+6. Enable compliance/ops behavior in non-production test environments.
+7. Enable voice-edge hardening with Go tests.
+8. Enable flags gradually for production tenants.
 
 Rollback:
 
 - Disable feature flags for admin/playbook/portal/compliance UI.
-- Keep additive tables in place.
+- Keep additive local projection tables in place.
 - Disable portal link creation while retaining existing link records.
 - Voice-edge hardening can be toggled through config only where doing so does
   not weaken production disclosure requirements.
@@ -423,6 +511,10 @@ Rollback:
 
 ## Acceptance Criteria
 
+- OneBrain is the primary database/data layer for durable release-train records.
+- Local communication tables introduced by this train are explicitly
+  operational projections or security/runtime indexes, not authoritative
+  business records.
 - The admin product surfaces complete the missing user-value plan items.
 - Customer portal links are signed, scoped, expiring, and disableable.
 - Playbook application is previewable, idempotent, and audited.
