@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { eq, inArray } from "drizzle-orm";
 import {
+  channelWebhookEvents,
   conversations,
   createDbClient,
   TenantRepository,
@@ -213,6 +214,22 @@ describe.skipIf(!runIntegrationTests)("TenantRepository integration", () => {
       externalUserId: "recent-visitor",
     });
 
+    // Raw webhook events carry personal data too and must be pruned by age.
+    const oldEvent = await repo.recordChannelWebhookEvent({
+      tenantId: tenant.id,
+      channel: "whatsapp",
+      providerEventId: `evt-old-${crypto.randomUUID()}`,
+      eventType: "message.inbound",
+      payload: { raw: "old" },
+    });
+    const recentEvent = await repo.recordChannelWebhookEvent({
+      tenantId: tenant.id,
+      channel: "whatsapp",
+      providerEventId: `evt-recent-${crypto.randomUUID()}`,
+      eventType: "message.inbound",
+      payload: { raw: "recent" },
+    });
+
     await client.db
       .update(conversations)
       .set({
@@ -220,6 +237,10 @@ describe.skipIf(!runIntegrationTests)("TenantRepository integration", () => {
         updatedAt: new Date("2026-05-01T00:00:00.000Z"),
       })
       .where(eq(conversations.id, oldConversation.id));
+    await client.db
+      .update(channelWebhookEvents)
+      .set({ createdAt: new Date("2026-05-01T00:00:00.000Z") })
+      .where(eq(channelWebhookEvents.id, oldEvent.event.id));
 
     const result = await repo.deleteTenantDataOlderThanRetention(tenant.id, {
       now: new Date("2026-07-06T00:00:00.000Z"),
@@ -227,7 +248,15 @@ describe.skipIf(!runIntegrationTests)("TenantRepository integration", () => {
     });
 
     expect(result.deletedConversations).toBe(1);
+    expect(result.deletedWebhookEvents).toBe(1);
     const remaining = await repo.listConversations(tenant.id);
     expect(remaining.map((item) => item.id)).toEqual([recentConversation.id]);
+    const remainingEvents = await client.db
+      .select({ id: channelWebhookEvents.id })
+      .from(channelWebhookEvents)
+      .where(eq(channelWebhookEvents.tenantId, tenant.id));
+    expect(remainingEvents.map((item) => item.id)).toEqual([
+      recentEvent.event.id,
+    ]);
   });
 });

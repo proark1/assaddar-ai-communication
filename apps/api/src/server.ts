@@ -749,6 +749,7 @@ export type PlatformStore = AnswerDataStore &
       role: "user" | "assistant" | "system" | "operator";
       content: string;
       authorUserId?: string | null;
+      providerEventId?: string | null;
       trace?: Record<string, unknown>;
     }): Promise<unknown>;
     logUsage(input: {
@@ -770,6 +771,23 @@ export type PlatformStore = AnswerDataStore &
       detail?: string | null;
       metadata?: Record<string, unknown>;
     }): Promise<unknown>;
+    claimOutboundDelivery(input: {
+      tenantId: string;
+      conversationId?: string | null;
+      channel: Channel;
+      provider: string;
+      idempotencyKey: string;
+      metadata?: Record<string, unknown>;
+    }): Promise<{ claimed: boolean; id: string | null }>;
+    finalizeOutboundDelivery(input: {
+      tenantId: string;
+      deliveryId: string;
+      messageId?: string | null;
+      status: string;
+      providerMessageId?: string | null;
+      detail?: string | null;
+      metadata?: Record<string, unknown>;
+    }): Promise<void>;
     listWhatsappTemplates(tenantId: string): Promise<unknown[]>;
     upsertWhatsappTemplate(
       tenantId: string,
@@ -6782,12 +6800,50 @@ async function deliverOutbound(input: {
     externalUserId?: string | null | undefined;
   };
   lastInboundAt: Date;
+  // When set, the send is idempotent on this key: a delivery intent is reserved
+  // before sending, and if one already exists (a provider retry, or a crash
+  // after a prior send) the send is skipped. Automated webhook replies pass the
+  // inbound provider event id; operator replies leave it undefined.
+  idempotencyKey?: string | null;
   trace?: Record<string, unknown>;
 }): Promise<{
   delivery: DeliveryResult;
   message: unknown;
   sendPolicy: { allowed: boolean; reason?: string };
+  deduplicated: boolean;
 }> {
+  const routingMetadata = {
+    providerAccountId: input.routing.providerAccountId ?? undefined,
+    externalConversationId: input.routing.externalConversationId ?? undefined,
+    externalUserId: input.routing.externalUserId ?? undefined,
+  };
+
+  // Reserve the delivery BEFORE sending. If the claim is lost, a prior (possibly
+  // retried) processing already owns this reply — do not send it again.
+  let deliveryId: string | null = null;
+  if (input.idempotencyKey) {
+    const claim = await input.store.claimOutboundDelivery({
+      tenantId: input.tenantId,
+      conversationId: input.conversationId,
+      channel: input.channel,
+      provider: input.adapter.provider,
+      idempotencyKey: input.idempotencyKey,
+      metadata: { ...routingMetadata, attempts: 0 },
+    });
+    if (!claim.claimed) {
+      return {
+        delivery: {
+          status: "skipped",
+          detail: "Duplicate inbound event; reply already delivered.",
+        },
+        message: null,
+        sendPolicy: { allowed: false, reason: "duplicate" },
+        deduplicated: true,
+      };
+    }
+    deliveryId = claim.id;
+  }
+
   const outboundMessage: OutboundMessage = {
     tenantId: input.tenantId,
     channel: input.channel,
@@ -6829,28 +6885,41 @@ async function deliverOutbound(input: {
     trace: { ...(input.trace ?? {}), delivery, sendPolicy },
   });
 
-  await input.store.recordMessageDelivery({
-    tenantId: input.tenantId,
-    messageId: getStringProperty(message, "id") ?? null,
-    conversationId: input.conversationId,
-    channel: input.channel,
-    provider: input.adapter.provider,
-    providerMessageId: delivery.providerMessageId ?? null,
-    status: delivery.status,
-    detail: delivery.detail ?? null,
-    metadata: {
-      providerAccountId: input.routing.providerAccountId ?? undefined,
-      externalConversationId: input.routing.externalConversationId ?? undefined,
-      externalUserId: input.routing.externalUserId ?? undefined,
-      sendPolicy,
-      // Persist retry eligibility and an attempt counter so the delivery-retry
-      // worker can pick up transient failures and re-send them.
-      retryable: delivery.status === "failed" && delivery.retryable === true,
-      attempts: 0,
-    },
-  });
+  const deliveryMetadata = {
+    ...routingMetadata,
+    sendPolicy,
+    // Persist retry eligibility and an attempt counter so the delivery-retry
+    // worker can pick up transient failures and re-send them.
+    retryable: delivery.status === "failed" && delivery.retryable === true,
+    attempts: 0,
+  };
 
-  return { delivery, message, sendPolicy };
+  if (deliveryId) {
+    // Reconcile the reserved intent row with the send outcome.
+    await input.store.finalizeOutboundDelivery({
+      tenantId: input.tenantId,
+      deliveryId,
+      messageId: getStringProperty(message, "id") ?? null,
+      status: delivery.status,
+      providerMessageId: delivery.providerMessageId ?? null,
+      detail: delivery.detail ?? null,
+      metadata: deliveryMetadata,
+    });
+  } else {
+    await input.store.recordMessageDelivery({
+      tenantId: input.tenantId,
+      messageId: getStringProperty(message, "id") ?? null,
+      conversationId: input.conversationId,
+      channel: input.channel,
+      provider: input.adapter.provider,
+      providerMessageId: delivery.providerMessageId ?? null,
+      status: delivery.status,
+      detail: delivery.detail ?? null,
+      metadata: deliveryMetadata,
+    });
+  }
+
+  return { delivery, message, sendPolicy, deduplicated: false };
 }
 
 async function processChannelInboundEvent(input: {
@@ -6887,6 +6956,8 @@ async function processChannelInboundEvent(input: {
     direction: "inbound",
     role: "user",
     content: input.event.text,
+    // Dedupe the stored inbound turn against provider webhook retries.
+    providerEventId: input.event.providerEventId ?? null,
     trace: {
       provider: input.event.provider,
       providerAccountId: input.event.providerAccountId,
@@ -6932,7 +7003,7 @@ async function processChannelInboundEvent(input: {
     status: answer.status,
   });
 
-  const { delivery } = await deliverOutbound({
+  const { delivery, deduplicated } = await deliverOutbound({
     store: input.options.store,
     adapter: input.adapter,
     tenantId: input.tenant.id,
@@ -6946,6 +7017,8 @@ async function processChannelInboundEvent(input: {
       externalUserId: input.event.externalUserId,
     },
     lastInboundAt: getDateProperty(inboundRecord, "createdAt") ?? new Date(),
+    // Idempotent auto-reply: a provider retry of this event will not send twice.
+    idempotencyKey: input.event.providerEventId ?? null,
     trace: { answer },
   });
   input.metrics.messageDeliveryTotal.inc({
@@ -6953,6 +7026,17 @@ async function processChannelInboundEvent(input: {
     provider: input.adapter.provider,
     status: delivery.status,
   });
+
+  // A provider retry of an already-answered event: the reply was deduplicated,
+  // so do not persist a second outbound turn or double-count usage.
+  if (deduplicated) {
+    return {
+      conversationId: conversation.publicId,
+      answerStatus: answer.status,
+      deliveryStatus: "duplicate" as const,
+      deliveryDetail: "Duplicate inbound event; reply already delivered.",
+    };
+  }
 
   await input.options.store.logUsage({
     tenantId: input.tenant.id,

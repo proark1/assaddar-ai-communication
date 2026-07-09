@@ -2178,6 +2178,18 @@ class MemoryPlatformStore
   }
 
   async addMessage(input: Record<string, unknown>) {
+    const providerEventId = input.providerEventId ?? null;
+    if (providerEventId) {
+      const existing = this.messages.find(
+        (item) =>
+          item.tenantId === input.tenantId &&
+          item.conversationId === input.conversationId &&
+          item.providerEventId === providerEventId,
+      );
+      if (existing) {
+        return existing;
+      }
+    }
     const message = {
       id: crypto.randomUUID(),
       createdAt: new Date(),
@@ -2631,6 +2643,44 @@ class MemoryPlatformStore
     };
     this.deliveries.push(delivery);
     return delivery;
+  }
+
+  async claimOutboundDelivery(input: Record<string, unknown>) {
+    const existing = this.deliveries.find(
+      (item) =>
+        item.tenantId === input.tenantId &&
+        item.idempotencyKey != null &&
+        item.idempotencyKey === input.idempotencyKey,
+    );
+    if (existing) {
+      return { claimed: false, id: null };
+    }
+    const delivery = {
+      id: crypto.randomUUID(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      ...input,
+      status: "pending",
+    };
+    this.deliveries.push(delivery);
+    return { claimed: true, id: delivery.id as string };
+  }
+
+  async finalizeOutboundDelivery(input: Record<string, unknown>) {
+    const delivery = this.deliveries.find(
+      (item) =>
+        item.tenantId === input.tenantId && item.id === input.deliveryId,
+    );
+    if (delivery) {
+      Object.assign(delivery, {
+        messageId: input.messageId ?? null,
+        status: input.status,
+        providerMessageId: input.providerMessageId ?? null,
+        detail: input.detail ?? null,
+        metadata: input.metadata ?? {},
+        updatedAt: new Date(),
+      });
+    }
   }
 
   async listWhatsappTemplates(tenantId: string) {
@@ -5669,7 +5719,7 @@ describe("API", () => {
     await app.close();
   });
 
-  it("reprocesses a retried webhook whose prior delivery failed", async () => {
+  it("reprocesses a retried webhook without sending the reply twice", async () => {
     const store = new MemoryPlatformStore();
     globalThis.fetch = vi.fn(async () => {
       return new Response(JSON.stringify({ messages: [{ id: "wamid.ok" }] }), {
@@ -5677,18 +5727,20 @@ describe("API", () => {
         headers: { "content-type": "application/json" },
       });
     }) as typeof fetch;
-    // A transient infrastructure error mid-processing (here a DB write) makes the
-    // webhook return 5xx, so the provider retries. The retry must be reprocessed,
-    // not dropped as a duplicate.
-    const realRecordDelivery = store.recordMessageDelivery.bind(store);
-    let deliveryAttempts = 0;
-    vi.spyOn(store, "recordMessageDelivery").mockImplementation(
+    // A transient infrastructure error mid-processing — the delivery write that
+    // runs AFTER the provider send — makes the webhook return 5xx, so the
+    // provider retries. The retry must be reprocessed (not dropped), but because
+    // the outbound intent was already claimed before the send, the reply must
+    // NOT be sent to the customer a second time.
+    const realFinalize = store.finalizeOutboundDelivery.bind(store);
+    let finalizeAttempts = 0;
+    vi.spyOn(store, "finalizeOutboundDelivery").mockImplementation(
       async (input) => {
-        deliveryAttempts += 1;
-        if (deliveryAttempts === 1) {
+        finalizeAttempts += 1;
+        if (finalizeAttempts === 1) {
           throw new Error("delivery store write failed");
         }
-        return realRecordDelivery(input);
+        return realFinalize(input);
       },
     );
     const app = await buildServer({
@@ -5745,7 +5797,9 @@ describe("API", () => {
     expect(store.webhookEvents[0]?.status).toBe("failed");
 
     // The provider retries the same event id — it must be reprocessed, not
-    // dropped as a duplicate, and this time it succeeds.
+    // dropped as a duplicate. This time the outbound intent from the first
+    // attempt is already claimed, so the reply is deduplicated: the event is
+    // marked processed, but the customer is NOT messaged again.
     const second = await app.inject({
       method: "POST",
       url: "/webhooks/meta/whatsapp",
@@ -5759,7 +5813,18 @@ describe("API", () => {
     expect(results[0]?.retried).toBe(true);
     expect(store.webhookEvents).toHaveLength(1);
     expect(store.webhookEvents[0]?.status).toBe("processed");
-    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+    // The heart of the fix: the reply reached the provider exactly once across
+    // the original delivery and the retry.
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    // Reprocessing also did not duplicate the stored turns: the inbound message
+    // is deduped on its provider event id, and no second assistant reply was
+    // written.
+    expect(
+      store.messages.filter((message) => message.direction === "inbound"),
+    ).toHaveLength(1);
+    expect(
+      store.messages.filter((message) => message.direction === "outbound"),
+    ).toHaveLength(1);
     await app.close();
   });
 

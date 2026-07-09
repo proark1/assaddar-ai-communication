@@ -1033,6 +1033,10 @@ export const messages = pgTable(
     authorUserId: uuid("author_user_id").references(() => users.id, {
       onDelete: "set null",
     }),
+    // The provider event id of the inbound message this row was created from.
+    // Dedupes a stored inbound turn against webhook retries. Null for outbound
+    // and non-provider messages.
+    providerEventId: text("provider_event_id"),
     trace: jsonb("trace")
       .$type<Record<string, unknown>>()
       .notNull()
@@ -1051,6 +1055,10 @@ export const messages = pgTable(
     index("messages_conversation_operator_idx")
       .on(table.conversationId, table.createdAt)
       .where(sql`${table.role} = 'operator'`),
+    // Inbound idempotency: at most one stored message per provider event.
+    uniqueIndex("messages_provider_event_idx")
+      .on(table.tenantId, table.conversationId, table.providerEventId)
+      .where(sql`${table.providerEventId} is not null`),
   ],
 );
 
@@ -1191,6 +1199,11 @@ export const messageDeliveries = pgTable(
     providerMessageId: text("provider_message_id"),
     status: text("status").notNull().default("queued"),
     detail: text("detail"),
+    // Idempotency key for the outbound send. For automated webhook replies this
+    // is the inbound provider event id, so a provider retry that reaches the
+    // send path finds the existing delivery and does not send twice. Null for
+    // sends that opt out of dedup (e.g. operator manual replies).
+    idempotencyKey: text("idempotency_key"),
     metadata: jsonb("metadata")
       .$type<Record<string, unknown>>()
       .notNull()
@@ -1210,6 +1223,10 @@ export const messageDeliveries = pgTable(
     index("message_deliveries_provider_message_idx").on(
       table.providerMessageId,
     ),
+    // Outbound idempotency: at most one delivery per (tenant, key).
+    uniqueIndex("message_deliveries_idempotency_idx")
+      .on(table.tenantId, table.idempotencyKey)
+      .where(sql`${table.idempotencyKey} is not null`),
     // Partial index for the cross-tenant delivery-retry worker sweep, which
     // filters failed rows and orders by updated_at with no tenant predicate.
     // See migration 0015.

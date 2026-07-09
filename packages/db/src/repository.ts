@@ -4280,6 +4280,7 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     role: "user" | "assistant" | "system" | "operator";
     content: string;
     authorUserId?: string | null;
+    providerEventId?: string | null;
     trace?: Record<string, unknown>;
   }): Promise<MessageRecord> {
     assertTenantId(input.tenantId);
@@ -4288,19 +4289,55 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
         repo.addMessage(input),
       );
     }
-    const [message] = await this.db
-      .insert(messages)
-      .values({
-        tenantId: input.tenantId,
-        conversationId: input.conversationId,
-        channel: input.channel,
-        direction: input.direction,
-        role: input.role,
-        content: input.content,
-        authorUserId: input.authorUserId ?? null,
-        trace: input.trace ?? {},
-      })
-      .returning();
+    const providerEventId = input.providerEventId ?? null;
+    const values = {
+      tenantId: input.tenantId,
+      conversationId: input.conversationId,
+      channel: input.channel,
+      direction: input.direction,
+      role: input.role,
+      content: input.content,
+      authorUserId: input.authorUserId ?? null,
+      providerEventId,
+      trace: input.trace ?? {},
+    };
+
+    // When the message carries a provider event id, dedupe against webhook
+    // retries: a second delivery of the same event returns the already-stored
+    // turn instead of appending a duplicate.
+    if (providerEventId) {
+      const [inserted] = await this.db
+        .insert(messages)
+        .values(values)
+        .onConflictDoNothing({
+          target: [
+            messages.tenantId,
+            messages.conversationId,
+            messages.providerEventId,
+          ],
+        })
+        .returning();
+      if (inserted) {
+        return inserted;
+      }
+      const [existing] = await this.db
+        .select()
+        .from(messages)
+        .where(
+          and(
+            eq(messages.tenantId, input.tenantId),
+            eq(messages.conversationId, input.conversationId),
+            eq(messages.providerEventId, providerEventId),
+          ),
+        )
+        .limit(1);
+      if (!existing) {
+        throw new Error("Failed to store message.");
+      }
+      return existing;
+    }
+
+    const [message] = await this.db.insert(messages).values(values).returning();
 
     if (!message) {
       throw new Error("Failed to store message.");
@@ -4343,6 +4380,90 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       .returning();
 
     return delivery;
+  }
+
+  /**
+   * Reserve an outbound delivery for an idempotency key BEFORE the send happens.
+   * Inserts a `pending` intent row; if a delivery for (tenant, key) already
+   * exists the insert is a no-op and this returns `{ claimed: false }` — the
+   * caller must NOT send again, because a prior (possibly retried) processing
+   * already owns this reply. Returns `{ claimed: true, id }` when this caller
+   * won the insert and should proceed to send, then finalize by that id. This is
+   * the outbox claim that closes the webhook-retry double-send window.
+   */
+  async claimOutboundDelivery(input: {
+    tenantId: string;
+    conversationId?: string | null;
+    channel: Channel;
+    provider: string;
+    idempotencyKey: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<{ claimed: boolean; id: string | null }> {
+    assertTenantId(input.tenantId);
+    if (this.needsTenantScope(input.tenantId)) {
+      return this.withTenantScope<{ claimed: boolean; id: string | null }>(
+        input.tenantId,
+        (repo) => repo.claimOutboundDelivery(input),
+      );
+    }
+    const [inserted] = await this.db
+      .insert(messageDeliveries)
+      .values({
+        tenantId: input.tenantId,
+        conversationId: input.conversationId ?? null,
+        channel: input.channel,
+        provider: input.provider,
+        status: "pending",
+        idempotencyKey: input.idempotencyKey,
+        metadata: input.metadata ?? {},
+      })
+      .onConflictDoNothing({
+        target: [messageDeliveries.tenantId, messageDeliveries.idempotencyKey],
+      })
+      .returning({ id: messageDeliveries.id });
+    if (inserted) {
+      return { claimed: true, id: inserted.id };
+    }
+    return { claimed: false, id: null };
+  }
+
+  /**
+   * Record the outcome of a claimed outbound send on its intent row (see
+   * claimOutboundDelivery): sets the terminal status, provider message id, links
+   * the stored outbound message, and replaces the metadata with the final
+   * routing/retry state so the delivery-retry worker can pick it up on failure.
+   */
+  async finalizeOutboundDelivery(input: {
+    tenantId: string;
+    deliveryId: string;
+    messageId?: string | null;
+    status: string;
+    providerMessageId?: string | null;
+    detail?: string | null;
+    metadata?: Record<string, unknown>;
+  }): Promise<void> {
+    assertTenantId(input.tenantId);
+    if (this.needsTenantScope(input.tenantId)) {
+      return this.withTenantScope<void>(input.tenantId, (repo) =>
+        repo.finalizeOutboundDelivery(input),
+      );
+    }
+    await this.db
+      .update(messageDeliveries)
+      .set({
+        messageId: input.messageId ?? null,
+        status: input.status,
+        providerMessageId: input.providerMessageId ?? null,
+        detail: input.detail ?? null,
+        metadata: input.metadata ?? {},
+        updatedAt: sql`now()`,
+      })
+      .where(
+        and(
+          eq(messageDeliveries.tenantId, input.tenantId),
+          eq(messageDeliveries.id, input.deliveryId),
+        ),
+      );
   }
 
   /**
@@ -6162,6 +6283,7 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     cutoff: Date | null;
     deletedConversations: number;
     deletedCalls: number;
+    deletedWebhookEvents: number;
   }> {
     assertTenantId(tenantId);
     if (this.needsTenantScope(tenantId)) {
@@ -6178,7 +6300,12 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     const cutoff = retentionCutoff(retentionDays, options.now ?? new Date());
     // No valid retention window configured: do not delete anything.
     if (!cutoff) {
-      return { cutoff: null, deletedConversations: 0, deletedCalls: 0 };
+      return {
+        cutoff: null,
+        deletedConversations: 0,
+        deletedCalls: 0,
+        deletedWebhookEvents: 0,
+      };
     }
 
     const removed = await this.db
@@ -6200,7 +6327,25 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       .where(and(eq(calls.tenantId, tenantId), lt(calls.startedAt, cutoff)))
       .returning({ id: calls.id });
 
-    if (removed.length > 0 || removedCalls.length > 0) {
+    // channel_webhook_events store the RAW inbound provider payload (personal
+    // data) and are otherwise never pruned. They are only used to dedupe
+    // near-term provider retries, so anything older than the retention window is
+    // safe to delete — closing a standing GDPR gap.
+    const removedWebhookEvents = await this.db
+      .delete(channelWebhookEvents)
+      .where(
+        and(
+          eq(channelWebhookEvents.tenantId, tenantId),
+          lt(channelWebhookEvents.createdAt, cutoff),
+        ),
+      )
+      .returning({ id: channelWebhookEvents.id });
+
+    if (
+      removed.length > 0 ||
+      removedCalls.length > 0 ||
+      removedWebhookEvents.length > 0
+    ) {
       await this.audit(
         tenantId,
         "retention.conversations.pruned",
@@ -6211,6 +6356,7 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
           cutoff: cutoff.toISOString(),
           deletedConversations: removed.length,
           deletedCalls: removedCalls.length,
+          deletedWebhookEvents: removedWebhookEvents.length,
         },
       );
     }
@@ -6219,6 +6365,7 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       cutoff,
       deletedConversations: removed.length,
       deletedCalls: removedCalls.length,
+      deletedWebhookEvents: removedWebhookEvents.length,
     };
   }
 
