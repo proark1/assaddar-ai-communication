@@ -291,4 +291,70 @@ describe.skipIf(!runIntegrationTests)("TenantRepository integration", () => {
       }),
     ).resolves.toMatchObject({ externalAccountId: "phone-shared" });
   });
+
+  it("exports and erases contact-linked deliveries, handoffs, and suggestions", async () => {
+    const tenant = await createTestTenant("erasure-completeness");
+    const conversation = await repo.findOrCreateConversation({
+      tenantId: tenant.id,
+      publicConversationId: `conv-${crypto.randomUUID()}`,
+      channel: "whatsapp",
+      externalUserId: "4915100000000",
+      contact: { phone: "4915100000000" },
+    });
+    const message = await repo.addMessage({
+      tenantId: tenant.id,
+      conversationId: conversation.id,
+      channel: "whatsapp",
+      direction: "inbound",
+      role: "user",
+      content: "Please erase me",
+    });
+    await repo.recordMessageDelivery({
+      tenantId: tenant.id,
+      conversationId: conversation.id,
+      messageId: message.id,
+      channel: "whatsapp",
+      provider: "meta-whatsapp-cloud",
+      status: "sent",
+      metadata: { externalUserId: "4915100000000" },
+    });
+    await repo.createHandoff({
+      tenantId: tenant.id,
+      conversationId: conversation.id,
+      channel: "whatsapp",
+      reason: "customer_request",
+      message: "Please erase me",
+    });
+    await repo.createKnowledgeSuggestion(tenant.id, {
+      sourceType: "unanswered_question",
+      sourceConversationId: conversation.id,
+      suggestedQuestion: "Please erase me",
+    });
+
+    const exported = await repo.exportTenantData(tenant.id);
+    expect(exported.messageDeliveries).toHaveLength(1);
+    expect(exported.handoffRequests).toHaveLength(1);
+    expect(exported.knowledgeSuggestions).toHaveLength(1);
+    // Previously-omitted tables are now part of the data-subject export.
+    expect(Array.isArray(exported.calls)).toBe(true);
+    expect(Array.isArray(exported.callTranscripts)).toBe(true);
+    expect(Array.isArray(exported.channelWebhookEvents)).toBe(true);
+    expect(Array.isArray(exported.usageEvents)).toBe(true);
+    expect(Array.isArray(exported.auditLogs)).toBe(true);
+
+    const contactId = exported.contacts[0]!.id;
+    const result = await repo.deleteContact(tenant.id, contactId);
+    expect(result).toMatchObject({
+      deletedContact: true,
+      deletedConversations: 1,
+      deletedDeliveries: 1,
+      deletedHandoffs: 1,
+      deletedSuggestions: 1,
+    });
+
+    const after = await repo.exportTenantData(tenant.id);
+    expect(after.messageDeliveries).toHaveLength(0);
+    expect(after.handoffRequests).toHaveLength(0);
+    expect(after.knowledgeSuggestions).toHaveLength(0);
+  });
 });

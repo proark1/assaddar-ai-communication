@@ -2367,10 +2367,16 @@ class MemoryPlatformStore
         deletedContact: false,
         deletedConversations: 0,
         deletedCalls: 0,
+        deletedDeliveries: 0,
+        deletedHandoffs: 0,
+        deletedSuggestions: 0,
       };
     }
     this.contacts.splice(index, 1);
     let deletedConversations = 0;
+    let deletedDeliveries = 0;
+    let deletedHandoffs = 0;
+    let deletedSuggestions = 0;
     if (options.deleteConversations ?? true) {
       const linked = this.conversations.filter(
         (conversation) =>
@@ -2385,8 +2391,31 @@ class MemoryPlatformStore
       this.messages = this.messages.filter(
         (message) => !linkedIds.has(message.conversationId as string),
       );
+      const deliveriesBefore = this.deliveries.length;
+      this.deliveries = this.deliveries.filter(
+        (delivery) => !linkedIds.has(delivery.conversationId as string),
+      );
+      deletedDeliveries = deliveriesBefore - this.deliveries.length;
+      const handoffsBefore = this.handoffs.length;
+      this.handoffs = this.handoffs.filter(
+        (handoff) => !linkedIds.has(handoff.conversationId as string),
+      );
+      deletedHandoffs = handoffsBefore - this.handoffs.length;
+      const suggestionsBefore = this.knowledgeSuggestions.length;
+      this.knowledgeSuggestions = this.knowledgeSuggestions.filter(
+        (suggestion) =>
+          !linkedIds.has(suggestion.sourceConversationId as string),
+      );
+      deletedSuggestions = suggestionsBefore - this.knowledgeSuggestions.length;
     }
-    return { deletedContact: true, deletedConversations, deletedCalls: 0 };
+    return {
+      deletedContact: true,
+      deletedConversations,
+      deletedCalls: 0,
+      deletedDeliveries,
+      deletedHandoffs,
+      deletedSuggestions,
+    };
   }
 
   async listConversationMessages(tenantId: string, conversationId: string) {

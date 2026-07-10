@@ -35,6 +35,7 @@ import {
   blockedTopics,
   brainOnboardingAnswers,
   calls,
+  callTranscripts,
   channelConnections,
   channelWebhookEvents,
   conversationContacts,
@@ -544,6 +545,11 @@ export type TenantExportData = {
   brainOnboardingAnswers: BrainOnboardingAnswerRecord[];
   knowledgeSuggestions: KnowledgeSuggestionRecord[];
   documentIngestionJobs: DocumentIngestionJobRecord[];
+  calls: (typeof calls.$inferSelect)[];
+  callTranscripts: (typeof callTranscripts.$inferSelect)[];
+  channelWebhookEvents: ChannelWebhookEventRecord[];
+  usageEvents: (typeof usageEvents.$inferSelect)[];
+  auditLogs: (typeof auditLogs.$inferSelect)[];
 };
 
 export type TenantBrainSummary = {
@@ -6230,6 +6236,11 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       onboardingAnswers,
       suggestions,
       ingestionJobs,
+      tenantCalls,
+      tenantCallTranscripts,
+      webhookEvents,
+      usage,
+      audit,
     ] = await Promise.all([
       this.getTenant(tenantId),
       this.listKnowledge(tenantId),
@@ -6260,6 +6271,23 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
         .select()
         .from(documentIngestionJobs)
         .where(eq(documentIngestionJobs.tenantId, tenantId)),
+      // Voice call metadata + transcripts, the raw inbound webhook ledger, usage
+      // events, and the tenant's audit trail (which also captures consent
+      // events) were all previously omitted — a data-subject-access gap.
+      this.db.select().from(calls).where(eq(calls.tenantId, tenantId)),
+      this.db
+        .select()
+        .from(callTranscripts)
+        .where(eq(callTranscripts.tenantId, tenantId)),
+      this.db
+        .select()
+        .from(channelWebhookEvents)
+        .where(eq(channelWebhookEvents.tenantId, tenantId)),
+      this.db
+        .select()
+        .from(usageEvents)
+        .where(eq(usageEvents.tenantId, tenantId)),
+      this.db.select().from(auditLogs).where(eq(auditLogs.tenantId, tenantId)),
     ]);
 
     return {
@@ -6274,6 +6302,11 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       brainOnboardingAnswers: onboardingAnswers,
       knowledgeSuggestions: suggestions,
       documentIngestionJobs: ingestionJobs,
+      calls: tenantCalls,
+      callTranscripts: tenantCallTranscripts,
+      channelWebhookEvents: webhookEvents,
+      usageEvents: usage,
+      auditLogs: audit,
     };
   }
 
@@ -6304,6 +6337,9 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     deletedContact: boolean;
     deletedConversations: number;
     deletedCalls: number;
+    deletedDeliveries: number;
+    deletedHandoffs: number;
+    deletedSuggestions: number;
   }> {
     assertTenantId(tenantId);
     if (this.needsTenantScope(tenantId)) {
@@ -6335,6 +6371,9 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
 
       let deletedConversations = 0;
       let deletedCalls = 0;
+      let deletedDeliveries = 0;
+      let deletedHandoffs = 0;
+      let deletedSuggestions = 0;
       const eraseConversations = options.deleteConversations ?? true;
       if (deletedContact && eraseConversations && conversationIds.length > 0) {
         const removedCalls = await repo.db
@@ -6347,6 +6386,47 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
           )
           .returning({ id: calls.id });
         deletedCalls = removedCalls.length;
+
+        // Rows that only SET NULL their conversation ref (deliveries, handoffs)
+        // — or reference it without a FK at all (suggestions) — would otherwise
+        // survive erasure carrying the data subject's recipient id, message, or
+        // question. Delete them before the conversations, while the ref matches.
+        const removedDeliveries = await repo.db
+          .delete(messageDeliveries)
+          .where(
+            and(
+              eq(messageDeliveries.tenantId, tenantId),
+              inArray(messageDeliveries.conversationId, conversationIds),
+            ),
+          )
+          .returning({ id: messageDeliveries.id });
+        deletedDeliveries = removedDeliveries.length;
+
+        const removedHandoffs = await repo.db
+          .delete(handoffRequests)
+          .where(
+            and(
+              eq(handoffRequests.tenantId, tenantId),
+              inArray(handoffRequests.conversationId, conversationIds),
+            ),
+          )
+          .returning({ id: handoffRequests.id });
+        deletedHandoffs = removedHandoffs.length;
+
+        const removedSuggestions = await repo.db
+          .delete(knowledgeSuggestions)
+          .where(
+            and(
+              eq(knowledgeSuggestions.tenantId, tenantId),
+              inArray(
+                knowledgeSuggestions.sourceConversationId,
+                conversationIds,
+              ),
+            ),
+          )
+          .returning({ id: knowledgeSuggestions.id });
+        deletedSuggestions = removedSuggestions.length;
+
         const removedConversations = await repo.db
           .delete(conversations)
           .where(
@@ -6363,10 +6443,20 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
         await repo.audit(tenantId, "contact.erased", "contact", contactId, {
           deletedConversations,
           deletedCalls,
+          deletedDeliveries,
+          deletedHandoffs,
+          deletedSuggestions,
           erasedConversations: eraseConversations,
         });
       }
-      return { deletedContact, deletedConversations, deletedCalls };
+      return {
+        deletedContact,
+        deletedConversations,
+        deletedCalls,
+        deletedDeliveries,
+        deletedHandoffs,
+        deletedSuggestions,
+      };
     });
   }
 

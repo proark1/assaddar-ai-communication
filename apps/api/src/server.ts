@@ -501,6 +501,9 @@ export type PlatformStore = AnswerDataStore &
       deletedContact: boolean;
       deletedConversations: number;
       deletedCalls: number;
+      deletedDeliveries: number;
+      deletedHandoffs: number;
+      deletedSuggestions: number;
     }>;
     listChannelConnections(tenantId: string): Promise<unknown[]>;
     upsertChannelConnection(
