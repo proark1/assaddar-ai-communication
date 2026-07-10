@@ -23,6 +23,28 @@ function isLocalDatabaseUrl(value: string | undefined) {
 const runIntegrationTests = isLocalDatabaseUrl(process.env.DATABASE_URL);
 
 /**
+ * Assert a query is rejected by the append-only guard. drizzle wraps the
+ * PostgresError, so the "append-only" message lives on the error's `cause`
+ * chain rather than the thrown error's own message — match anywhere in it.
+ */
+async function expectAppendOnlyRejection(promise: Promise<unknown>) {
+  let caught: unknown;
+  try {
+    await promise;
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught, "expected the query to be rejected").toBeDefined();
+  const parts: string[] = [];
+  let current: unknown = caught;
+  for (let depth = 0; depth < 5 && current instanceof Error; depth += 1) {
+    parts.push(current.message);
+    current = (current as { cause?: unknown }).cause;
+  }
+  expect(parts.join(" | ")).toMatch(/append-only/);
+}
+
+/**
  * The append-only audit-log guard (migrations 0019 + 0023) must reject every
  * direct mutation while still allowing the ONE update Postgres itself performs:
  * the ON DELETE SET NULL detach of tenant_id when a tenant is deleted. Before
@@ -94,26 +116,26 @@ describe.skipIf(!runIntegrationTests)("audit_logs append-only guard", () => {
       });
 
       // Content mutation is rejected.
-      await expect(
+      await expectAppendOnlyRejection(
         client.db
           .update(auditLogs)
           .set({ action: "tampered" })
           .where(eq(auditLogs.targetId, marker)),
-      ).rejects.toThrow(/append-only/);
+      );
 
       // Nulling tenant_id manually alongside another change is rejected too —
       // only the pure referential detach is allowed.
-      await expect(
+      await expectAppendOnlyRejection(
         client.db
           .update(auditLogs)
           .set({ tenantId: null, action: "tampered" })
           .where(eq(auditLogs.targetId, marker)),
-      ).rejects.toThrow(/append-only/);
+      );
 
       // Deletes are rejected.
-      await expect(
+      await expectAppendOnlyRejection(
         client.db.delete(auditLogs).where(eq(auditLogs.targetId, marker)),
-      ).rejects.toThrow(/append-only/);
+      );
 
       // The row is untouched.
       const [row] = await client.db
