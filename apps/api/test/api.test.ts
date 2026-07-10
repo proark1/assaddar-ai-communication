@@ -3679,6 +3679,95 @@ describe("API", () => {
     await app.close();
   });
 
+  it("falls back locally when OneBrain answers without evidence chunks", async () => {
+    // The audit's bypass: any non-empty OneBrain answer used to be returned
+    // directly even with chunksUsed=0. It must now fall back to the guarded
+    // local pipeline instead of reaching the customer.
+    const store = new MemoryPlatformStore();
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+      oneBrainAnswer: {
+        enabled: true,
+        provider: fakeOneBrainProvider(async () => ({
+          answer: "Ungrounded but confident remote prose.",
+          chunksUsed: 0,
+        })),
+      },
+    });
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+    await store.addFaq(tenant.id, {
+      question: "What do you do?",
+      answer: "Local Project Brain answer.",
+    });
+
+    const chatResponse = await app.inject({
+      method: "POST",
+      url: "/widget/chat",
+      payload: {
+        assistantId: tenant.publicId,
+        message: "What do you do?",
+      },
+    });
+
+    expect(chatResponse.statusCode).toBe(200);
+    expect(chatResponse.json<{ reply: string }>().reply).toContain(
+      "Local Project Brain answer.",
+    );
+    const answerTrace = store.messages[1]?.trace as {
+      answer?: { trace?: unknown[] };
+    };
+    expect(answerTrace.answer?.trace?.[0]).toEqual({
+      step: "onebrain_answer",
+      outcome: "failed",
+      detail: "no_evidence",
+    });
+
+    await app.close();
+  });
+
+  it("refuses blocked topics before OneBrain is ever asked", async () => {
+    let asked = 0;
+    const store = new MemoryPlatformStore();
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+      oneBrainAnswer: {
+        enabled: true,
+        provider: fakeOneBrainProvider(async () => {
+          asked += 1;
+          return { answer: "Should never be produced.", chunksUsed: 3 };
+        }),
+      },
+    });
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+
+    const chatResponse = await app.inject({
+      method: "POST",
+      url: "/widget/chat",
+      payload: {
+        assistantId: tenant.publicId,
+        message: "Can you give me legal advice about my contract?",
+      },
+    });
+
+    expect(chatResponse.statusCode).toBe(200);
+    expect(asked).toBe(0);
+    expect(chatResponse.json<{ reply: string }>().reply).toContain(
+      "cannot provide that kind of advice",
+    );
+
+    await app.close();
+  });
+
   it("keeps learned suggestions inactive until a tenant admin approves them", async () => {
     const store = new MemoryPlatformStore();
     const app = await buildServer({

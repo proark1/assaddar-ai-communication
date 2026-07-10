@@ -42,6 +42,62 @@ function faqChunk(
   };
 }
 
+describe("AnswerEngine.policyPreflight", () => {
+  const engine = () =>
+    createAnswerEngine({
+      dataStore: new MemoryAnswerStore(
+        { [tenantA]: createDefaultTenantPolicy(tenantA) },
+        [
+          faqChunk(
+            tenantA,
+            "What are your opening hours?",
+            "We are open Monday to Friday.",
+          ),
+        ],
+      ),
+    });
+
+  it("refuses blocked topics exactly like the local pipeline", async () => {
+    const result = await engine().policyPreflight({
+      tenantId: tenantA,
+      channel: "website",
+      text: "Can you give me legal advice about my contract?",
+      metadata: {},
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.status).toBe("handoff");
+    expect(result?.intent).toBe("medical_legal_financial_advice");
+    expect(
+      result?.trace.some(
+        (step) => step.step === "blocked_topic" && step.outcome === "failed",
+      ),
+    ).toBe(true);
+  });
+
+  it("refuses over-length messages", async () => {
+    const result = await engine().policyPreflight({
+      tenantId: tenantA,
+      channel: "website",
+      text: "x".repeat(5000),
+      metadata: {},
+    });
+
+    expect(result?.intent).toBe("message_length");
+  });
+
+  it("returns null for an allowed message", async () => {
+    const result = await engine().policyPreflight({
+      tenantId: tenantA,
+      channel: "website",
+      text: "When are you open?",
+      metadata: {},
+    });
+
+    expect(result).toBeNull();
+  });
+});
+
 describe("AnswerEngine", () => {
   it("answers only from approved tenant knowledge", async () => {
     const engine = createAnswerEngine({
