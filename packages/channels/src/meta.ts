@@ -1,6 +1,7 @@
 import type {
   ChannelAdapter,
   DeliveryResult,
+  DeliveryStatusUpdate,
   MessagingWindowPolicy,
   NormalizedInboundEvent,
   OutboundMessage,
@@ -95,6 +96,50 @@ export class WhatsAppCloudAdapter implements ChannelAdapter {
     }
 
     return events;
+  }
+
+  normalizeStatusUpdates(payload: unknown): DeliveryStatusUpdate[] {
+    const updates: DeliveryStatusUpdate[] = [];
+    const entries =
+      isRecord(payload) && Array.isArray(payload.entry) ? payload.entry : [];
+
+    for (const entry of entries) {
+      const changes =
+        isRecord(entry) && Array.isArray(entry.changes) ? entry.changes : [];
+      for (const change of changes) {
+        const value =
+          isRecord(change) && isRecord(change.value) ? change.value : undefined;
+        const statuses =
+          value && Array.isArray(value.statuses) ? value.statuses : [];
+        for (const status of statuses) {
+          if (!isRecord(status)) {
+            continue;
+          }
+          const id = typeof status.id === "string" ? status.id : undefined;
+          const statusName = normalizeMetaDeliveryStatus(status.status);
+          if (!id || !statusName) {
+            continue;
+          }
+          const update: DeliveryStatusUpdate = {
+            providerMessageId: id,
+            status: statusName,
+          };
+          if (typeof status.timestamp === "string") {
+            update.timestamp = status.timestamp;
+          }
+          if (typeof status.recipient_id === "string") {
+            update.recipientId = status.recipient_id;
+          }
+          const error = readFirstMetaError(status.errors);
+          if (error) {
+            update.error = error;
+          }
+          updates.push(update);
+        }
+      }
+    }
+
+    return updates;
   }
 
   async sendMessage(message: OutboundMessage): Promise<DeliveryResult> {
@@ -254,6 +299,35 @@ export class MetaMessengerAdapter implements ChannelAdapter {
     return events;
   }
 
+  normalizeStatusUpdates(payload: unknown): DeliveryStatusUpdate[] {
+    const updates: DeliveryStatusUpdate[] = [];
+    const entries =
+      isRecord(payload) && Array.isArray(payload.entry) ? payload.entry : [];
+
+    for (const entry of entries) {
+      const messaging =
+        isRecord(entry) && Array.isArray(entry.messaging)
+          ? entry.messaging
+          : [];
+      for (const item of messaging) {
+        // Messenger reports delivery per message id (`delivery.mids`). Read
+        // receipts are watermark-based (a timestamp, not message ids), so they
+        // cannot be mapped to a specific stored delivery and are skipped here.
+        const delivery =
+          isRecord(item) && isRecord(item.delivery) ? item.delivery : undefined;
+        const mids =
+          delivery && Array.isArray(delivery.mids) ? delivery.mids : [];
+        for (const mid of mids) {
+          if (typeof mid === "string") {
+            updates.push({ providerMessageId: mid, status: "delivered" });
+          }
+        }
+      }
+    }
+
+    return updates;
+  }
+
   async sendMessage(message: OutboundMessage): Promise<DeliveryResult> {
     if (!this.pageAccessToken) {
       return {
@@ -343,6 +417,51 @@ export function isRetryableHttpStatus(status: number): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Map a Meta status string onto the delivery lifecycle we track, ignoring
+ * states that do not advance it (e.g. "deleted", "warning").
+ */
+function normalizeMetaDeliveryStatus(
+  value: unknown,
+): DeliveryStatusUpdate["status"] | undefined {
+  if (
+    value === "sent" ||
+    value === "delivered" ||
+    value === "read" ||
+    value === "failed"
+  ) {
+    return value;
+  }
+  return undefined;
+}
+
+function readFirstMetaError(
+  value: unknown,
+): DeliveryStatusUpdate["error"] | undefined {
+  const first = Array.isArray(value) ? value[0] : undefined;
+  if (!isRecord(first)) {
+    return undefined;
+  }
+  const error: NonNullable<DeliveryStatusUpdate["error"]> = {};
+  if (typeof first.code === "number") {
+    error.code = first.code;
+  }
+  if (typeof first.title === "string") {
+    error.title = first.title;
+  }
+  const errorData = isRecord(first.error_data) ? first.error_data : undefined;
+  const detail =
+    typeof first.message === "string"
+      ? first.message
+      : typeof errorData?.details === "string"
+        ? errorData.details
+        : undefined;
+  if (detail) {
+    error.detail = detail;
+  }
+  return Object.keys(error).length > 0 ? error : undefined;
 }
 
 function readNestedText(

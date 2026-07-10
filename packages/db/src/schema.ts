@@ -478,6 +478,12 @@ export const channelConnections = pgTable(
       table.channel,
       table.provider,
     ),
+    // A provider account id belongs to exactly one tenant so inbound routing is
+    // unambiguous. Partial so multiple not-yet-configured connections (null
+    // account) coexist. See migration 0022.
+    uniqueIndex("channel_connections_account_owner_idx")
+      .on(table.channel, table.externalAccountId)
+      .where(sql`${table.externalAccountId} is not null`),
   ],
 );
 
@@ -962,6 +968,18 @@ export const conversations = pgTable(
     status: text("status").notNull().default("open"),
     locale: text("locale").notNull().default("en"),
     summary: text("summary"),
+    // Human takeover state. While aiPaused is true the answer engine stays silent
+    // for this conversation and only an operator's reply reaches the customer.
+    aiPaused: boolean("ai_paused").notNull().default(false),
+    // The teammate currently handling the conversation (a real users FK, unlike
+    // the advisory free-text handoffRequests.assignedTo). Null when the AI owns it.
+    assignedUserId: uuid("assigned_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    // Timestamp of the first human turn, used to measure first-response time.
+    firstHumanResponseAt: timestamp("first_human_response_at", {
+      withTimezone: true,
+    }),
     metadata: jsonb("metadata")
       .$type<Record<string, unknown>>()
       .notNull()
@@ -1016,6 +1034,15 @@ export const messages = pgTable(
     role: text("role").notNull(),
     content: text("content").notNull(),
     status: text("status").notNull().default("stored"),
+    // The operator who authored a human ("operator") turn. Null for AI
+    // ("assistant"), "user", and "system" messages.
+    authorUserId: uuid("author_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    // The provider event id of the inbound message this row was created from.
+    // Dedupes a stored inbound turn against webhook retries. Null for outbound
+    // and non-provider messages.
+    providerEventId: text("provider_event_id"),
     trace: jsonb("trace")
       .$type<Record<string, unknown>>()
       .notNull()
@@ -1030,6 +1057,14 @@ export const messages = pgTable(
       table.conversationId,
     ),
     index("messages_created_idx").on(table.createdAt),
+    // Website widget poll path: operator turns in one conversation, by time.
+    index("messages_conversation_operator_idx")
+      .on(table.conversationId, table.createdAt)
+      .where(sql`${table.role} = 'operator'`),
+    // Inbound idempotency: at most one stored message per provider event.
+    uniqueIndex("messages_provider_event_idx")
+      .on(table.tenantId, table.conversationId, table.providerEventId)
+      .where(sql`${table.providerEventId} is not null`),
   ],
 );
 
@@ -1170,6 +1205,11 @@ export const messageDeliveries = pgTable(
     providerMessageId: text("provider_message_id"),
     status: text("status").notNull().default("queued"),
     detail: text("detail"),
+    // Idempotency key for the outbound send. For automated webhook replies this
+    // is the inbound provider event id, so a provider retry that reaches the
+    // send path finds the existing delivery and does not send twice. Null for
+    // sends that opt out of dedup (e.g. operator manual replies).
+    idempotencyKey: text("idempotency_key"),
     metadata: jsonb("metadata")
       .$type<Record<string, unknown>>()
       .notNull()
@@ -1189,6 +1229,10 @@ export const messageDeliveries = pgTable(
     index("message_deliveries_provider_message_idx").on(
       table.providerMessageId,
     ),
+    // Outbound idempotency: at most one delivery per (tenant, key).
+    uniqueIndex("message_deliveries_idempotency_idx")
+      .on(table.tenantId, table.idempotencyKey)
+      .where(sql`${table.idempotencyKey} is not null`),
     // Partial index for the cross-tenant delivery-retry worker sweep, which
     // filters failed rows and orders by updated_at with no tenant predicate.
     // See migration 0015.

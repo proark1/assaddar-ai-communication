@@ -114,3 +114,80 @@ describe("MetaMessengerAdapter.sendMessage delivery outcomes", () => {
     expect(result.retryable).toBe(true);
   });
 });
+
+describe("WhatsAppCloudAdapter.normalizeStatusUpdates", () => {
+  const statusPayload = {
+    entry: [
+      {
+        changes: [
+          {
+            value: {
+              metadata: { phone_number_id: "phone-number-1" },
+              statuses: [
+                {
+                  id: "wamid.1",
+                  status: "delivered",
+                  timestamp: "1700000000",
+                  recipient_id: "491701234567",
+                },
+                {
+                  id: "wamid.2",
+                  status: "failed",
+                  errors: [{ code: 131026, title: "Message undeliverable" }],
+                },
+                { id: "wamid.3", status: "deleted" },
+              ],
+            },
+          },
+        ],
+      },
+    ],
+  };
+
+  it("parses delivered/failed statuses and ignores unknown states", () => {
+    const adapter = new WhatsAppCloudAdapter("verify", "access-token");
+    expect(adapter.normalizeStatusUpdates(statusPayload)).toEqual([
+      {
+        providerMessageId: "wamid.1",
+        status: "delivered",
+        timestamp: "1700000000",
+        recipientId: "491701234567",
+      },
+      {
+        providerMessageId: "wamid.2",
+        status: "failed",
+        error: { code: 131026, title: "Message undeliverable" },
+      },
+    ]);
+  });
+
+  it("returns nothing for a message (non-status) payload", () => {
+    const adapter = new WhatsAppCloudAdapter("verify", "access-token");
+    expect(adapter.normalizeStatusUpdates({ entry: [] })).toEqual([]);
+  });
+});
+
+describe("MetaMessengerAdapter.normalizeStatusUpdates", () => {
+  it("maps delivery mids to delivered updates and skips read watermarks", () => {
+    const adapter = new MetaMessengerAdapter(
+      "messenger",
+      "verify",
+      "page-token",
+    );
+    const payload = {
+      entry: [
+        {
+          id: "page-1",
+          messaging: [
+            { delivery: { mids: ["mid.a", "mid.b"], watermark: 1700000000 } },
+            { read: { watermark: 1700000000 } },
+          ],
+        },
+      ],
+    };
+    expect(adapter.normalizeStatusUpdates(payload)).toEqual([
+      { providerMessageId: "mid.a", status: "delivered" },
+      { providerMessageId: "mid.b", status: "delivered" },
+    ]);
+  });
+});

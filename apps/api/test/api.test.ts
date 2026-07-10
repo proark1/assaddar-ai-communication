@@ -10,6 +10,7 @@ import {
   type KnowledgeChunk,
   type TenantPolicy,
 } from "@assaddar/core";
+import { ChannelAccountConflictError } from "@assaddar/db";
 import { createHmac } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -115,6 +116,9 @@ class MemoryPlatformStore
     contactId?: string | null;
     externalUserId?: string | null;
     locale?: string;
+    aiPaused: boolean;
+    assignedUserId: string | null;
+    firstHumanResponseAt: Date | null;
     createdAt: Date;
     updatedAt: Date;
   }> = [];
@@ -411,7 +415,11 @@ class MemoryPlatformStore
       (delivery) => delivery.status === "failed",
     ).length;
     const deliveriesSent = this.deliveries.filter(
-      (delivery) => delivery.status === "sent" || delivery.status === "queued",
+      (delivery) =>
+        delivery.status === "sent" ||
+        delivery.status === "queued" ||
+        delivery.status === "delivered" ||
+        delivery.status === "read",
     ).length;
     const attempted = deliveriesFailed + deliveriesSent;
     return {
@@ -804,6 +812,20 @@ class MemoryPlatformStore
       settings?: Record<string, unknown> | undefined;
     },
   ) {
+    const accountId = input.externalAccountId ?? null;
+    // Mirror the global unique index: a provider account belongs to one tenant.
+    if (accountId) {
+      const conflict = this.channelConnections.find(
+        (connection) =>
+          connection.tenantId !== tenantId &&
+          connection.channel === input.channel &&
+          connection.externalAccountId === accountId,
+      );
+      if (conflict) {
+        throw new ChannelAccountConflictError();
+      }
+    }
+
     const existing = this.channelConnections.find(
       (connection) =>
         connection.tenantId === tenantId &&
@@ -811,7 +833,7 @@ class MemoryPlatformStore
         connection.provider === input.provider,
     );
     if (existing) {
-      existing.externalAccountId = input.externalAccountId ?? null;
+      existing.externalAccountId = accountId;
       existing.status = input.status ?? existing.status;
       existing.settings = input.settings ?? existing.settings;
       existing.updatedAt = new Date();
@@ -823,7 +845,7 @@ class MemoryPlatformStore
       tenantId,
       channel: input.channel,
       provider: input.provider,
-      externalAccountId: input.externalAccountId ?? null,
+      externalAccountId: accountId,
       status: input.status ?? "pending",
       settings: input.settings ?? {},
       updatedAt: new Date(),
@@ -2023,11 +2045,123 @@ class MemoryPlatformStore
       contactId: contact?.id ?? null,
       externalUserId: input.externalUserId ?? null,
       locale: input.locale ?? "en",
+      aiPaused: false,
+      assignedUserId: null as string | null,
+      firstHumanResponseAt: null as Date | null,
       createdAt: new Date(),
       updatedAt: new Date(),
     };
     this.conversations.push(conversation);
     return conversation;
+  }
+
+  async setConversationHandling(input: {
+    tenantId: string;
+    conversationId: string;
+    aiPaused?: boolean;
+    assignedUserId?: string | null;
+    stampFirstHumanResponse?: boolean;
+  }) {
+    const conversation = this.conversations.find(
+      (item) =>
+        item.tenantId === input.tenantId && item.id === input.conversationId,
+    );
+    if (!conversation) {
+      return null;
+    }
+    if (input.aiPaused !== undefined) {
+      conversation.aiPaused = input.aiPaused;
+    }
+    if (input.assignedUserId !== undefined) {
+      conversation.assignedUserId = input.assignedUserId;
+    }
+    if (input.stampFirstHumanResponse && !conversation.firstHumanResponseAt) {
+      conversation.firstHumanResponseAt = new Date();
+    }
+    conversation.updatedAt = new Date();
+    return conversation;
+  }
+
+  async getConversationReplyContext(input: {
+    tenantId: string;
+    conversationId: string;
+  }) {
+    const conversation = this.conversations.find(
+      (item) =>
+        item.tenantId === input.tenantId && item.id === input.conversationId,
+    );
+    if (!conversation) {
+      return null;
+    }
+    const inbound = this.messages
+      .filter(
+        (message) =>
+          message.tenantId === input.tenantId &&
+          message.conversationId === input.conversationId &&
+          message.direction === "inbound",
+      )
+      .sort(
+        (a, b) =>
+          (b.createdAt as Date).getTime() - (a.createdAt as Date).getTime(),
+      );
+    const lastInbound = inbound[0];
+    const trace = ((lastInbound?.trace as Record<string, unknown>) ??
+      {}) as Record<string, unknown>;
+    const readString = (value: unknown) =>
+      typeof value === "string" ? value : null;
+    return {
+      conversation: {
+        id: conversation.id,
+        publicId: conversation.publicId,
+        channel: conversation.channel,
+        externalUserId: conversation.externalUserId ?? null,
+        aiPaused: conversation.aiPaused,
+        assignedUserId: conversation.assignedUserId ?? null,
+        firstHumanResponseAt: conversation.firstHumanResponseAt ?? null,
+      },
+      lastInboundAt: (lastInbound?.createdAt as Date | undefined) ?? null,
+      providerAccountId: readString(trace.providerAccountId),
+      externalUserId:
+        conversation.externalUserId ?? readString(trace.externalUserId),
+      externalConversationId: readString(trace.externalConversationId),
+    };
+  }
+
+  async listOperatorRepliesForWidget(input: {
+    tenantId: string;
+    conversationPublicId: string;
+    since?: Date;
+    limit: number;
+  }) {
+    const conversation = this.conversations.find(
+      (item) =>
+        item.tenantId === input.tenantId &&
+        item.publicId === input.conversationPublicId &&
+        item.channel === "website",
+    );
+    if (!conversation) {
+      return [];
+    }
+    return this.messages
+      .filter(
+        (message) =>
+          message.tenantId === input.tenantId &&
+          message.conversationId === conversation.id &&
+          message.role === "operator" &&
+          message.direction === "outbound" &&
+          (!input.since ||
+            (message.createdAt as Date).getTime() > input.since.getTime()),
+      )
+      .sort(
+        (a, b) =>
+          (a.createdAt as Date).getTime() - (b.createdAt as Date).getTime(),
+      )
+      .slice(0, Math.max(1, Math.min(input.limit, 100)))
+      .map((message) => ({
+        id: message.id as string,
+        text: message.content as string,
+        createdAt: message.createdAt as Date,
+      }));
   }
 
   async enrichConversationContact(input: {
@@ -2063,6 +2197,18 @@ class MemoryPlatformStore
   }
 
   async addMessage(input: Record<string, unknown>) {
+    const providerEventId = input.providerEventId ?? null;
+    if (providerEventId) {
+      const existing = this.messages.find(
+        (item) =>
+          item.tenantId === input.tenantId &&
+          item.conversationId === input.conversationId &&
+          item.providerEventId === providerEventId,
+      );
+      if (existing) {
+        return existing;
+      }
+    }
     const message = {
       id: crypto.randomUUID(),
       createdAt: new Date(),
@@ -2221,10 +2367,16 @@ class MemoryPlatformStore
         deletedContact: false,
         deletedConversations: 0,
         deletedCalls: 0,
+        deletedDeliveries: 0,
+        deletedHandoffs: 0,
+        deletedSuggestions: 0,
       };
     }
     this.contacts.splice(index, 1);
     let deletedConversations = 0;
+    let deletedDeliveries = 0;
+    let deletedHandoffs = 0;
+    let deletedSuggestions = 0;
     if (options.deleteConversations ?? true) {
       const linked = this.conversations.filter(
         (conversation) =>
@@ -2239,8 +2391,31 @@ class MemoryPlatformStore
       this.messages = this.messages.filter(
         (message) => !linkedIds.has(message.conversationId as string),
       );
+      const deliveriesBefore = this.deliveries.length;
+      this.deliveries = this.deliveries.filter(
+        (delivery) => !linkedIds.has(delivery.conversationId as string),
+      );
+      deletedDeliveries = deliveriesBefore - this.deliveries.length;
+      const handoffsBefore = this.handoffs.length;
+      this.handoffs = this.handoffs.filter(
+        (handoff) => !linkedIds.has(handoff.conversationId as string),
+      );
+      deletedHandoffs = handoffsBefore - this.handoffs.length;
+      const suggestionsBefore = this.knowledgeSuggestions.length;
+      this.knowledgeSuggestions = this.knowledgeSuggestions.filter(
+        (suggestion) =>
+          !linkedIds.has(suggestion.sourceConversationId as string),
+      );
+      deletedSuggestions = suggestionsBefore - this.knowledgeSuggestions.length;
     }
-    return { deletedContact: true, deletedConversations, deletedCalls: 0 };
+    return {
+      deletedContact: true,
+      deletedConversations,
+      deletedCalls: 0,
+      deletedDeliveries,
+      deletedHandoffs,
+      deletedSuggestions,
+    };
   }
 
   async listConversationMessages(tenantId: string, conversationId: string) {
@@ -2516,6 +2691,83 @@ class MemoryPlatformStore
     };
     this.deliveries.push(delivery);
     return delivery;
+  }
+
+  async claimOutboundDelivery(input: Record<string, unknown>) {
+    const existing = this.deliveries.find(
+      (item) =>
+        item.tenantId === input.tenantId &&
+        item.idempotencyKey != null &&
+        item.idempotencyKey === input.idempotencyKey,
+    );
+    if (existing) {
+      return { claimed: false, id: null };
+    }
+    const delivery = {
+      id: crypto.randomUUID(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      ...input,
+      status: "pending",
+    };
+    this.deliveries.push(delivery);
+    return { claimed: true, id: delivery.id as string };
+  }
+
+  async finalizeOutboundDelivery(input: Record<string, unknown>) {
+    const delivery = this.deliveries.find(
+      (item) =>
+        item.tenantId === input.tenantId && item.id === input.deliveryId,
+    );
+    if (delivery) {
+      Object.assign(delivery, {
+        messageId: input.messageId ?? null,
+        status: input.status,
+        providerMessageId: input.providerMessageId ?? null,
+        detail: input.detail ?? null,
+        metadata: input.metadata ?? {},
+        updatedAt: new Date(),
+      });
+    }
+  }
+
+  async applyDeliveryStatusCallback(input: Record<string, unknown>) {
+    const delivery = this.deliveries.find(
+      (item) =>
+        item.tenantId === input.tenantId &&
+        item.providerMessageId != null &&
+        item.providerMessageId === input.providerMessageId,
+    );
+    if (!delivery) {
+      return { matched: false, applied: false };
+    }
+    const rank = (status: unknown) => {
+      switch (status) {
+        case "queued":
+        case "pending":
+          return 0;
+        case "sent":
+          return 1;
+        case "delivered":
+          return 2;
+        case "read":
+          return 3;
+        default:
+          return -1;
+      }
+    };
+    if (delivery.status === "read" || delivery.status === "failed") {
+      return { matched: true, applied: false };
+    }
+    if (
+      input.status !== "failed" &&
+      rank(input.status) <= rank(delivery.status)
+    ) {
+      return { matched: true, applied: false };
+    }
+    delivery.status = input.status;
+    delivery.updatedAt = new Date();
+    return { matched: true, applied: true };
   }
 
   async listWhatsappTemplates(tenantId: string) {
@@ -3677,6 +3929,250 @@ describe("API", () => {
     });
 
     await app.close();
+  });
+
+  describe("operator human takeover", () => {
+    it("lets an operator reply on a website conversation and the widget polls it", async () => {
+      const store = new MemoryPlatformStore();
+      const tenant = await store.createTenant({
+        name: "Tenant",
+        slug: "tenant",
+      });
+      const conversation = await store.findOrCreateConversation({
+        tenantId: tenant.id,
+        channel: "website",
+        externalUserId: "visitor_1",
+      });
+      await store.addMessage({
+        tenantId: tenant.id,
+        conversationId: conversation.id,
+        channel: "website",
+        direction: "inbound",
+        role: "user",
+        content: "Is anyone there?",
+      });
+      const { app, memberHeaders } = await buildServerWithMember(
+        store,
+        tenant.id,
+        "operator",
+      );
+
+      const replyResponse = await app.inject({
+        method: "POST",
+        url: `/admin/tenants/${tenant.id}/conversations/${conversation.id}/messages`,
+        headers: memberHeaders,
+        payload: { text: "Hi, this is Sam from the team — how can I help?" },
+      });
+      expect(replyResponse.statusCode).toBe(201);
+      const replyBody = replyResponse.json<{
+        delivery: { status: string };
+        message: { role: string; authorUserId: string | null };
+      }>();
+      expect(replyBody.delivery.status).toBe("sent");
+      expect(replyBody.message.role).toBe("operator");
+      expect(replyBody.message.authorUserId).toBeTruthy();
+
+      // Sending takes over: the AI is paused, assigned, and first-response
+      // time is stamped.
+      const updated = store.conversations.find(
+        (item) => item.id === conversation.id,
+      );
+      expect(updated?.aiPaused).toBe(true);
+      expect(updated?.assignedUserId).toBeTruthy();
+      expect(updated?.firstHumanResponseAt).toBeTruthy();
+
+      // The widget polls and sees exactly the operator reply.
+      const pollResponse = await app.inject({
+        method: "GET",
+        url: `/widget/conversations/${conversation.publicId}/messages?assistantId=${tenant.publicId}`,
+      });
+      expect(pollResponse.statusCode).toBe(200);
+      const polled = pollResponse.json<{
+        messages: Array<{ text: string; createdAt: string }>;
+      }>().messages;
+      expect(polled).toHaveLength(1);
+      expect(polled[0]?.text).toContain("Sam from the team");
+
+      // The `since` cursor excludes replies the widget already has.
+      const emptyPoll = await app.inject({
+        method: "GET",
+        url: `/widget/conversations/${conversation.publicId}/messages?assistantId=${tenant.publicId}&since=${encodeURIComponent(polled[0]!.createdAt)}`,
+      });
+      expect(emptyPoll.json<{ messages: unknown[] }>().messages).toHaveLength(
+        0,
+      );
+
+      // A wrong assistant id cannot resolve the conversation.
+      const wrongTenantPoll = await app.inject({
+        method: "GET",
+        url: `/widget/conversations/${conversation.publicId}/messages?assistantId=asst_wrongwrongwrongwrong0000`,
+      });
+      expect(wrongTenantPoll.statusCode).toBe(404);
+
+      await app.close();
+    });
+
+    it("suppresses the website AI reply once a human has taken over", async () => {
+      const store = new MemoryPlatformStore();
+      const tenant = await store.createTenant({
+        name: "Tenant",
+        slug: "tenant",
+      });
+      const conversation = await store.findOrCreateConversation({
+        tenantId: tenant.id,
+        channel: "website",
+        externalUserId: "visitor_2",
+      });
+      const { app, memberHeaders } = await buildServerWithMember(
+        store,
+        tenant.id,
+        "operator",
+      );
+
+      const takeover = await app.inject({
+        method: "PATCH",
+        url: `/admin/tenants/${tenant.id}/conversations/${conversation.id}/handling`,
+        headers: memberHeaders,
+        payload: { aiPaused: true },
+      });
+      expect(takeover.statusCode).toBe(200);
+      expect(takeover.json<{ aiPaused: boolean }>().aiPaused).toBe(true);
+
+      const before = store.messages.length;
+      const chatResponse = await app.inject({
+        method: "POST",
+        url: "/widget/chat",
+        payload: {
+          assistantId: tenant.publicId,
+          conversationId: conversation.publicId,
+          visitorId: "visitor_2",
+          message: "Are you still there?",
+        },
+      });
+      expect(chatResponse.statusCode).toBe(200);
+      const chatBody = chatResponse.json<{
+        reply: string;
+        handledBy?: string;
+      }>();
+      expect(chatBody.handledBy).toBe("human");
+      expect(chatBody.reply).toBe("");
+      // Only the visitor's inbound message was stored — the AI produced nothing.
+      expect(store.messages.length).toBe(before + 1);
+      expect(store.messages[store.messages.length - 1]?.direction).toBe(
+        "inbound",
+      );
+
+      // Handing back re-enables the AI and clears the assignee.
+      const release = await app.inject({
+        method: "PATCH",
+        url: `/admin/tenants/${tenant.id}/conversations/${conversation.id}/handling`,
+        headers: memberHeaders,
+        payload: { aiPaused: false },
+      });
+      expect(
+        release.json<{ aiPaused: boolean; assignedUserId: string | null }>(),
+      ).toMatchObject({ aiPaused: false, assignedUserId: null });
+
+      await app.close();
+    });
+
+    it("denies the platform admin token from replying (privacy boundary)", async () => {
+      const store = new MemoryPlatformStore();
+      const tenant = await store.createTenant({
+        name: "Tenant",
+        slug: "tenant",
+      });
+      const conversation = await store.findOrCreateConversation({
+        tenantId: tenant.id,
+        channel: "website",
+        externalUserId: "visitor_3",
+      });
+      const app = await buildServer({
+        store,
+        adminToken: "test-token",
+        allowedOrigins: ["*"],
+      });
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/admin/tenants/${tenant.id}/conversations/${conversation.id}/messages`,
+        headers: { "x-admin-token": "test-token" },
+        payload: { text: "hello" },
+      });
+      expect(response.statusCode).toBe(403);
+      await app.close();
+    });
+
+    it("requires operator role to reply", async () => {
+      const store = new MemoryPlatformStore();
+      const tenant = await store.createTenant({
+        name: "Tenant",
+        slug: "tenant",
+      });
+      const conversation = await store.findOrCreateConversation({
+        tenantId: tenant.id,
+        channel: "website",
+        externalUserId: "visitor_4",
+      });
+      const { app, memberHeaders } = await buildServerWithMember(
+        store,
+        tenant.id,
+        "viewer",
+      );
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/admin/tenants/${tenant.id}/conversations/${conversation.id}/messages`,
+        headers: memberHeaders,
+        payload: { text: "hello" },
+      });
+      expect(response.statusCode).toBe(403);
+      await app.close();
+    });
+
+    it("marks a WhatsApp operator reply as skipped outside the 24-hour window", async () => {
+      const store = new MemoryPlatformStore();
+      const tenant = await store.createTenant({
+        name: "Tenant",
+        slug: "tenant",
+      });
+      const conversation = await store.findOrCreateConversation({
+        tenantId: tenant.id,
+        channel: "whatsapp",
+        externalUserId: "4915100000000",
+      });
+      const inbound = await store.addMessage({
+        tenantId: tenant.id,
+        conversationId: conversation.id,
+        channel: "whatsapp",
+        direction: "inbound",
+        role: "user",
+        content: "hello",
+        trace: { providerAccountId: "PHONE_NUMBER_ID" },
+      });
+      // Age the last inbound past Meta's 24-hour customer-service window.
+      (inbound as { createdAt: Date }).createdAt = new Date(
+        Date.now() - 2 * 24 * 60 * 60 * 1000,
+      );
+
+      const { app, memberHeaders } = await buildServerWithMember(
+        store,
+        tenant.id,
+        "operator",
+      );
+      const response = await app.inject({
+        method: "POST",
+        url: `/admin/tenants/${tenant.id}/conversations/${conversation.id}/messages`,
+        headers: memberHeaders,
+        payload: { text: "Following up on your order." },
+      });
+      expect(response.statusCode).toBe(201);
+      // The message is recorded but not delivered — surfaced honestly, not hidden.
+      expect(
+        response.json<{ delivery: { status: string } }>().delivery.status,
+      ).toBe("skipped");
+      await app.close();
+    });
   });
 
   it("keeps learned suggestions inactive until a tenant admin approves them", async () => {
@@ -5310,7 +5806,7 @@ describe("API", () => {
     await app.close();
   });
 
-  it("reprocesses a retried webhook whose prior delivery failed", async () => {
+  it("reprocesses a retried webhook without sending the reply twice", async () => {
     const store = new MemoryPlatformStore();
     globalThis.fetch = vi.fn(async () => {
       return new Response(JSON.stringify({ messages: [{ id: "wamid.ok" }] }), {
@@ -5318,18 +5814,20 @@ describe("API", () => {
         headers: { "content-type": "application/json" },
       });
     }) as typeof fetch;
-    // A transient infrastructure error mid-processing (here a DB write) makes the
-    // webhook return 5xx, so the provider retries. The retry must be reprocessed,
-    // not dropped as a duplicate.
-    const realRecordDelivery = store.recordMessageDelivery.bind(store);
-    let deliveryAttempts = 0;
-    vi.spyOn(store, "recordMessageDelivery").mockImplementation(
+    // A transient infrastructure error mid-processing — the delivery write that
+    // runs AFTER the provider send — makes the webhook return 5xx, so the
+    // provider retries. The retry must be reprocessed (not dropped), but because
+    // the outbound intent was already claimed before the send, the reply must
+    // NOT be sent to the customer a second time.
+    const realFinalize = store.finalizeOutboundDelivery.bind(store);
+    let finalizeAttempts = 0;
+    vi.spyOn(store, "finalizeOutboundDelivery").mockImplementation(
       async (input) => {
-        deliveryAttempts += 1;
-        if (deliveryAttempts === 1) {
+        finalizeAttempts += 1;
+        if (finalizeAttempts === 1) {
           throw new Error("delivery store write failed");
         }
-        return realRecordDelivery(input);
+        return realFinalize(input);
       },
     );
     const app = await buildServer({
@@ -5386,7 +5884,9 @@ describe("API", () => {
     expect(store.webhookEvents[0]?.status).toBe("failed");
 
     // The provider retries the same event id — it must be reprocessed, not
-    // dropped as a duplicate, and this time it succeeds.
+    // dropped as a duplicate. This time the outbound intent from the first
+    // attempt is already claimed, so the reply is deduplicated: the event is
+    // marked processed, but the customer is NOT messaged again.
     const second = await app.inject({
       method: "POST",
       url: "/webhooks/meta/whatsapp",
@@ -5400,7 +5900,192 @@ describe("API", () => {
     expect(results[0]?.retried).toBe(true);
     expect(store.webhookEvents).toHaveLength(1);
     expect(store.webhookEvents[0]?.status).toBe("processed");
-    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+    // The heart of the fix: the reply reached the provider exactly once across
+    // the original delivery and the retry.
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    // Reprocessing also did not duplicate the stored turns: the inbound message
+    // is deduped on its provider event id, and no second assistant reply was
+    // written.
+    expect(
+      store.messages.filter((message) => message.direction === "inbound"),
+    ).toHaveLength(1);
+    expect(
+      store.messages.filter((message) => message.direction === "outbound"),
+    ).toHaveLength(1);
+    await app.close();
+  });
+
+  it("advances a delivery through provider status callbacks", async () => {
+    const store = new MemoryPlatformStore();
+    globalThis.fetch = vi.fn(async () => {
+      return new Response(JSON.stringify({ messages: [{ id: "wamid.ok" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+      whatsappAccessToken: "whatsapp-token",
+    });
+    const tenant = await store.createTenant({
+      name: "Tenant One",
+      slug: "tenant-one",
+    });
+    await store.addFaq(tenant.id, {
+      question: "What do you do?",
+      answer: "We implement practical AI automation.",
+    });
+    await store.upsertChannelConnection(tenant.id, {
+      channel: "whatsapp",
+      provider: "meta-whatsapp-cloud",
+      externalAccountId: "phone-number-1",
+      status: "connected",
+    });
+
+    // Inbound message → AI reply → a delivery is recorded with the provider id.
+    await app.inject({
+      method: "POST",
+      url: "/webhooks/meta/whatsapp",
+      payload: {
+        entry: [
+          {
+            changes: [
+              {
+                value: {
+                  metadata: { phone_number_id: "phone-number-1" },
+                  messages: [
+                    {
+                      id: "wamid.in",
+                      from: "491701234567",
+                      text: { body: "What do you do?" },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+    const findDelivery = () =>
+      store.deliveries.find((item) => item.providerMessageId === "wamid.ok");
+    expect(findDelivery()?.status).toBe("sent");
+
+    const statusPayload = (status: string) => ({
+      entry: [
+        {
+          changes: [
+            {
+              value: {
+                metadata: { phone_number_id: "phone-number-1" },
+                statuses: [
+                  { id: "wamid.ok", status, recipient_id: "491701234567" },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    const delivered = await app.inject({
+      method: "POST",
+      url: "/webhooks/meta/whatsapp",
+      payload: statusPayload("delivered"),
+    });
+    expect(delivered.json<{ statusApplied: number }>().statusApplied).toBe(1);
+    expect(findDelivery()?.status).toBe("delivered");
+
+    await app.inject({
+      method: "POST",
+      url: "/webhooks/meta/whatsapp",
+      payload: statusPayload("read"),
+    });
+    expect(findDelivery()?.status).toBe("read");
+
+    // A stale/out-of-order callback does not downgrade a delivery.
+    const stale = await app.inject({
+      method: "POST",
+      url: "/webhooks/meta/whatsapp",
+      payload: statusPayload("sent"),
+    });
+    expect(stale.json<{ statusApplied: number }>().statusApplied).toBe(0);
+    expect(findDelivery()?.status).toBe("read");
+
+    // An unknown message id matches nothing and is a safe no-op.
+    const unknown = await app.inject({
+      method: "POST",
+      url: "/webhooks/meta/whatsapp",
+      payload: {
+        entry: [
+          {
+            changes: [
+              {
+                value: {
+                  metadata: { phone_number_id: "phone-number-1" },
+                  statuses: [{ id: "wamid.unknown", status: "delivered" }],
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+    expect(
+      unknown.json<{ statusUpdates: number; statusApplied: number }>(),
+    ).toMatchObject({ statusUpdates: 1, statusApplied: 0 });
+
+    await app.close();
+  });
+
+  it("rejects connecting a provider account already owned by another tenant", async () => {
+    const store = new MemoryPlatformStore();
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+    });
+    const tenantA = await store.createTenant({
+      name: "Tenant A",
+      slug: "tenant-a",
+    });
+    const tenantB = await store.createTenant({
+      name: "Tenant B",
+      slug: "tenant-b",
+    });
+
+    const connect = (tenantId: string) =>
+      app.inject({
+        method: "PUT",
+        url: `/admin/tenants/${tenantId}/channel-connections/whatsapp`,
+        headers: { "x-admin-token": "test-token" },
+        payload: {
+          provider: "meta-whatsapp-cloud",
+          externalAccountId: "phone-number-shared",
+          status: "connected",
+        },
+      });
+
+    expect((await connect(tenantA.id)).statusCode).toBe(200);
+
+    // Tenant B claims the same WhatsApp phone-number id → a clean 409, not a 500,
+    // and the customer's messages can never route to two tenants.
+    const second = await connect(tenantB.id);
+    expect(second.statusCode).toBe(409);
+    expect(second.json<{ error: string }>().error).toContain(
+      "another workspace",
+    );
+    expect(
+      store.channelConnections.filter(
+        (connection) => connection.externalAccountId === "phone-number-shared",
+      ),
+    ).toHaveLength(1);
+
+    // The owning tenant re-saving its own connection stays fine (idempotent).
+    expect((await connect(tenantA.id)).statusCode).toBe(200);
+
     await app.close();
   });
 

@@ -334,6 +334,28 @@ export function readAttempts(value: unknown): number {
   return 0;
 }
 
+/**
+ * Order the outbound delivery lifecycle so a provider status callback only ever
+ * advances a delivery forwards. Pre-send states rank 0, then sent < delivered <
+ * read. Terminal/other states (failed, skipped) rank -1 and are handled
+ * explicitly by the caller.
+ */
+export function deliveryStatusRank(status: string): number {
+  switch (status) {
+    case "queued":
+    case "pending":
+      return 0;
+    case "sent":
+      return 1;
+    case "delivered":
+      return 2;
+    case "read":
+      return 3;
+    default:
+      return -1;
+  }
+}
+
 export function normalizeFullTextQuery(
   options?: PaginationOptions,
 ): string | undefined {

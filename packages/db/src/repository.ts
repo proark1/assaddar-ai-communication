@@ -14,6 +14,7 @@ import {
   and,
   desc,
   eq,
+  gt,
   gte,
   inArray,
   isNotNull,
@@ -23,6 +24,7 @@ import {
   sql,
   type SQL,
 } from "drizzle-orm";
+import { ChannelAccountConflictError, isUniqueViolation } from "./errors";
 import type { Database, DbExecutor, Transaction } from "./client";
 import {
   allowedIntents,
@@ -33,6 +35,7 @@ import {
   blockedTopics,
   brainOnboardingAnswers,
   calls,
+  callTranscripts,
   channelConnections,
   channelWebhookEvents,
   conversationContacts,
@@ -96,6 +99,7 @@ import {
   normalizePhone,
   normalizeRoleName,
   normalizeTemplateName,
+  deliveryStatusRank,
   readAttempts,
   readStringOrNull,
   rejectSecretSettings,
@@ -541,6 +545,11 @@ export type TenantExportData = {
   brainOnboardingAnswers: BrainOnboardingAnswerRecord[];
   knowledgeSuggestions: KnowledgeSuggestionRecord[];
   documentIngestionJobs: DocumentIngestionJobRecord[];
+  calls: (typeof calls.$inferSelect)[];
+  callTranscripts: (typeof callTranscripts.$inferSelect)[];
+  channelWebhookEvents: ChannelWebhookEventRecord[];
+  usageEvents: (typeof usageEvents.$inferSelect)[];
+  auditLogs: (typeof auditLogs.$inferSelect)[];
 };
 
 export type TenantBrainSummary = {
@@ -1560,23 +1569,33 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       updatedAt: sql`now()`,
     };
 
-    const [connection] = await this.db
-      .insert(channelConnections)
-      .values(values)
-      .onConflictDoUpdate({
-        target: [
-          channelConnections.tenantId,
-          channelConnections.channel,
-          channelConnections.provider,
-        ],
-        set: {
-          externalAccountId: values.externalAccountId,
-          status: values.status,
-          settings: values.settings,
-          updatedAt: sql`now()`,
-        },
-      })
-      .returning();
+    let connection: ChannelConnectionRecord | undefined;
+    try {
+      [connection] = await this.db
+        .insert(channelConnections)
+        .values(values)
+        .onConflictDoUpdate({
+          target: [
+            channelConnections.tenantId,
+            channelConnections.channel,
+            channelConnections.provider,
+          ],
+          set: {
+            externalAccountId: values.externalAccountId,
+            status: values.status,
+            settings: values.settings,
+            updatedAt: sql`now()`,
+          },
+        })
+        .returning();
+    } catch (error) {
+      // The account id is already owned by another tenant (global unique index):
+      // surface a clean conflict rather than an opaque 500.
+      if (isUniqueViolation(error, "channel_connections_account_owner_idx")) {
+        throw new ChannelAccountConflictError();
+      }
+      throw error;
+    }
 
     if (!connection) {
       throw new Error("Failed to save channel connection.");
@@ -4276,8 +4295,10 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     conversationId: string;
     channel: Channel;
     direction: "inbound" | "outbound";
-    role: "user" | "assistant" | "system";
+    role: "user" | "assistant" | "system" | "operator";
     content: string;
+    authorUserId?: string | null;
+    providerEventId?: string | null;
     trace?: Record<string, unknown>;
   }): Promise<MessageRecord> {
     assertTenantId(input.tenantId);
@@ -4286,18 +4307,55 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
         repo.addMessage(input),
       );
     }
-    const [message] = await this.db
-      .insert(messages)
-      .values({
-        tenantId: input.tenantId,
-        conversationId: input.conversationId,
-        channel: input.channel,
-        direction: input.direction,
-        role: input.role,
-        content: input.content,
-        trace: input.trace ?? {},
-      })
-      .returning();
+    const providerEventId = input.providerEventId ?? null;
+    const values = {
+      tenantId: input.tenantId,
+      conversationId: input.conversationId,
+      channel: input.channel,
+      direction: input.direction,
+      role: input.role,
+      content: input.content,
+      authorUserId: input.authorUserId ?? null,
+      providerEventId,
+      trace: input.trace ?? {},
+    };
+
+    // When the message carries a provider event id, dedupe against webhook
+    // retries: a second delivery of the same event returns the already-stored
+    // turn instead of appending a duplicate.
+    if (providerEventId) {
+      const [inserted] = await this.db
+        .insert(messages)
+        .values(values)
+        .onConflictDoNothing({
+          target: [
+            messages.tenantId,
+            messages.conversationId,
+            messages.providerEventId,
+          ],
+        })
+        .returning();
+      if (inserted) {
+        return inserted;
+      }
+      const [existing] = await this.db
+        .select()
+        .from(messages)
+        .where(
+          and(
+            eq(messages.tenantId, input.tenantId),
+            eq(messages.conversationId, input.conversationId),
+            eq(messages.providerEventId, providerEventId),
+          ),
+        )
+        .limit(1);
+      if (!existing) {
+        throw new Error("Failed to store message.");
+      }
+      return existing;
+    }
+
+    const [message] = await this.db.insert(messages).values(values).returning();
 
     if (!message) {
       throw new Error("Failed to store message.");
@@ -4340,6 +4398,185 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       .returning();
 
     return delivery;
+  }
+
+  /**
+   * Reserve an outbound delivery for an idempotency key BEFORE the send happens.
+   * Inserts a `pending` intent row; if a delivery for (tenant, key) already
+   * exists the insert is a no-op and this returns `{ claimed: false }` — the
+   * caller must NOT send again, because a prior (possibly retried) processing
+   * already owns this reply. Returns `{ claimed: true, id }` when this caller
+   * won the insert and should proceed to send, then finalize by that id. This is
+   * the outbox claim that closes the webhook-retry double-send window.
+   */
+  async claimOutboundDelivery(input: {
+    tenantId: string;
+    conversationId?: string | null;
+    channel: Channel;
+    provider: string;
+    idempotencyKey: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<{ claimed: boolean; id: string | null }> {
+    assertTenantId(input.tenantId);
+    if (this.needsTenantScope(input.tenantId)) {
+      return this.withTenantScope<{ claimed: boolean; id: string | null }>(
+        input.tenantId,
+        (repo) => repo.claimOutboundDelivery(input),
+      );
+    }
+    const [inserted] = await this.db
+      .insert(messageDeliveries)
+      .values({
+        tenantId: input.tenantId,
+        conversationId: input.conversationId ?? null,
+        channel: input.channel,
+        provider: input.provider,
+        status: "pending",
+        idempotencyKey: input.idempotencyKey,
+        metadata: input.metadata ?? {},
+      })
+      .onConflictDoNothing({
+        target: [messageDeliveries.tenantId, messageDeliveries.idempotencyKey],
+      })
+      .returning({ id: messageDeliveries.id });
+    if (inserted) {
+      return { claimed: true, id: inserted.id };
+    }
+    return { claimed: false, id: null };
+  }
+
+  /**
+   * Record the outcome of a claimed outbound send on its intent row (see
+   * claimOutboundDelivery): sets the terminal status, provider message id, links
+   * the stored outbound message, and replaces the metadata with the final
+   * routing/retry state so the delivery-retry worker can pick it up on failure.
+   */
+  async finalizeOutboundDelivery(input: {
+    tenantId: string;
+    deliveryId: string;
+    messageId?: string | null;
+    status: string;
+    providerMessageId?: string | null;
+    detail?: string | null;
+    metadata?: Record<string, unknown>;
+  }): Promise<void> {
+    assertTenantId(input.tenantId);
+    if (this.needsTenantScope(input.tenantId)) {
+      return this.withTenantScope<void>(input.tenantId, (repo) =>
+        repo.finalizeOutboundDelivery(input),
+      );
+    }
+    await this.db
+      .update(messageDeliveries)
+      .set({
+        messageId: input.messageId ?? null,
+        status: input.status,
+        providerMessageId: input.providerMessageId ?? null,
+        detail: input.detail ?? null,
+        metadata: input.metadata ?? {},
+        updatedAt: sql`now()`,
+      })
+      .where(
+        and(
+          eq(messageDeliveries.tenantId, input.tenantId),
+          eq(messageDeliveries.id, input.deliveryId),
+        ),
+      );
+  }
+
+  /**
+   * Apply a provider delivery/read status callback to a stored delivery, matched
+   * by provider message id within the tenant. Advances the lifecycle forwards
+   * only (sent → delivered → read); a `failed` callback is a terminal async
+   * rejection that is not auto-retried. Idempotent: a replayed, stale, or
+   * out-of-order callback is a safe no-op. Returns whether a delivery matched
+   * and whether its status actually moved.
+   */
+  async applyDeliveryStatusCallback(input: {
+    tenantId: string;
+    providerMessageId: string;
+    status: "sent" | "delivered" | "read" | "failed";
+    timestamp?: string | null;
+    recipientId?: string | null;
+    error?: { code?: number; title?: string; detail?: string } | null;
+  }): Promise<{ matched: boolean; applied: boolean }> {
+    assertTenantId(input.tenantId);
+    if (this.needsTenantScope(input.tenantId)) {
+      return this.withTenantScope<{ matched: boolean; applied: boolean }>(
+        input.tenantId,
+        (repo) => repo.applyDeliveryStatusCallback(input),
+      );
+    }
+    const [delivery] = await this.db
+      .select({
+        id: messageDeliveries.id,
+        status: messageDeliveries.status,
+        detail: messageDeliveries.detail,
+        metadata: messageDeliveries.metadata,
+      })
+      .from(messageDeliveries)
+      .where(
+        and(
+          eq(messageDeliveries.tenantId, input.tenantId),
+          eq(messageDeliveries.providerMessageId, input.providerMessageId),
+        ),
+      )
+      .limit(1);
+    if (!delivery) {
+      return { matched: false, applied: false };
+    }
+
+    // "read" and "failed" are terminal — never move off them.
+    if (delivery.status === "read" || delivery.status === "failed") {
+      return { matched: true, applied: false };
+    }
+    // Success statuses advance forwards only; ignore a stale/duplicate callback.
+    if (
+      input.status !== "failed" &&
+      deliveryStatusRank(input.status) <= deliveryStatusRank(delivery.status)
+    ) {
+      return { matched: true, applied: false };
+    }
+
+    const metadata = {
+      ...((delivery.metadata ?? {}) as Record<string, unknown>),
+    };
+    const statusTimestamps = {
+      ...((metadata.statusTimestamps as Record<string, unknown> | undefined) ??
+        {}),
+    };
+    statusTimestamps[input.status] =
+      input.timestamp ?? new Date().toISOString();
+    metadata.statusTimestamps = statusTimestamps;
+    if (input.recipientId) {
+      metadata.recipientId = input.recipientId;
+    }
+    let detail = delivery.detail ?? null;
+    if (input.status === "failed") {
+      // A post-acceptance provider rejection is not auto-retried.
+      metadata.retryable = false;
+      if (input.error) {
+        metadata.error = input.error;
+        detail = input.error.detail ?? input.error.title ?? detail;
+      }
+    }
+
+    await this.db
+      .update(messageDeliveries)
+      .set({
+        status: input.status,
+        detail,
+        metadata,
+        updatedAt: sql`now()`,
+      })
+      .where(
+        and(
+          eq(messageDeliveries.tenantId, input.tenantId),
+          eq(messageDeliveries.id, delivery.id),
+        ),
+      );
+
+    return { matched: true, applied: true };
   }
 
   /**
@@ -4477,6 +4714,167 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
         ),
       )
       .orderBy(messages.createdAt);
+  }
+
+  /**
+   * Update the human-takeover state of a conversation. Any field left undefined
+   * is preserved. When `stampFirstHumanResponse` is true and no first human turn
+   * has been recorded yet, `first_human_response_at` is set to now() so
+   * first-response time can be measured from the first operator reply.
+   */
+  async setConversationHandling(input: {
+    tenantId: string;
+    conversationId: string;
+    aiPaused?: boolean;
+    assignedUserId?: string | null;
+    stampFirstHumanResponse?: boolean;
+  }): Promise<ConversationRecord | null> {
+    assertTenantId(input.tenantId);
+    if (this.needsTenantScope(input.tenantId)) {
+      return this.withTenantScope<ConversationRecord | null>(
+        input.tenantId,
+        (repo) => repo.setConversationHandling(input),
+      );
+    }
+    const patch: Partial<typeof conversations.$inferInsert> = {
+      updatedAt: new Date(),
+    };
+    if (input.aiPaused !== undefined) {
+      patch.aiPaused = input.aiPaused;
+    }
+    if (input.assignedUserId !== undefined) {
+      patch.assignedUserId = input.assignedUserId;
+    }
+    if (input.stampFirstHumanResponse) {
+      // Only stamp the first human turn once; keep the original timestamp on
+      // later replies so the metric reflects time-to-first-response.
+      patch.firstHumanResponseAt =
+        sql`coalesce(${conversations.firstHumanResponseAt}, now())` as unknown as Date;
+    }
+    const [updated] = await this.db
+      .update(conversations)
+      .set(patch)
+      .where(
+        and(
+          eq(conversations.tenantId, input.tenantId),
+          eq(conversations.id, input.conversationId),
+        ),
+      )
+      .returning();
+    return updated ?? null;
+  }
+
+  /**
+   * Resolve everything an operator reply needs to reach the customer on the
+   * conversation's channel: the conversation itself, the provider account id and
+   * recipient recovered from the most recent inbound message, and when that
+   * inbound arrived (for the Meta 24-hour customer-service window check).
+   */
+  async getConversationReplyContext(input: {
+    tenantId: string;
+    conversationId: string;
+  }): Promise<{
+    conversation: ConversationRecord;
+    lastInboundAt: Date | null;
+    providerAccountId: string | null;
+    externalUserId: string | null;
+    externalConversationId: string | null;
+  } | null> {
+    assertTenantId(input.tenantId);
+    if (this.needsTenantScope(input.tenantId)) {
+      return this.withTenantScope(input.tenantId, (repo) =>
+        repo.getConversationReplyContext(input),
+      );
+    }
+    const [conversation] = await this.db
+      .select()
+      .from(conversations)
+      .where(
+        and(
+          eq(conversations.tenantId, input.tenantId),
+          eq(conversations.id, input.conversationId),
+        ),
+      )
+      .limit(1);
+    if (!conversation) {
+      return null;
+    }
+    const [lastInbound] = await this.db
+      .select()
+      .from(messages)
+      .where(
+        and(
+          eq(messages.tenantId, input.tenantId),
+          eq(messages.conversationId, input.conversationId),
+          eq(messages.direction, "inbound"),
+        ),
+      )
+      .orderBy(desc(messages.createdAt))
+      .limit(1);
+    const trace = (lastInbound?.trace ?? {}) as Record<string, unknown>;
+    return {
+      conversation,
+      lastInboundAt: lastInbound?.createdAt ?? null,
+      providerAccountId: readStringOrNull(trace.providerAccountId),
+      externalUserId:
+        conversation.externalUserId ?? readStringOrNull(trace.externalUserId),
+      externalConversationId: readStringOrNull(trace.externalConversationId),
+    };
+  }
+
+  /**
+   * The operator ("human takeover") turns a website widget must render for a
+   * visitor. Scoped by the opaque conversation public id the widget already
+   * holds, and to a single tenant, so one visitor can only ever pull their own
+   * conversation. Only outbound operator messages are returned — never inbound
+   * or AI turns (the widget already has those) — and never message traces.
+   */
+  async listOperatorRepliesForWidget(input: {
+    tenantId: string;
+    conversationPublicId: string;
+    since?: Date;
+    limit: number;
+  }): Promise<Array<{ id: string; text: string; createdAt: Date }>> {
+    assertTenantId(input.tenantId);
+    if (this.needsTenantScope(input.tenantId)) {
+      return this.withTenantScope(input.tenantId, (repo) =>
+        repo.listOperatorRepliesForWidget(input),
+      );
+    }
+    const [conversation] = await this.db
+      .select({ id: conversations.id })
+      .from(conversations)
+      .where(
+        and(
+          eq(conversations.tenantId, input.tenantId),
+          eq(conversations.publicId, input.conversationPublicId),
+          eq(conversations.channel, "website"),
+        ),
+      )
+      .limit(1);
+    if (!conversation) {
+      return [];
+    }
+    const conditions = [
+      eq(messages.tenantId, input.tenantId),
+      eq(messages.conversationId, conversation.id),
+      eq(messages.role, "operator"),
+      eq(messages.direction, "outbound"),
+    ];
+    if (input.since) {
+      conditions.push(gt(messages.createdAt, input.since));
+    }
+    const rows = await this.db
+      .select({
+        id: messages.id,
+        text: messages.content,
+        createdAt: messages.createdAt,
+      })
+      .from(messages)
+      .where(and(...conditions))
+      .orderBy(messages.createdAt)
+      .limit(Math.max(1, Math.min(input.limit, 100)));
+    return rows;
   }
 
   async listConversations(
@@ -5494,7 +5892,12 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       0,
     );
     const deliveriesSent =
-      (deliveryByStatus.sent ?? 0) + (deliveryByStatus.queued ?? 0);
+      (deliveryByStatus.sent ?? 0) +
+      (deliveryByStatus.queued ?? 0) +
+      // A provider status callback advances a sent delivery to delivered/read;
+      // both are successful outcomes, not failures.
+      (deliveryByStatus.delivered ?? 0) +
+      (deliveryByStatus.read ?? 0);
     const deliveriesFailed = deliveryByStatus.failed ?? 0;
     const deliveriesSkipped = deliveryByStatus.skipped ?? 0;
 
@@ -5628,7 +6031,12 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     );
     const deliveriesFailed = deliveryByStatus.failed ?? 0;
     const deliveriesSent =
-      (deliveryByStatus.sent ?? 0) + (deliveryByStatus.queued ?? 0);
+      (deliveryByStatus.sent ?? 0) +
+      (deliveryByStatus.queued ?? 0) +
+      // A provider status callback advances a sent delivery to delivered/read;
+      // both are successful outcomes, not failures.
+      (deliveryByStatus.delivered ?? 0) +
+      (deliveryByStatus.read ?? 0);
     const attempted = deliveriesSent + deliveriesFailed;
 
     return {
@@ -5828,6 +6236,11 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       onboardingAnswers,
       suggestions,
       ingestionJobs,
+      tenantCalls,
+      tenantCallTranscripts,
+      webhookEvents,
+      usage,
+      audit,
     ] = await Promise.all([
       this.getTenant(tenantId),
       this.listKnowledge(tenantId),
@@ -5858,6 +6271,23 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
         .select()
         .from(documentIngestionJobs)
         .where(eq(documentIngestionJobs.tenantId, tenantId)),
+      // Voice call metadata + transcripts, the raw inbound webhook ledger, usage
+      // events, and the tenant's audit trail (which also captures consent
+      // events) were all previously omitted — a data-subject-access gap.
+      this.db.select().from(calls).where(eq(calls.tenantId, tenantId)),
+      this.db
+        .select()
+        .from(callTranscripts)
+        .where(eq(callTranscripts.tenantId, tenantId)),
+      this.db
+        .select()
+        .from(channelWebhookEvents)
+        .where(eq(channelWebhookEvents.tenantId, tenantId)),
+      this.db
+        .select()
+        .from(usageEvents)
+        .where(eq(usageEvents.tenantId, tenantId)),
+      this.db.select().from(auditLogs).where(eq(auditLogs.tenantId, tenantId)),
     ]);
 
     return {
@@ -5872,6 +6302,11 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       brainOnboardingAnswers: onboardingAnswers,
       knowledgeSuggestions: suggestions,
       documentIngestionJobs: ingestionJobs,
+      calls: tenantCalls,
+      callTranscripts: tenantCallTranscripts,
+      channelWebhookEvents: webhookEvents,
+      usageEvents: usage,
+      auditLogs: audit,
     };
   }
 
@@ -5902,6 +6337,9 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     deletedContact: boolean;
     deletedConversations: number;
     deletedCalls: number;
+    deletedDeliveries: number;
+    deletedHandoffs: number;
+    deletedSuggestions: number;
   }> {
     assertTenantId(tenantId);
     if (this.needsTenantScope(tenantId)) {
@@ -5933,6 +6371,9 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
 
       let deletedConversations = 0;
       let deletedCalls = 0;
+      let deletedDeliveries = 0;
+      let deletedHandoffs = 0;
+      let deletedSuggestions = 0;
       const eraseConversations = options.deleteConversations ?? true;
       if (deletedContact && eraseConversations && conversationIds.length > 0) {
         const removedCalls = await repo.db
@@ -5945,6 +6386,47 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
           )
           .returning({ id: calls.id });
         deletedCalls = removedCalls.length;
+
+        // Rows that only SET NULL their conversation ref (deliveries, handoffs)
+        // — or reference it without a FK at all (suggestions) — would otherwise
+        // survive erasure carrying the data subject's recipient id, message, or
+        // question. Delete them before the conversations, while the ref matches.
+        const removedDeliveries = await repo.db
+          .delete(messageDeliveries)
+          .where(
+            and(
+              eq(messageDeliveries.tenantId, tenantId),
+              inArray(messageDeliveries.conversationId, conversationIds),
+            ),
+          )
+          .returning({ id: messageDeliveries.id });
+        deletedDeliveries = removedDeliveries.length;
+
+        const removedHandoffs = await repo.db
+          .delete(handoffRequests)
+          .where(
+            and(
+              eq(handoffRequests.tenantId, tenantId),
+              inArray(handoffRequests.conversationId, conversationIds),
+            ),
+          )
+          .returning({ id: handoffRequests.id });
+        deletedHandoffs = removedHandoffs.length;
+
+        const removedSuggestions = await repo.db
+          .delete(knowledgeSuggestions)
+          .where(
+            and(
+              eq(knowledgeSuggestions.tenantId, tenantId),
+              inArray(
+                knowledgeSuggestions.sourceConversationId,
+                conversationIds,
+              ),
+            ),
+          )
+          .returning({ id: knowledgeSuggestions.id });
+        deletedSuggestions = removedSuggestions.length;
+
         const removedConversations = await repo.db
           .delete(conversations)
           .where(
@@ -5961,10 +6443,20 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
         await repo.audit(tenantId, "contact.erased", "contact", contactId, {
           deletedConversations,
           deletedCalls,
+          deletedDeliveries,
+          deletedHandoffs,
+          deletedSuggestions,
           erasedConversations: eraseConversations,
         });
       }
-      return { deletedContact, deletedConversations, deletedCalls };
+      return {
+        deletedContact,
+        deletedConversations,
+        deletedCalls,
+        deletedDeliveries,
+        deletedHandoffs,
+        deletedSuggestions,
+      };
     });
   }
 
@@ -5998,6 +6490,7 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     cutoff: Date | null;
     deletedConversations: number;
     deletedCalls: number;
+    deletedWebhookEvents: number;
   }> {
     assertTenantId(tenantId);
     if (this.needsTenantScope(tenantId)) {
@@ -6014,7 +6507,12 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     const cutoff = retentionCutoff(retentionDays, options.now ?? new Date());
     // No valid retention window configured: do not delete anything.
     if (!cutoff) {
-      return { cutoff: null, deletedConversations: 0, deletedCalls: 0 };
+      return {
+        cutoff: null,
+        deletedConversations: 0,
+        deletedCalls: 0,
+        deletedWebhookEvents: 0,
+      };
     }
 
     const removed = await this.db
@@ -6036,7 +6534,25 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       .where(and(eq(calls.tenantId, tenantId), lt(calls.startedAt, cutoff)))
       .returning({ id: calls.id });
 
-    if (removed.length > 0 || removedCalls.length > 0) {
+    // channel_webhook_events store the RAW inbound provider payload (personal
+    // data) and are otherwise never pruned. They are only used to dedupe
+    // near-term provider retries, so anything older than the retention window is
+    // safe to delete — closing a standing GDPR gap.
+    const removedWebhookEvents = await this.db
+      .delete(channelWebhookEvents)
+      .where(
+        and(
+          eq(channelWebhookEvents.tenantId, tenantId),
+          lt(channelWebhookEvents.createdAt, cutoff),
+        ),
+      )
+      .returning({ id: channelWebhookEvents.id });
+
+    if (
+      removed.length > 0 ||
+      removedCalls.length > 0 ||
+      removedWebhookEvents.length > 0
+    ) {
       await this.audit(
         tenantId,
         "retention.conversations.pruned",
@@ -6047,6 +6563,7 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
           cutoff: cutoff.toISOString(),
           deletedConversations: removed.length,
           deletedCalls: removedCalls.length,
+          deletedWebhookEvents: removedWebhookEvents.length,
         },
       );
     }
@@ -6055,6 +6572,7 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       cutoff,
       deletedConversations: removed.length,
       deletedCalls: removedCalls.length,
+      deletedWebhookEvents: removedWebhookEvents.length,
     };
   }
 

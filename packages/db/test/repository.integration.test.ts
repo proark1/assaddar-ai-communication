@@ -1,6 +1,8 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { eq, inArray } from "drizzle-orm";
 import {
+  ChannelAccountConflictError,
+  channelWebhookEvents,
   conversations,
   createDbClient,
   TenantRepository,
@@ -213,6 +215,22 @@ describe.skipIf(!runIntegrationTests)("TenantRepository integration", () => {
       externalUserId: "recent-visitor",
     });
 
+    // Raw webhook events carry personal data too and must be pruned by age.
+    const oldEvent = await repo.recordChannelWebhookEvent({
+      tenantId: tenant.id,
+      channel: "whatsapp",
+      providerEventId: `evt-old-${crypto.randomUUID()}`,
+      eventType: "message.inbound",
+      payload: { raw: "old" },
+    });
+    const recentEvent = await repo.recordChannelWebhookEvent({
+      tenantId: tenant.id,
+      channel: "whatsapp",
+      providerEventId: `evt-recent-${crypto.randomUUID()}`,
+      eventType: "message.inbound",
+      payload: { raw: "recent" },
+    });
+
     await client.db
       .update(conversations)
       .set({
@@ -220,6 +238,10 @@ describe.skipIf(!runIntegrationTests)("TenantRepository integration", () => {
         updatedAt: new Date("2026-05-01T00:00:00.000Z"),
       })
       .where(eq(conversations.id, oldConversation.id));
+    await client.db
+      .update(channelWebhookEvents)
+      .set({ createdAt: new Date("2026-05-01T00:00:00.000Z") })
+      .where(eq(channelWebhookEvents.id, oldEvent.event.id));
 
     const result = await repo.deleteTenantDataOlderThanRetention(tenant.id, {
       now: new Date("2026-07-06T00:00:00.000Z"),
@@ -227,7 +249,112 @@ describe.skipIf(!runIntegrationTests)("TenantRepository integration", () => {
     });
 
     expect(result.deletedConversations).toBe(1);
+    expect(result.deletedWebhookEvents).toBe(1);
     const remaining = await repo.listConversations(tenant.id);
     expect(remaining.map((item) => item.id)).toEqual([recentConversation.id]);
+    const remainingEvents = await client.db
+      .select({ id: channelWebhookEvents.id })
+      .from(channelWebhookEvents)
+      .where(eq(channelWebhookEvents.tenantId, tenant.id));
+    expect(remainingEvents.map((item) => item.id)).toEqual([
+      recentEvent.event.id,
+    ]);
+  });
+
+  it("prevents two tenants from claiming the same provider account", async () => {
+    const tenantA = await createTestTenant("channel-owner-a");
+    const tenantB = await createTestTenant("channel-owner-b");
+
+    await repo.upsertChannelConnection(tenantA.id, {
+      channel: "whatsapp",
+      provider: "meta-whatsapp-cloud",
+      externalAccountId: "phone-shared",
+      status: "connected",
+    });
+
+    await expect(
+      repo.upsertChannelConnection(tenantB.id, {
+        channel: "whatsapp",
+        provider: "meta-whatsapp-cloud",
+        externalAccountId: "phone-shared",
+        status: "connected",
+      }),
+    ).rejects.toBeInstanceOf(ChannelAccountConflictError);
+
+    // The owning tenant can still re-save its own connection.
+    await expect(
+      repo.upsertChannelConnection(tenantA.id, {
+        channel: "whatsapp",
+        provider: "meta-whatsapp-cloud",
+        externalAccountId: "phone-shared",
+        status: "connected",
+      }),
+    ).resolves.toMatchObject({ externalAccountId: "phone-shared" });
+  });
+
+  it("exports and erases contact-linked deliveries, handoffs, and suggestions", async () => {
+    const tenant = await createTestTenant("erasure-completeness");
+    const conversation = await repo.findOrCreateConversation({
+      tenantId: tenant.id,
+      publicConversationId: `conv-${crypto.randomUUID()}`,
+      channel: "whatsapp",
+      externalUserId: "4915100000000",
+      contact: { phone: "4915100000000" },
+    });
+    const message = await repo.addMessage({
+      tenantId: tenant.id,
+      conversationId: conversation.id,
+      channel: "whatsapp",
+      direction: "inbound",
+      role: "user",
+      content: "Please erase me",
+    });
+    await repo.recordMessageDelivery({
+      tenantId: tenant.id,
+      conversationId: conversation.id,
+      messageId: message.id,
+      channel: "whatsapp",
+      provider: "meta-whatsapp-cloud",
+      status: "sent",
+      metadata: { externalUserId: "4915100000000" },
+    });
+    await repo.createHandoff({
+      tenantId: tenant.id,
+      conversationId: conversation.id,
+      channel: "whatsapp",
+      reason: "customer_request",
+      message: "Please erase me",
+    });
+    await repo.createKnowledgeSuggestion(tenant.id, {
+      sourceType: "unanswered_question",
+      sourceConversationId: conversation.id,
+      suggestedQuestion: "Please erase me",
+    });
+
+    const exported = await repo.exportTenantData(tenant.id);
+    expect(exported.messageDeliveries).toHaveLength(1);
+    expect(exported.handoffRequests).toHaveLength(1);
+    expect(exported.knowledgeSuggestions).toHaveLength(1);
+    // Previously-omitted tables are now part of the data-subject export.
+    expect(Array.isArray(exported.calls)).toBe(true);
+    expect(Array.isArray(exported.callTranscripts)).toBe(true);
+    expect(Array.isArray(exported.channelWebhookEvents)).toBe(true);
+    expect(Array.isArray(exported.usageEvents)).toBe(true);
+    expect(Array.isArray(exported.auditLogs)).toBe(true);
+
+    const contactId = exported.contacts[0]!.id;
+    const result = await repo.deleteContact(tenant.id, contactId);
+    expect(result).toMatchObject({
+      deletedContact: true,
+      deletedConversations: 1,
+      deletedDeliveries: 1,
+      deletedHandoffs: 1,
+      deletedSuggestions: 1,
+    });
+
+    const after = await repo.exportTenantData(tenant.id);
+    expect(after.messageDeliveries).toHaveLength(0);
+    expect(after.handoffRequests).toHaveLength(0);
+    expect(after.knowledgeSuggestions).toHaveLength(0);
   });
 });

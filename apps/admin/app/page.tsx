@@ -287,6 +287,10 @@ export default function DashboardPage() {
   const [conversationMessages, setConversationMessages] = useState<
     ConversationMessage[]
   >([]);
+  const [replyDraft, setReplyDraft] = useState("");
+  const [replySending, setReplySending] = useState(false);
+  const [handlingBusy, setHandlingBusy] = useState(false);
+  const [replyNotice, setReplyNotice] = useState<string | null>(null);
   const [handoffs, setHandoffs] = useState<Handoff[]>([]);
   const [channelConnections, setChannelConnections] = useState<
     ChannelConnection[]
@@ -2216,6 +2220,74 @@ export default function DashboardPage() {
       } else {
         setStatus(readableError(error));
       }
+    }
+  }
+
+  // Send a human-takeover reply on the conversation's own channel. Sending pauses
+  // the AI and assigns the conversation to the acting operator (handled server
+  // side). Delivery status is surfaced so the operator knows whether the customer
+  // actually received it (e.g. WhatsApp's 24-hour window can block a send).
+  async function handleSendReply() {
+    const tenantId = selectedTenant?.id;
+    const conversationId = selectedConversationId;
+    const text = replyDraft.trim();
+    if (!tenantId || !conversationId || !text || replySending) {
+      return;
+    }
+    setReplySending(true);
+    setReplyNotice(null);
+    try {
+      const result = await apiFetch<{
+        delivery: { status: string; detail: string | null };
+      }>(
+        `/admin/tenants/${tenantId}/conversations/${conversationId}/messages`,
+        {
+          method: "POST",
+          body: JSON.stringify({ text }),
+        },
+      );
+      setReplyDraft("");
+      const status = result.delivery.status;
+      if (status === "sent" || status === "queued") {
+        setReplyNotice(null);
+      } else {
+        setReplyNotice(
+          result.delivery.detail ??
+            `The customer may not have received this (${status}).`,
+        );
+      }
+      await refreshConversationMessages(tenantId, conversationId);
+      await refreshConversations(tenantId);
+    } catch (error) {
+      setReplyNotice(readableError(error));
+    } finally {
+      setReplySending(false);
+    }
+  }
+
+  // Take over a conversation from the AI (aiPaused=true) or hand it back.
+  async function handleToggleHandling(aiPaused: boolean) {
+    const tenantId = selectedTenant?.id;
+    const conversationId = selectedConversationId;
+    if (!tenantId || !conversationId || handlingBusy) {
+      return;
+    }
+    setHandlingBusy(true);
+    setReplyNotice(null);
+    try {
+      await apiFetch(
+        `/admin/tenants/${tenantId}/conversations/${conversationId}/handling`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ aiPaused }),
+        },
+      );
+      await refreshConversations(tenantId);
+      await refreshUnifiedInbox(tenantId);
+    } catch (error) {
+      setReplyNotice(readableError(error));
+    } finally {
+      setHandlingBusy(false);
     }
   }
 
@@ -5867,6 +5939,24 @@ export default function DashboardPage() {
         )
       : null;
 
+    const conversationChannel =
+      selectedConversation?.channel ?? selectedInboxItem?.channel ?? null;
+    const replyChannelSupported =
+      conversationChannel === "website" ||
+      conversationChannel === "whatsapp" ||
+      conversationChannel === "messenger" ||
+      conversationChannel === "instagram";
+    const aiPaused = Boolean(
+      selectedConversation?.aiPaused ?? selectedInboxItem?.aiPaused,
+    );
+    const assignedUserId =
+      selectedConversation?.assignedUserId ??
+      selectedInboxItem?.assignedUserId ??
+      null;
+    const assignedToMe =
+      Boolean(assignedUserId) && assignedUserId === adminSession?.user.id;
+    const canReply = canManageLeads();
+
     return (
       <section className="panel inboxPanel">
         <div className="panelHeader">
@@ -6105,7 +6195,9 @@ export default function DashboardPage() {
                   {conversationMessages.length ? (
                     conversationMessages.map((message) => (
                       <p data-role={message.role} key={message.id}>
-                        <span>{message.role}</span>
+                        <span>
+                          {message.role === "operator" ? "Team" : message.role}
+                        </span>
                         {message.content}
                       </p>
                     ))
@@ -6114,6 +6206,83 @@ export default function DashboardPage() {
                       No messages loaded.
                     </div>
                   )}
+                </div>
+                <div className="replyDock">
+                  <div
+                    className="handlingBanner"
+                    data-paused={aiPaused ? "true" : "false"}
+                  >
+                    <span>
+                      {aiPaused
+                        ? assignedToMe
+                          ? "You're handling this conversation"
+                          : assignedUserId
+                            ? "A teammate is handling this conversation"
+                            : "Handled by a person — the AI is paused"
+                        : "The AI is answering this conversation"}
+                    </span>
+                    {canReply ? (
+                      <button
+                        type="button"
+                        className="secondaryButton"
+                        disabled={handlingBusy}
+                        onClick={() => void handleToggleHandling(!aiPaused)}
+                      >
+                        {aiPaused ? "Give back to AI" : "Take over"}
+                      </button>
+                    ) : null}
+                  </div>
+                  {canReply ? (
+                    replyChannelSupported ? (
+                      <form
+                        className="replyComposer"
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          void handleSendReply();
+                        }}
+                      >
+                        <textarea
+                          value={replyDraft}
+                          onChange={(event) =>
+                            setReplyDraft(event.target.value)
+                          }
+                          placeholder={
+                            aiPaused
+                              ? "Write a reply to the customer…"
+                              : "Write a reply — this takes over from the AI…"
+                          }
+                          rows={2}
+                          maxLength={4000}
+                          disabled={replySending}
+                          aria-label="Reply to customer"
+                        />
+                        <div className="replyComposerActions">
+                          {replyNotice ? (
+                            <span className="replyNotice" role="status">
+                              {replyNotice}
+                            </span>
+                          ) : (
+                            <span className="replyChannelHint">
+                              Sends on{" "}
+                              {titleCase(conversationChannel ?? "this channel")}
+                            </span>
+                          )}
+                          <button
+                            type="submit"
+                            className="primaryButton"
+                            disabled={replySending || !replyDraft.trim()}
+                          >
+                            {replySending ? "Sending…" : "Send reply"}
+                          </button>
+                        </div>
+                      </form>
+                    ) : (
+                      <div className="emptyState compact">
+                        Human replies aren’t available on{" "}
+                        {titleCase(conversationChannel ?? "this channel")} yet.
+                      </div>
+                    )
+                  ) : null}
                 </div>
               </>
             ) : (
