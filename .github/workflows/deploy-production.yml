@@ -58,6 +58,37 @@ jobs:
           bash <(curl -fsSL https://railway.com/install.sh) -y
           "$HOME/.railway/bin/railway" --version
 
+      # pnpm must be on PATH before setup-node so its built-in pnpm cache works.
+      - name: Enable pnpm
+        run: corepack enable
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run database migrations
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Apply pending migrations to the production database BEFORE the new
+          # code serves traffic. Migrations are additive, so the currently
+          # running old code is unaffected until the deploy below swaps it in.
+          # `railway run` injects the API service's environment (DATABASE_URL)
+          # into the command, and the runner takes an advisory lock so overlapping
+          # runs are safe. If this step fails the job stops and the new code is
+          # never deployed — the site keeps running the previous version.
+          "$HOME/.railway/bin/railway" run \
+            --project "$RAILWAY_PROJECT_ID" \
+            --environment "$RAILWAY_ENVIRONMENT" \
+            --service assaddar-api \
+            pnpm db:migrate
+
       - name: Sync Gemini variables to Railway
         shell: bash
         run: |
