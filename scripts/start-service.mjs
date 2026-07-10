@@ -10,6 +10,15 @@ const aliases = new Map([
   ["worker", ["pnpm", ["--filter", "@assaddar/workers", "start"]]],
 ]);
 
+// Services that apply pending database migrations before they start. This runs
+// inside Railway, where the internal DATABASE_URL (postgres.railway.internal)
+// resolves — a migration launched from an external CI runner cannot reach that
+// host. The migration runner takes an advisory lock so multiple instances
+// serialize safely, and only the API owns this so exactly one service migrates
+// per deploy; a failed migration refuses to start rather than serve a stale
+// schema.
+const MIGRATE_BEFORE_START = new Set(["api"]);
+
 const rawService =
   process.env.SERVICE ??
   process.env.RAILWAY_SERVICE_NAME ??
@@ -24,25 +33,61 @@ if (!command) {
   process.exit(1);
 }
 
-const [bin, args] = command;
-const child = spawn(bin, args, {
-  stdio: "inherit",
-  env: process.env,
-});
+if (service && MIGRATE_BEFORE_START.has(service)) {
+  await runMigrations();
+}
 
-for (const signal of ["SIGTERM", "SIGINT"]) {
-  process.on(signal, () => {
-    child.kill(signal);
+startService(command);
+
+function runMigrations() {
+  return new Promise((resolve) => {
+    console.log("Applying database migrations before starting the service...");
+    const migrate = spawn("pnpm", ["--filter", "@assaddar/db", "migrate"], {
+      stdio: "inherit",
+      env: process.env,
+    });
+
+    migrate.on("error", (error) => {
+      console.error("Failed to launch database migrations:", error);
+      process.exit(1);
+    });
+
+    migrate.on("exit", (code, signal) => {
+      if (signal) {
+        process.kill(process.pid, signal);
+        return;
+      }
+      if (code && code !== 0) {
+        console.error(
+          `Database migrations failed (exit ${code}); refusing to start.`,
+        );
+        process.exit(code);
+      }
+      resolve();
+    });
   });
 }
 
-child.on("exit", (code, signal) => {
-  if (signal) {
-    process.kill(process.pid, signal);
-    return;
+function startService([bin, args]) {
+  const child = spawn(bin, args, {
+    stdio: "inherit",
+    env: process.env,
+  });
+
+  for (const signal of ["SIGTERM", "SIGINT"]) {
+    process.on(signal, () => {
+      child.kill(signal);
+    });
   }
-  process.exit(code ?? 0);
-});
+
+  child.on("exit", (code, signal) => {
+    if (signal) {
+      process.kill(process.pid, signal);
+      return;
+    }
+    process.exit(code ?? 0);
+  });
+}
 
 function normalizeServiceName(value) {
   if (!value) {
