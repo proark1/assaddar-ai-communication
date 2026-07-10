@@ -1,0 +1,29 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "api",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@assaddar/api", "dev"],
+      "port": 4000
+    },
+    {
+      "name": "admin",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@assaddar/admin", "dev"],
+      "port": 3000
+    },
+    {
+      "name": "voice",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@assaddar/voice", "dev"],
+      "port": 4100
+    },
+    {
+      "name": "widget",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@assaddar/widget", "dev"],
+      "port": 5174
+    }
+  ]
+}
