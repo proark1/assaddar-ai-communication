@@ -120,3 +120,72 @@ jobs:
 
       - name: Smoke test API
         run: pnpm smoke:api
+
+  rls-enforcement:
+    name: RLS enforcement (non-owner role)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: assaddar
+          POSTGRES_PASSWORD: assaddar
+          POSTGRES_DB: assaddar_ai_communication
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U assaddar"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgres://assaddar:assaddar@localhost:5432/assaddar_ai_communication
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # pnpm must be on PATH before setup-node so its built-in pnpm cache works.
+      - name: Enable pnpm
+        run: corepack enable
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run migrations
+        run: pnpm db:migrate
+
+      # The CI database connects as the owner/superuser, which BYPASSES RLS, so
+      # the tenant-isolation policies are otherwise never exercised. This test
+      # reaches the enforced path via a dedicated non-owner role (SET LOCAL ROLE)
+      # and proves cross-tenant reads and writes are actually blocked.
+      - name: Prove tenant RLS isolation
+        run: pnpm --filter @assaddar/db test:rls
+
+      # Verify the real production hardening scripts too: provision the
+      # least-privilege app role and force RLS so the owner obeys it as well.
+      - name: Provision non-owner app role and force RLS
+        env:
+          APP_DB_PASSWORD: rls-ci-secret
+        run: |
+          psql "$DATABASE_URL" -v app_password="$APP_DB_PASSWORD" -f scripts/create-app-role.sql
+          psql "$DATABASE_URL" -f scripts/enable-force-rls.sql
+
+      # With RLS forced and the app role in place, db:check must report the
+      # backstop ENFORCED; REQUIRE_DB_RLS=true turns an inert backstop into a
+      # hard failure, so a regression that silently disables RLS breaks the build.
+      - name: Verify RLS is enforced for the app role
+        env:
+          APP_DATABASE_URL: postgres://assaddar_app:rls-ci-secret@localhost:5432/assaddar_ai_communication
+          REQUIRE_DB_RLS: "true"
+        run: pnpm db:check
