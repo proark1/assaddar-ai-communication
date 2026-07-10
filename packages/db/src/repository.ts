@@ -109,6 +109,7 @@ import {
   setTenantSession,
   telephoneNumberValues,
   titleCase,
+  toAggregateDate,
 } from "./repository-helpers";
 import type { ChannelCredentialCipher } from "./secrets";
 
@@ -5748,14 +5749,14 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       this.db
         .select({
           total: sql<number>`count(*)::int`,
-          lastAt: sql<Date | null>`max(${conversations.createdAt})`,
+          lastAt: sql<string | null>`max(${conversations.createdAt})`,
         })
         .from(conversations)
         .where(eq(conversations.tenantId, tenantId)),
       this.db
         .select({
           total: sql<number>`count(*)::int`,
-          lastAt: sql<Date | null>`max(${messages.createdAt})`,
+          lastAt: sql<string | null>`max(${messages.createdAt})`,
         })
         .from(messages)
         .where(eq(messages.tenantId, tenantId)),
@@ -5845,7 +5846,7 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
           avgDurationSeconds: sql<
             number | null
           >`avg(extract(epoch from (${calls.endedAt} - ${calls.startedAt})))::float`,
-          lastCallAt: sql<Date | null>`max(${calls.startedAt})`,
+          lastCallAt: sql<string | null>`max(${calls.startedAt})`,
         })
         .from(calls)
         .where(eq(calls.tenantId, tenantId)),
@@ -5936,8 +5937,8 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       totalHandoffs: totalHandoffStats?.total ?? 0,
       leads: leadStats?.total ?? 0,
       contacts: contactStats?.total ?? 0,
-      lastConversationAt: conversationStats?.lastAt ?? null,
-      lastMessageAt: messageStats?.lastAt ?? null,
+      lastConversationAt: toAggregateDate(conversationStats?.lastAt),
+      lastMessageAt: toAggregateDate(messageStats?.lastAt),
       usageByStatus,
       deliveries: {
         total: deliveriesTotal,
@@ -5967,7 +5968,7 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
           voiceStats?.avgDurationSeconds != null
             ? Math.round(voiceStats.avgDurationSeconds)
             : null,
-        lastCallAt: voiceStats?.lastCallAt ?? null,
+        lastCallAt: toAggregateDate(voiceStats?.lastCallAt),
       },
       window: {
         days: windowDays,

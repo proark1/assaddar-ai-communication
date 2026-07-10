@@ -1,5 +1,6 @@
 import { and, desc, eq, sql } from "drizzle-orm";
 import type { DbExecutor } from "./client";
+import { toAggregateDate } from "./repository-helpers";
 import { onebrainSyncRecords } from "./schema";
 
 export type OneBrainSyncRecord = typeof onebrainSyncRecords.$inferSelect;
@@ -56,8 +57,10 @@ export async function getOneBrainSyncSummaryRow(
       failed: sql<number>`count(*) filter (where ${onebrainSyncRecords.status} = 'failed')::int`,
       pending: sql<number>`count(*) filter (where ${onebrainSyncRecords.status} = 'pending')::int`,
       other: sql<number>`count(*) filter (where ${onebrainSyncRecords.status} not in ('synced', 'failed', 'pending'))::int`,
-      lastSyncedAt: sql<Date | null>`max(${onebrainSyncRecords.syncedAt})`,
-      lastFailedAt: sql<Date | null>`max(${onebrainSyncRecords.updatedAt}) filter (where ${onebrainSyncRecords.status} = 'failed')`,
+      lastSyncedAt: sql<string | null>`max(${onebrainSyncRecords.syncedAt})`,
+      lastFailedAt: sql<
+        string | null
+      >`max(${onebrainSyncRecords.updatedAt}) filter (where ${onebrainSyncRecords.status} = 'failed')`,
     })
     .from(onebrainSyncRecords)
     .where(eq(onebrainSyncRecords.tenantId, tenantId));
@@ -97,8 +100,8 @@ export async function getOneBrainSyncSummaryRow(
       pending: stats?.pending ?? 0,
       other: stats?.other ?? 0,
     },
-    lastSyncedAt: stats?.lastSyncedAt ?? null,
-    lastFailedAt: stats?.lastFailedAt ?? null,
+    lastSyncedAt: toAggregateDate(stats?.lastSyncedAt),
+    lastFailedAt: toAggregateDate(stats?.lastFailedAt),
     recentFailures,
     recentSynced,
   };
