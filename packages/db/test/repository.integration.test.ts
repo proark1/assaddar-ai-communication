@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { eq, inArray } from "drizzle-orm";
 import {
+  ChannelAccountConflictError,
   channelWebhookEvents,
   conversations,
   createDbClient,
@@ -258,5 +259,36 @@ describe.skipIf(!runIntegrationTests)("TenantRepository integration", () => {
     expect(remainingEvents.map((item) => item.id)).toEqual([
       recentEvent.event.id,
     ]);
+  });
+
+  it("prevents two tenants from claiming the same provider account", async () => {
+    const tenantA = await createTestTenant("channel-owner-a");
+    const tenantB = await createTestTenant("channel-owner-b");
+
+    await repo.upsertChannelConnection(tenantA.id, {
+      channel: "whatsapp",
+      provider: "meta-whatsapp-cloud",
+      externalAccountId: "phone-shared",
+      status: "connected",
+    });
+
+    await expect(
+      repo.upsertChannelConnection(tenantB.id, {
+        channel: "whatsapp",
+        provider: "meta-whatsapp-cloud",
+        externalAccountId: "phone-shared",
+        status: "connected",
+      }),
+    ).rejects.toBeInstanceOf(ChannelAccountConflictError);
+
+    // The owning tenant can still re-save its own connection.
+    await expect(
+      repo.upsertChannelConnection(tenantA.id, {
+        channel: "whatsapp",
+        provider: "meta-whatsapp-cloud",
+        externalAccountId: "phone-shared",
+        status: "connected",
+      }),
+    ).resolves.toMatchObject({ externalAccountId: "phone-shared" });
   });
 });

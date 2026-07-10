@@ -478,6 +478,12 @@ export const channelConnections = pgTable(
       table.channel,
       table.provider,
     ),
+    // A provider account id belongs to exactly one tenant so inbound routing is
+    // unambiguous. Partial so multiple not-yet-configured connections (null
+    // account) coexist. See migration 0022.
+    uniqueIndex("channel_connections_account_owner_idx")
+      .on(table.channel, table.externalAccountId)
+      .where(sql`${table.externalAccountId} is not null`),
   ],
 );
 

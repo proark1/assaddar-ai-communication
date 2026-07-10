@@ -22,7 +22,10 @@ import {
   type InboundMessage,
   type OneBrainRuntimeAnswerEnv,
 } from "@assaddar/core";
-import type { OneBrainSyncSummary } from "@assaddar/db";
+import {
+  ChannelAccountConflictError,
+  type OneBrainSyncSummary,
+} from "@assaddar/db";
 import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
 import Fastify, {
@@ -4974,6 +4977,10 @@ export async function buildServer(
         error: "Validation failed.",
         issues: error.issues,
       });
+    }
+
+    if (error instanceof ChannelAccountConflictError) {
+      return reply.code(409).send({ error: error.message });
     }
 
     if (error instanceof AppError) {

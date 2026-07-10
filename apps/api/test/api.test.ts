@@ -10,6 +10,7 @@ import {
   type KnowledgeChunk,
   type TenantPolicy,
 } from "@assaddar/core";
+import { ChannelAccountConflictError } from "@assaddar/db";
 import { createHmac } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -811,6 +812,20 @@ class MemoryPlatformStore
       settings?: Record<string, unknown> | undefined;
     },
   ) {
+    const accountId = input.externalAccountId ?? null;
+    // Mirror the global unique index: a provider account belongs to one tenant.
+    if (accountId) {
+      const conflict = this.channelConnections.find(
+        (connection) =>
+          connection.tenantId !== tenantId &&
+          connection.channel === input.channel &&
+          connection.externalAccountId === accountId,
+      );
+      if (conflict) {
+        throw new ChannelAccountConflictError();
+      }
+    }
+
     const existing = this.channelConnections.find(
       (connection) =>
         connection.tenantId === tenantId &&
@@ -818,7 +833,7 @@ class MemoryPlatformStore
         connection.provider === input.provider,
     );
     if (existing) {
-      existing.externalAccountId = input.externalAccountId ?? null;
+      existing.externalAccountId = accountId;
       existing.status = input.status ?? existing.status;
       existing.settings = input.settings ?? existing.settings;
       existing.updatedAt = new Date();
@@ -830,7 +845,7 @@ class MemoryPlatformStore
       tenantId,
       channel: input.channel,
       provider: input.provider,
-      externalAccountId: input.externalAccountId ?? null,
+      externalAccountId: accountId,
       status: input.status ?? "pending",
       settings: input.settings ?? {},
       updatedAt: new Date(),
@@ -5992,6 +6007,55 @@ describe("API", () => {
     expect(
       unknown.json<{ statusUpdates: number; statusApplied: number }>(),
     ).toMatchObject({ statusUpdates: 1, statusApplied: 0 });
+
+    await app.close();
+  });
+
+  it("rejects connecting a provider account already owned by another tenant", async () => {
+    const store = new MemoryPlatformStore();
+    const app = await buildServer({
+      store,
+      adminToken: "test-token",
+      allowedOrigins: ["*"],
+    });
+    const tenantA = await store.createTenant({
+      name: "Tenant A",
+      slug: "tenant-a",
+    });
+    const tenantB = await store.createTenant({
+      name: "Tenant B",
+      slug: "tenant-b",
+    });
+
+    const connect = (tenantId: string) =>
+      app.inject({
+        method: "PUT",
+        url: `/admin/tenants/${tenantId}/channel-connections/whatsapp`,
+        headers: { "x-admin-token": "test-token" },
+        payload: {
+          provider: "meta-whatsapp-cloud",
+          externalAccountId: "phone-number-shared",
+          status: "connected",
+        },
+      });
+
+    expect((await connect(tenantA.id)).statusCode).toBe(200);
+
+    // Tenant B claims the same WhatsApp phone-number id → a clean 409, not a 500,
+    // and the customer's messages can never route to two tenants.
+    const second = await connect(tenantB.id);
+    expect(second.statusCode).toBe(409);
+    expect(second.json<{ error: string }>().error).toContain(
+      "another workspace",
+    );
+    expect(
+      store.channelConnections.filter(
+        (connection) => connection.externalAccountId === "phone-number-shared",
+      ),
+    ).toHaveLength(1);
+
+    // The owning tenant re-saving its own connection stays fine (idempotent).
+    expect((await connect(tenantA.id)).statusCode).toBe(200);
 
     await app.close();
   });

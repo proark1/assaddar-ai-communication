@@ -24,6 +24,7 @@ import {
   sql,
   type SQL,
 } from "drizzle-orm";
+import { ChannelAccountConflictError, isUniqueViolation } from "./errors";
 import type { Database, DbExecutor, Transaction } from "./client";
 import {
   allowedIntents,
@@ -1562,23 +1563,33 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       updatedAt: sql`now()`,
     };
 
-    const [connection] = await this.db
-      .insert(channelConnections)
-      .values(values)
-      .onConflictDoUpdate({
-        target: [
-          channelConnections.tenantId,
-          channelConnections.channel,
-          channelConnections.provider,
-        ],
-        set: {
-          externalAccountId: values.externalAccountId,
-          status: values.status,
-          settings: values.settings,
-          updatedAt: sql`now()`,
-        },
-      })
-      .returning();
+    let connection: ChannelConnectionRecord | undefined;
+    try {
+      [connection] = await this.db
+        .insert(channelConnections)
+        .values(values)
+        .onConflictDoUpdate({
+          target: [
+            channelConnections.tenantId,
+            channelConnections.channel,
+            channelConnections.provider,
+          ],
+          set: {
+            externalAccountId: values.externalAccountId,
+            status: values.status,
+            settings: values.settings,
+            updatedAt: sql`now()`,
+          },
+        })
+        .returning();
+    } catch (error) {
+      // The account id is already owned by another tenant (global unique index):
+      // surface a clean conflict rather than an opaque 500.
+      if (isUniqueViolation(error, "channel_connections_account_owner_idx")) {
+        throw new ChannelAccountConflictError();
+      }
+      throw error;
+    }
 
     if (!connection) {
       throw new Error("Failed to save channel connection.");
