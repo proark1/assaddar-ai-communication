@@ -334,6 +334,29 @@ export function readAttempts(value: unknown): number {
   return 0;
 }
 
+/**
+ * Coerce a timestamp returned by a raw `sql<...>` aggregate to a `Date`.
+ *
+ * Drizzle's postgres-js driver replaces postgres.js's timestamp parsers with
+ * pass-through ones (OIDs 1114/1184/1082/1083 → return the raw text) and instead
+ * converts each SELECTED COLUMN to a Date itself via that column's
+ * `mapFromDriverValue`. A raw `sql`max(...)`` expression has no column to map,
+ * so against real Postgres the driver hands back the timestamp text form
+ * ("2026-07-10 16:27:40.767+00"), NOT a Date — even though the `sql<Date>`
+ * annotation claims otherwise. Aggregates feeding a `Date | null` field must be
+ * coerced here or the declared type lies and callers doing date math
+ * (`.getTime()`, `.toISOString()`) throw or misbehave. Accepts a `Date` too, so
+ * it stays correct under drivers/mocks that already return one.
+ */
+export function toAggregateDate(
+  value: Date | string | null | undefined,
+): Date | null {
+  if (value == null) {
+    return null;
+  }
+  return value instanceof Date ? value : new Date(value);
+}
+
 export function normalizeFullTextQuery(
   options?: PaginationOptions,
 ): string | undefined {
