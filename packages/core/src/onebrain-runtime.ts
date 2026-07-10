@@ -36,8 +36,22 @@ export type OneBrainRuntimeAnswerInput = {
   message: InboundMessage;
   oneBrain?: OneBrainRuntimeAnswerSettings | undefined;
   localAnswer: () => Promise<AnswerResult>;
+  /**
+   * Tenant-policy gate (message length, blocked topics) evaluated BEFORE the
+   * question is sent to OneBrain — wire it to `AnswerEngine.policyPreflight` so
+   * external answers pass the same policy screen as local ones. When it returns
+   * a refusal, OneBrain is never asked and the refusal is returned as-is.
+   */
+  preflight?: (() => Promise<AnswerResult | null>) | undefined;
   onOneBrainError?: ((error: unknown) => void) | undefined;
 };
+
+/**
+ * Cap for a remote OneBrain answer, matching the local pipeline's generated
+ * answer cap: anything longer is treated as unusable output rather than
+ * delivered to a customer unchecked.
+ */
+const MAX_ONEBRAIN_ANSWER_LENGTH = 900;
 
 export async function answerWithOneBrainFallback(
   input: OneBrainRuntimeAnswerInput,
@@ -71,6 +85,35 @@ export async function answerWithOneBrainFallback(
     });
   }
 
+  // Policy preflight: external answers pass the same tenant-policy screen
+  // (message length, blocked topics) as local ones. A refusal short-circuits —
+  // the question is never sent to OneBrain.
+  if (input.preflight) {
+    const refusal = await input.preflight();
+    if (refusal) {
+      return withOneBrainTrace(refusal, {
+        step: "onebrain_answer",
+        outcome: "skipped",
+        detail: "policy_refused",
+      });
+    }
+  }
+
+  // A OneBrain reply that is empty, unsupported by any knowledge chunk, or
+  // implausibly long is unusable output — never delivered directly. Depending
+  // on the fallback policy it either fails closed or falls back to the local
+  // pipeline, which enforces its own retrieval/refusal guardrails.
+  const rejectAnswer = async (detail: string): Promise<AnswerResult> => {
+    if (required || !fallbackEnabled) {
+      return oneBrainUnavailableResult(input, detail);
+    }
+    return withOneBrainTrace(await input.localAnswer(), {
+      step: "onebrain_answer",
+      outcome: "failed",
+      detail,
+    });
+  };
+
   try {
     const result = await settings.provider.ask({
       scope: buildOneBrainRuntimeScope(input.tenant, settings.env),
@@ -78,14 +121,15 @@ export async function answerWithOneBrainFallback(
     });
     const answer = sanitizeOneBrainAnswer(result.answer);
     if (!answer) {
-      if (required || !fallbackEnabled) {
-        return oneBrainUnavailableResult(input, "empty_answer");
-      }
-      return withOneBrainTrace(await input.localAnswer(), {
-        step: "onebrain_answer",
-        outcome: "failed",
-        detail: "empty_answer",
-      });
+      return rejectAnswer("empty_answer");
+    }
+    if (result.chunksUsed <= 0) {
+      // No evidence chunks backed this answer: treat it as ungrounded rather
+      // than delivering unverified model prose to a customer.
+      return rejectAnswer("no_evidence");
+    }
+    if (answer.length > MAX_ONEBRAIN_ANSWER_LENGTH) {
+      return rejectAnswer("answer_too_long");
     }
 
     return {
@@ -93,7 +137,7 @@ export async function answerWithOneBrainFallback(
       tenantId: input.message.tenantId,
       channel: input.message.channel,
       text: answer,
-      confidence: result.chunksUsed > 0 ? 1 : 0.5,
+      confidence: 1,
       intent: "onebrain_answer",
       citations: [],
       handoffRecommended: false,

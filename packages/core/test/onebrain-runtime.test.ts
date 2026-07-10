@@ -181,6 +181,149 @@ describe("answerWithOneBrainFallback", () => {
     });
   });
 
+  it("refuses via policy preflight without ever asking OneBrain", async () => {
+    let asked = 0;
+    let localCalled = false;
+    const provider: BrainProvider = {
+      kind: "onebrain",
+      async intake() {
+        throw new Error("not used");
+      },
+      async ask() {
+        asked += 1;
+        return { answer: "Should never be produced.", chunksUsed: 3 };
+      },
+    };
+    const refusal: AnswerResult = {
+      status: "refused",
+      tenantId,
+      channel: "website",
+      text: "I can only answer questions about this business.",
+      confidence: 0,
+      intent: "medical_legal_financial_advice",
+      citations: [],
+      handoffRecommended: false,
+      usage: { inputCharacters: 10, outputCharacters: 10, estimatedCredits: 1 },
+      trace: [{ step: "blocked_topic", outcome: "failed" }],
+    };
+
+    const result = await answerWithOneBrainFallback({
+      tenant: { id: tenantId, slug: "tenant-one" },
+      message,
+      oneBrain: { enabled: true, provider },
+      preflight: async () => refusal,
+      localAnswer: async () => {
+        localCalled = true;
+        return localAnswer("Should not be used.");
+      },
+    });
+
+    expect(asked).toBe(0);
+    expect(localCalled).toBe(false);
+    expect(result.status).toBe("refused");
+    expect(result.text).toBe(
+      "I can only answer questions about this business.",
+    );
+    expect(result.trace[0]).toEqual({
+      step: "onebrain_answer",
+      outcome: "skipped",
+      detail: "policy_refused",
+    });
+  });
+
+  it("treats a OneBrain answer without evidence chunks as unusable", async () => {
+    // The audit's bypass: a non-empty answer with chunksUsed=0 used to be
+    // returned directly. It must fall back to the guarded local pipeline.
+    const provider: BrainProvider = {
+      kind: "onebrain",
+      async intake() {
+        throw new Error("not used");
+      },
+      async ask() {
+        return { answer: "Confident but ungrounded prose.", chunksUsed: 0 };
+      },
+    };
+
+    const result = await answerWithOneBrainFallback({
+      tenant: { id: tenantId, slug: "tenant-one" },
+      message,
+      oneBrain: { enabled: true, provider },
+      preflight: async () => null,
+      localAnswer: async () => localAnswer("Grounded local answer."),
+    });
+
+    expect(result.text).toBe("Grounded local answer.");
+    expect(result.trace[0]).toEqual({
+      step: "onebrain_answer",
+      outcome: "failed",
+      detail: "no_evidence",
+    });
+  });
+
+  it("fails closed on an evidence-free answer when OneBrain is required", async () => {
+    const provider: BrainProvider = {
+      kind: "onebrain",
+      async intake() {
+        throw new Error("not used");
+      },
+      async ask() {
+        return { answer: "Confident but ungrounded prose.", chunksUsed: 0 };
+      },
+    };
+    let localCalled = false;
+
+    const result = await answerWithOneBrainFallback({
+      tenant: { id: tenantId, slug: "tenant-one" },
+      message,
+      oneBrain: {
+        enabled: true,
+        provider,
+        env: { ONEBRAIN_REQUIRED: "true" },
+      },
+      preflight: async () => null,
+      localAnswer: async () => {
+        localCalled = true;
+        return localAnswer("Should not be used.");
+      },
+    });
+
+    expect(localCalled).toBe(false);
+    expect(result).toMatchObject({
+      status: "handoff",
+      intent: "onebrain_unavailable",
+      trace: [
+        { step: "onebrain_answer", outcome: "failed", detail: "no_evidence" },
+      ],
+    });
+  });
+
+  it("rejects an implausibly long OneBrain answer", async () => {
+    const provider: BrainProvider = {
+      kind: "onebrain",
+      async intake() {
+        throw new Error("not used");
+      },
+      async ask() {
+        return { answer: "x".repeat(1200), chunksUsed: 2 };
+      },
+    };
+
+    const result = await answerWithOneBrainFallback({
+      tenant: { id: tenantId, slug: "tenant-one" },
+      message,
+      oneBrain: { enabled: true, provider },
+      preflight: async () => null,
+      localAnswer: async () => localAnswer("Bounded local answer."),
+    });
+
+    expect(result.text).toBe("Bounded local answer.");
+    expect(result.trace[0]).toEqual({
+      step: "onebrain_answer",
+      outcome: "failed",
+      detail: "answer_too_long",
+    });
+  });
+
   it("falls back locally when OneBrain fails", async () => {
     const errors: unknown[] = [];
     const provider: BrainProvider = {

@@ -7111,6 +7111,9 @@ async function answerTenantMessage(input: {
     tenant: input.tenant,
     message: input.message,
     oneBrain: input.options.oneBrainAnswer,
+    // Same tenant-policy screen as local answers, evaluated before OneBrain is
+    // asked — external answers must not bypass blocked topics/length limits.
+    preflight: () => input.engine.policyPreflight(input.message),
     localAnswer: () => input.engine.answer(input.message),
     onOneBrainError: input.onOneBrainError,
   });

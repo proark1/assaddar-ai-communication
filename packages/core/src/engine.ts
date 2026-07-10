@@ -116,42 +116,11 @@ export class AnswerEngine {
   }
 
   async answer(input: InboundMessage): Promise<AnswerResult> {
-    const trace: AnswerTraceStep[] = [];
-    const normalized = normalizeText(input.text);
-    trace.push({
-      step: "normalize",
-      outcome: normalized ? "passed" : "failed",
-    });
-
-    const policy = await this.loadPolicy(input.tenantId);
-    if (normalized.length > policy.maxMessageLength) {
-      return this.refuse(
-        input,
-        policy,
-        trace,
-        "message_length",
-        "Message is too long for this assistant.",
-      );
+    const preflight = await this.runPolicyPreflight(input);
+    if (preflight.refusal) {
+      return preflight.refusal;
     }
-
-    const blockedTopic = findBlockedTopic(normalized, policy.blockedTopics);
-    if (blockedTopic) {
-      trace.push({
-        step: "blocked_topic",
-        outcome: "failed",
-        detail: blockedTopic.name,
-      });
-
-      return this.refuse(
-        input,
-        policy,
-        trace,
-        blockedTopic.name,
-        blockedTopic.response ??
-          "I can only answer questions about this business.",
-      );
-    }
-    trace.push({ step: "blocked_topic", outcome: "passed" });
+    const { trace, normalized, policy } = preflight;
 
     const intent = classifyIntent(normalized, policy.allowedIntents);
     if (!intent.allowed) {
@@ -295,6 +264,76 @@ export class AnswerEngine {
       usage: estimateUsage(normalized, answer),
       trace,
     };
+  }
+
+  /**
+   * The tenant-policy gate every answer provider must clear before producing a
+   * customer-facing reply: message-length limit and blocked-topic screening,
+   * with the same refusal (and escalation/handoff behaviour) the local pipeline
+   * uses. Returns the refusal result when the message is disallowed, or `null`
+   * when it may proceed. External providers (e.g. OneBrain) run this BEFORE
+   * asking their model so policy cannot be bypassed by routing around the local
+   * engine.
+   */
+  async policyPreflight(input: InboundMessage): Promise<AnswerResult | null> {
+    const { refusal } = await this.runPolicyPreflight(input);
+    return refusal;
+  }
+
+  private async runPolicyPreflight(input: InboundMessage): Promise<{
+    trace: AnswerTraceStep[];
+    normalized: string;
+    policy: TenantPolicy;
+    refusal: AnswerResult | null;
+  }> {
+    const trace: AnswerTraceStep[] = [];
+    const normalized = normalizeText(input.text);
+    trace.push({
+      step: "normalize",
+      outcome: normalized ? "passed" : "failed",
+    });
+
+    const policy = await this.loadPolicy(input.tenantId);
+    if (normalized.length > policy.maxMessageLength) {
+      return {
+        trace,
+        normalized,
+        policy,
+        refusal: await this.refuse(
+          input,
+          policy,
+          trace,
+          "message_length",
+          "Message is too long for this assistant.",
+        ),
+      };
+    }
+
+    const blockedTopic = findBlockedTopic(normalized, policy.blockedTopics);
+    if (blockedTopic) {
+      trace.push({
+        step: "blocked_topic",
+        outcome: "failed",
+        detail: blockedTopic.name,
+      });
+
+      return {
+        trace,
+        normalized,
+        policy,
+        refusal: await this.refuse(
+          input,
+          policy,
+          trace,
+          blockedTopic.name,
+          blockedTopic.response ??
+            "I can only answer questions about this business.",
+        ),
+      };
+    }
+    trace.push({ step: "blocked_topic", outcome: "passed" });
+
+    return { trace, normalized, policy, refusal: null };
   }
 
   private async generateGroundedAnswer({
