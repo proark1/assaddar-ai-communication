@@ -829,6 +829,34 @@ export const onebrainSyncRecords = pgTable(
   ],
 );
 
+// A durable to-do list of remote OneBrain records to erase. Rows are written in
+// the SAME transaction that deletes a tenant, BEFORE the cascade wipes
+// onebrain_sync_records (which holds the source_ref/external_record_id needed to
+// erase the remote copy). It therefore deliberately carries NO tenant FK — the
+// row must outlive the tenant it describes. A worker drains it, calling OneBrain's
+// delete endpoint, and the erasure is not complete until OneBrain confirms.
+export const onebrainDeleteOutbox = pgTable(
+  "onebrain_delete_outbox",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    tenantId: uuid("tenant_id").notNull(),
+    provider: text("provider").notNull().default("onebrain"),
+    sourceRef: text("source_ref").notNull(),
+    externalRecordId: text("external_record_id"),
+    status: text("status").notNull().default("pending"), // pending | done | failed
+    attempts: integer("attempts").notNull().default(0),
+    lastError: text("last_error"),
+    processedAt: timestamp("processed_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (table) => [
+    index("onebrain_delete_outbox_pending_idx")
+      .on(table.createdAt)
+      .where(sql`${table.status} = 'pending'`),
+    index("onebrain_delete_outbox_tenant_idx").on(table.tenantId),
+  ],
+);
+
 export const portalLinkProjections = pgTable(
   "portal_link_projections",
   {

@@ -22,6 +22,7 @@ describe("jobSchemas", () => {
         "embeddings.backfill",
         "embeddings.generate",
         "file.parse",
+        "onebrain.delete-drain",
         "onebrain.sync",
         "retention.cleanup",
         "suggestions.scan",

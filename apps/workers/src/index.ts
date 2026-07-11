@@ -16,6 +16,7 @@ import { backfillMissingEmbeddings } from "./backfill-embeddings";
 import { retryFailedDeliveries } from "./retry-deliveries";
 import { jobSchemas, type WorkerJobName } from "./jobs";
 import { syncApprovedKnowledgeToOneBrain } from "./onebrain-sync";
+import { processOneBrainDeleteOutbox } from "./onebrain-delete-drain";
 
 config({ path: new URL("../../../.env", import.meta.url) });
 
@@ -165,6 +166,11 @@ const ONEBRAIN_SYNC_ENABLED =
 const ONEBRAIN_SYNC_INTERVAL_MS = parsePositiveIntEnv(
   process.env.ONEBRAIN_SYNC_INTERVAL_MS,
   60 * 60 * 1000,
+);
+
+const ONEBRAIN_DELETE_DRAIN_INTERVAL_MS = parsePositiveIntEnv(
+  process.env.ONEBRAIN_DELETE_DRAIN_INTERVAL_MS,
+  5 * 60 * 1000,
 );
 
 // Retention deletion is DESTRUCTIVE, so it stays easy to disable in development,
@@ -410,6 +416,38 @@ const worker = new Worker(
           throw error;
         }
       }
+      case "onebrain.delete-drain": {
+        if (!ONEBRAIN_SYNC_ENABLED) {
+          return {
+            status: "skipped",
+            reason: "OneBrain sync disabled (set ONEBRAIN_SYNC_ENABLED=true).",
+          };
+        }
+        if (!oneBrainProvider) {
+          return {
+            status: "skipped",
+            reason:
+              "OneBrain provider not configured (set ONEBRAIN_API_BASE_URL, ONEBRAIN_SERVICE_KEY, and ONEBRAIN_SPACE_ID).",
+          };
+        }
+        try {
+          const result = await processOneBrainDeleteOutbox(
+            repository,
+            oneBrainProvider,
+            {
+              log: (message) =>
+                console.log(`[onebrain.delete-drain] ${message}`),
+            },
+          );
+          return { status: "ok", ...result };
+        } catch (error) {
+          console.error(
+            `[onebrain.delete-drain] run failed (job ${job.id})`,
+            error,
+          );
+          throw error;
+        }
+      }
     }
   },
   {
@@ -478,8 +516,17 @@ async function scheduleMaintenanceJobs() {
       { name: "onebrain.sync", data: {} },
     );
     console.log(`Scheduled onebrain.sync every ${ONEBRAIN_SYNC_INTERVAL_MS}ms`);
+    await queue.upsertJobScheduler(
+      "onebrain-delete-drain",
+      { every: ONEBRAIN_DELETE_DRAIN_INTERVAL_MS },
+      { name: "onebrain.delete-drain", data: {} },
+    );
+    console.log(
+      `Scheduled onebrain.delete-drain every ${ONEBRAIN_DELETE_DRAIN_INTERVAL_MS}ms`,
+    );
   } else {
     await queue.removeJobScheduler("onebrain-sync").catch(() => {});
+    await queue.removeJobScheduler("onebrain-delete-drain").catch(() => {});
     console.log(
       ONEBRAIN_SYNC_ENABLED
         ? "OneBrain sync not scheduled: provider credentials or ONEBRAIN_SPACE_ID are missing."

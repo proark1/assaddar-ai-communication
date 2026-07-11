@@ -95,6 +95,9 @@ export type BrainProvider = {
   readonly kind: "local" | "onebrain";
   intake(input: BrainIntakeInput): Promise<OneBrainIntakeResponse>;
   ask(input: BrainAskInput): Promise<BrainAskResult>;
+  // Optional so a local/no-op provider needn't implement remote erasure. The
+  // outbox drain skips a provider that can't delete.
+  deleteRecord?(input: BrainDeleteInput): Promise<OneBrainDeleteResult>;
 };
 
 export type OneBrainServiceEnv = {
@@ -171,6 +174,19 @@ const OneBrainAskResponseSchema = z.object({
   answer: z.string(),
   chunks_used: z.number().int().nonnegative().default(0),
 });
+
+const OneBrainDeleteResponseSchema = z.object({
+  source_ref: z.string().default(""),
+  deleted: z.number().int().nonnegative().default(0),
+  audit_event_id: z.string().default(""),
+});
+
+export type OneBrainDeleteResult = z.infer<typeof OneBrainDeleteResponseSchema>;
+
+export type BrainDeleteInput = {
+  sourceRef: string;
+  scope?: Partial<BrainScope>;
+};
 
 const OneBrainCapabilitiesResponseSchema = z.object({
   tenant_id: z.string(),
@@ -263,6 +279,28 @@ export class OneBrainServiceClient {
     };
   }
 
+  async deleteRecord(input: BrainDeleteInput): Promise<OneBrainDeleteResult> {
+    // Erase a record previously synced in, by the same source_ref used at intake.
+    // source_ref is globally unique, so account alone scopes the delete
+    // unambiguously. We default account_id from config (a mismatch fails loud with
+    // a 403), but do NOT default space_id: a drifted ONEBRAIN_SPACE_ID would make
+    // the endpoint match nothing and report an idempotent deleted:0 — a silent
+    // miss. space_id is sent only when the caller passes it explicitly.
+    const accountId =
+      emptyToUndefined(input.scope?.accountId) ?? this.accountId;
+    const spaceId = emptyToUndefined(input.scope?.spaceId);
+    const body: Record<string, unknown> = { source_ref: input.sourceRef };
+    if (accountId) {
+      body.account_id = accountId;
+    }
+    if (spaceId) {
+      body.space_id = spaceId;
+    }
+    return OneBrainDeleteResponseSchema.parse(
+      await this.requestJson("POST", "/api/service/records/delete", body),
+    );
+  }
+
   private scopeBody(scope: BrainScope, defaultPurpose: string) {
     const accountId = emptyToUndefined(scope.accountId) ?? this.accountId;
     const spaceId = emptyToUndefined(scope.spaceId) ?? this.spaceId;
@@ -327,6 +365,10 @@ export class OneBrainProvider implements BrainProvider {
 
   ask(input: BrainAskInput): Promise<BrainAskResult> {
     return this.client.ask(input);
+  }
+
+  deleteRecord(input: BrainDeleteInput): Promise<OneBrainDeleteResult> {
+    return this.client.deleteRecord(input);
   }
 }
 

@@ -5,6 +5,7 @@ import {
   channelWebhookEvents,
   conversations,
   createDbClient,
+  onebrainDeleteOutbox,
   stripeWebhookEvents,
   TenantRepository,
   tenants,
@@ -299,6 +300,38 @@ describe.skipIf(!runIntegrationTests)("TenantRepository integration", () => {
       .from(stripeWebhookEvents)
       .where(eq(stripeWebhookEvents.id, stripeRowId));
     expect(stripeRows).toEqual([]);
+  });
+
+  it("captures OneBrain deletes into an outbox that survives tenant deletion", async () => {
+    const tenant = await createTestTenant("delete-outbox");
+    const sourceRef = `communication:tenant:${tenant.id}:knowledge:k1`;
+    await repo.recordOneBrainSyncSuccess(tenant.id, {
+      sourceType: "knowledge",
+      sourceId: "k1",
+      sourceRef,
+      contentHash: "hash_1",
+      externalRecordId: "rec_1",
+    });
+
+    // Deleting the tenant cascades onebrain_sync_records away — but the ref to
+    // erase remotely must be captured first into the tenant-FK-free outbox.
+    await repo.deleteTenantData(tenant.id);
+
+    const pending = await repo.listPendingOneBrainDeletes(500);
+    const mine = pending.filter((row) => row.sourceRef === sourceRef);
+    expect(mine).toHaveLength(1);
+    expect(mine[0]?.status).toBe("pending");
+    expect(mine[0]?.externalRecordId).toBe("rec_1");
+
+    // Draining marks the row done so it leaves the pending set.
+    await repo.markOneBrainDeleteDone(mine[0]!.id);
+    const afterDrain = await repo.listPendingOneBrainDeletes(500);
+    expect(afterDrain.some((row) => row.id === mine[0]!.id)).toBe(false);
+
+    // The outbox has no tenant FK, so clean it up explicitly.
+    await client.db
+      .delete(onebrainDeleteOutbox)
+      .where(eq(onebrainDeleteOutbox.tenantId, tenant.id));
   });
 
   it("prevents two tenants from claiming the same provider account", async () => {

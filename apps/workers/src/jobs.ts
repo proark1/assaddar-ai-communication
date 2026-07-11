@@ -36,6 +36,8 @@ export const SuggestionScanJobSchema = z.object({}).passthrough();
 
 export const OneBrainSyncJobSchema = z.object({}).passthrough();
 
+export const OneBrainDeleteDrainJobSchema = z.object({}).passthrough();
+
 export type WorkerJobName =
   | "file.parse"
   | "embeddings.generate"
@@ -45,7 +47,8 @@ export type WorkerJobName =
   | "retention.cleanup"
   | "deliveries.retry"
   | "suggestions.scan"
-  | "onebrain.sync";
+  | "onebrain.sync"
+  | "onebrain.delete-drain";
 
 export const jobSchemas = {
   "file.parse": FileParsingJobSchema,
@@ -57,4 +60,5 @@ export const jobSchemas = {
   "deliveries.retry": DeliveryRetryJobSchema,
   "suggestions.scan": SuggestionScanJobSchema,
   "onebrain.sync": OneBrainSyncJobSchema,
+  "onebrain.delete-drain": OneBrainDeleteDrainJobSchema,
 } satisfies Record<WorkerJobName, z.ZodTypeAny>;

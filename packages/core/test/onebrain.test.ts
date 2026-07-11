@@ -200,6 +200,46 @@ describe("OneBrainServiceClient", () => {
     ]);
   });
 
+  it("erases a record by source_ref through the records delete endpoint", async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const client = new OneBrainServiceClient({
+      baseUrl: "https://onebrain.example",
+      serviceKey: "obk_test",
+      accountId: "acme",
+      spaceId: "sp_customer_service",
+      fetchImpl: async (url, init) => {
+        calls.push({ url: String(url), init: init ?? {} });
+        return new Response(
+          JSON.stringify({
+            source_ref: "communication:tenant:t1:knowledge:k1",
+            deleted: 1,
+            audit_event_id: "aud_1",
+          }),
+          { headers: { "content-type": "application/json" } },
+        );
+      },
+    });
+
+    await expect(
+      client.deleteRecord({
+        sourceRef: "communication:tenant:t1:knowledge:k1",
+      }),
+    ).resolves.toEqual({
+      source_ref: "communication:tenant:t1:knowledge:k1",
+      deleted: 1,
+      audit_event_id: "aud_1",
+    });
+    expect(calls[0]?.url).toBe(
+      "https://onebrain.example/api/service/records/delete",
+    );
+    // account_id is defaulted from config (a mismatch would fail loud); space_id
+    // is intentionally omitted so a drifted config can't silently miss the delete.
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({
+      source_ref: "communication:tenant:t1:knowledge:k1",
+      account_id: "acme",
+    });
+  });
+
   it("requires explicit account and space scope before ask or intake", async () => {
     const client = new OneBrainServiceClient({
       baseUrl: "https://onebrain.example",

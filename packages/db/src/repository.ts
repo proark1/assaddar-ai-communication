@@ -72,6 +72,13 @@ import {
   recordOneBrainSyncFailureRow,
   recordOneBrainSyncSuccessRow,
 } from "./repository-onebrain";
+import {
+  captureOneBrainDeletesForTenantRow,
+  listPendingOneBrainDeleteRows,
+  markOneBrainDeleteDoneRow,
+  markOneBrainDeleteFailedRow,
+  type OneBrainDeleteOutboxRow,
+} from "./repository-onebrain-delete";
 import { assertTenantId } from "./tenant-scope";
 import {
   billingStatusFromStripe,
@@ -6318,7 +6325,32 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
         repo.deleteTenantData(tenantId),
       );
     }
+    // this.db is the tenant-scoped transaction opened by withTenantScope. Capture
+    // the OneBrain records this tenant synced BEFORE deleting it — otherwise the
+    // cascade wipes onebrain_sync_records and with it the refs needed to erase the
+    // remote copies. The outbox has no tenant FK, so its rows survive the delete.
+    await captureOneBrainDeletesForTenantRow(this.db, tenantId);
     await this.db.delete(tenants).where(eq(tenants.id, tenantId));
+  }
+
+  async listPendingOneBrainDeletes(
+    limit = 100,
+  ): Promise<OneBrainDeleteOutboxRow[]> {
+    // The outbox is not tenant-scoped (its rows outlive their tenant), so the
+    // drain worker reads it on the root executor.
+    return listPendingOneBrainDeleteRows(this.db, limit);
+  }
+
+  async markOneBrainDeleteDone(id: string): Promise<void> {
+    return markOneBrainDeleteDoneRow(this.db, id);
+  }
+
+  async markOneBrainDeleteFailed(
+    id: string,
+    error: string,
+    exhausted: boolean,
+  ): Promise<void> {
+    return markOneBrainDeleteFailedRow(this.db, id, error, exhausted);
   }
 
   /**

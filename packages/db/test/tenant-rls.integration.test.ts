@@ -58,7 +58,13 @@ const PROBE_ROLE = "assaddar_rls_probe";
  * is enabled. (Contrast channel_webhook_events, which carries per-tenant
  * end-user content and IS tenant-scoped.)
  */
-const PLATFORM_TENANT_ID_TABLES = new Set<string>(["stripe_webhook_events"]);
+const PLATFORM_TENANT_ID_TABLES = new Set<string>([
+  "stripe_webhook_events",
+  // Operational outbox of remote deletes. Its rows must OUTLIVE the tenant (they
+  // carry the ref needed to erase the remote copy after the local cascade), and a
+  // non-tenant-scoped worker drains them — so it is intentionally not tenant-RLS'd.
+  "onebrain_delete_outbox",
+]);
 
 /** Flatten an Error and its `cause` chain so assertions can match wrapped
  * driver errors (drizzle wraps the underlying PostgresError as `cause`). */
