@@ -98,6 +98,12 @@ export type BrainProvider = {
   // Optional so a local/no-op provider needn't implement remote erasure. The
   // outbox drain skips a provider that can't delete.
   deleteRecord?(input: BrainDeleteInput): Promise<OneBrainDeleteResult>;
+  // The erasure feed OneBrain publishes for modules to mirror (Phase 4).
+  listTombstones?(input?: {
+    since?: number;
+    limit?: number;
+  }): Promise<OneBrainTombstoneFeed>;
+  ackTombstone?(tombstoneId: string): Promise<OneBrainTombstoneAck>;
 };
 
 export type OneBrainServiceEnv = {
@@ -187,6 +193,32 @@ export type BrainDeleteInput = {
   sourceRef: string;
   scope?: Partial<BrainScope>;
 };
+
+const OneBrainTombstoneSchema = z.object({
+  id: z.string(),
+  seq: z.number().int().nonnegative(),
+  account_id: z.string(),
+  space_id: z.string().default(""),
+  target_type: z.string(),
+  target_ref: z.string().default(""),
+  reason: z.string().default(""),
+  created_at: z.string().default(""),
+});
+
+const OneBrainTombstoneFeedSchema = z.object({
+  tombstones: z.array(OneBrainTombstoneSchema).default([]),
+  cursor: z.number().int().nonnegative().default(0),
+});
+
+const OneBrainTombstoneAckSchema = z.object({
+  tombstone_id: z.string(),
+  app_id: z.string().default(""),
+  acked_at: z.string().default(""),
+});
+
+export type OneBrainTombstone = z.infer<typeof OneBrainTombstoneSchema>;
+export type OneBrainTombstoneFeed = z.infer<typeof OneBrainTombstoneFeedSchema>;
+export type OneBrainTombstoneAck = z.infer<typeof OneBrainTombstoneAckSchema>;
 
 const OneBrainCapabilitiesResponseSchema = z.object({
   tenant_id: z.string(),
@@ -301,6 +333,32 @@ export class OneBrainServiceClient {
     );
   }
 
+  async listTombstones(
+    input: { since?: number; limit?: number } = {},
+  ): Promise<OneBrainTombstoneFeed> {
+    const params = new URLSearchParams();
+    params.set("since", String(Math.max(0, Math.trunc(input.since ?? 0))));
+    if (input.limit) {
+      params.set("limit", String(Math.trunc(input.limit)));
+    }
+    return OneBrainTombstoneFeedSchema.parse(
+      await this.requestJson(
+        "GET",
+        `/api/service/tombstones?${params.toString()}`,
+      ),
+    );
+  }
+
+  async ackTombstone(tombstoneId: string): Promise<OneBrainTombstoneAck> {
+    return OneBrainTombstoneAckSchema.parse(
+      await this.requestJson(
+        "POST",
+        `/api/service/tombstones/${encodeURIComponent(tombstoneId)}/ack`,
+        {},
+      ),
+    );
+  }
+
   private scopeBody(scope: BrainScope, defaultPurpose: string) {
     const accountId = emptyToUndefined(scope.accountId) ?? this.accountId;
     const spaceId = emptyToUndefined(scope.spaceId) ?? this.spaceId;
@@ -369,6 +427,17 @@ export class OneBrainProvider implements BrainProvider {
 
   deleteRecord(input: BrainDeleteInput): Promise<OneBrainDeleteResult> {
     return this.client.deleteRecord(input);
+  }
+
+  listTombstones(input?: {
+    since?: number;
+    limit?: number;
+  }): Promise<OneBrainTombstoneFeed> {
+    return this.client.listTombstones(input);
+  }
+
+  ackTombstone(tombstoneId: string): Promise<OneBrainTombstoneAck> {
+    return this.client.ackTombstone(tombstoneId);
   }
 }
 

@@ -24,6 +24,7 @@ describe("jobSchemas", () => {
         "file.parse",
         "onebrain.delete-drain",
         "onebrain.sync",
+        "onebrain.tombstone-consume",
         "retention.cleanup",
         "suggestions.scan",
         "usage.meter",

@@ -36,6 +36,7 @@ import {
   brainOnboardingAnswers,
   calls,
   callTranscripts,
+  onebrainTombstoneCursor,
   channelConnections,
   channelWebhookEvents,
   conversationContacts,
@@ -6351,6 +6352,28 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     exhausted: boolean,
   ): Promise<void> {
     return markOneBrainDeleteFailedRow(this.db, id, error, exhausted);
+  }
+
+  async getTombstoneCursor(provider = "onebrain"): Promise<number> {
+    const [row] = await this.db
+      .select({ cursor: onebrainTombstoneCursor.cursor })
+      .from(onebrainTombstoneCursor)
+      .where(eq(onebrainTombstoneCursor.provider, provider))
+      .limit(1);
+    return row?.cursor ?? 0;
+  }
+
+  async setTombstoneCursor(
+    cursor: number,
+    provider = "onebrain",
+  ): Promise<void> {
+    await this.db
+      .insert(onebrainTombstoneCursor)
+      .values({ provider, cursor })
+      .onConflictDoUpdate({
+        target: onebrainTombstoneCursor.provider,
+        set: { cursor, updatedAt: sql`now()` },
+      });
   }
 
   /**

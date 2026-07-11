@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  bigint,
   boolean,
   customType,
   index,
@@ -856,6 +857,15 @@ export const onebrainDeleteOutbox = pgTable(
     index("onebrain_delete_outbox_tenant_idx").on(table.tenantId),
   ],
 );
+
+// A single-row-per-provider high-water mark for the OneBrain erasure feed: the
+// last tombstone `seq` this deployment has consumed. Not tenant-scoped (it is a
+// deployment-global consumer position, and carries no tenant id).
+export const onebrainTombstoneCursor = pgTable("onebrain_tombstone_cursor", {
+  provider: text("provider").primaryKey(),
+  cursor: bigint("cursor", { mode: "number" }).notNull().default(0),
+  ...timestamps,
+});
 
 export const portalLinkProjections = pgTable(
   "portal_link_projections",

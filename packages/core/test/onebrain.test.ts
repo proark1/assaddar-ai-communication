@@ -240,6 +240,59 @@ describe("OneBrainServiceClient", () => {
     });
   });
 
+  it("reads the tombstone feed and acks by id", async () => {
+    const calls: Array<{ url: string; method: string }> = [];
+    const client = new OneBrainServiceClient({
+      baseUrl: "https://onebrain.example",
+      serviceKey: "obk_test",
+      fetchImpl: async (url, init) => {
+        calls.push({ url: String(url), method: String(init?.method) });
+        if (String(url).includes("/api/service/tombstones?")) {
+          return new Response(
+            JSON.stringify({
+              tombstones: [
+                {
+                  id: "tomb_1",
+                  seq: 4,
+                  account_id: "acme",
+                  space_id: "",
+                  target_type: "account",
+                  target_ref: "",
+                  reason: "offboarding",
+                  created_at: "2026-07-11T00:00:00Z",
+                },
+              ],
+              cursor: 4,
+            }),
+            { headers: { "content-type": "application/json" } },
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            tombstone_id: "tomb_1",
+            app_id: "communication",
+            acked_at: "x",
+          }),
+          { headers: { "content-type": "application/json" } },
+        );
+      },
+    });
+
+    const feed = await client.listTombstones({ since: 0 });
+    expect(feed.cursor).toBe(4);
+    expect(feed.tombstones[0]?.id).toBe("tomb_1");
+    expect(calls[0]?.url).toBe(
+      "https://onebrain.example/api/service/tombstones?since=0",
+    );
+
+    const ack = await client.ackTombstone("tomb_1");
+    expect(ack.tombstone_id).toBe("tomb_1");
+    expect(calls[1]).toEqual({
+      url: "https://onebrain.example/api/service/tombstones/tomb_1/ack",
+      method: "POST",
+    });
+  });
+
   it("requires explicit account and space scope before ask or intake", async () => {
     const client = new OneBrainServiceClient({
       baseUrl: "https://onebrain.example",

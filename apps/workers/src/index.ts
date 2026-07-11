@@ -17,6 +17,10 @@ import { retryFailedDeliveries } from "./retry-deliveries";
 import { jobSchemas, type WorkerJobName } from "./jobs";
 import { syncApprovedKnowledgeToOneBrain } from "./onebrain-sync";
 import { processOneBrainDeleteOutbox } from "./onebrain-delete-drain";
+import {
+  consumeTombstoneFeed,
+  type TenantResolution,
+} from "./onebrain-tombstone-consume";
 
 config({ path: new URL("../../../.env", import.meta.url) });
 
@@ -172,6 +176,31 @@ const ONEBRAIN_DELETE_DRAIN_INTERVAL_MS = parsePositiveIntEnv(
   process.env.ONEBRAIN_DELETE_DRAIN_INTERVAL_MS,
   5 * 60 * 1000,
 );
+
+const ONEBRAIN_TOMBSTONE_CONSUME_INTERVAL_MS = parsePositiveIntEnv(
+  process.env.ONEBRAIN_TOMBSTONE_CONSUME_INTERVAL_MS,
+  5 * 60 * 1000,
+);
+
+// Destructive auto-erase from the remote feed is opt-in: enable only once the
+// account->tenant mapping is known safe (single tenant, or immutable-id mapping).
+const ONEBRAIN_TOMBSTONE_ERASE_ENABLED =
+  (process.env.ONEBRAIN_TOMBSTONE_ERASE_ENABLED ?? "").toLowerCase() === "true";
+
+// A OneBrain account maps to a tenant by slug (see the sync scope derivation).
+// A deployment-wide account override collapses that mapping, so a tombstone can
+// no longer be attributed to one tenant — the consumer must refuse to delete.
+async function resolveTombstoneTenant(
+  accountId: string,
+): Promise<TenantResolution> {
+  if ((process.env.ONEBRAIN_ACCOUNT_ID ?? "").trim()) {
+    return { status: "ambiguous" };
+  }
+  const tenant = await repository.getTenantBySlug(accountId);
+  return tenant
+    ? { status: "matched", tenantId: tenant.id }
+    : { status: "no_local_tenant" };
+}
 
 // Retention deletion is DESTRUCTIVE, so it stays easy to disable in development,
 // but production defaults to ON to avoid silently retaining personal data
@@ -448,6 +477,66 @@ const worker = new Worker(
           throw error;
         }
       }
+      case "onebrain.tombstone-consume": {
+        if (!ONEBRAIN_SYNC_ENABLED) {
+          return {
+            status: "skipped",
+            reason: "OneBrain sync disabled (set ONEBRAIN_SYNC_ENABLED=true).",
+          };
+        }
+        if (
+          !oneBrainProvider?.listTombstones ||
+          !oneBrainProvider.ackTombstone
+        ) {
+          return {
+            status: "skipped",
+            reason:
+              "OneBrain provider not configured (set ONEBRAIN_API_BASE_URL, ONEBRAIN_SERVICE_KEY, and ONEBRAIN_SPACE_ID).",
+          };
+        }
+        const provider = oneBrainProvider;
+        try {
+          const result = await consumeTombstoneFeed(
+            {
+              getCursor: () => repository.getTombstoneCursor(),
+              setCursor: (cursor) => repository.setTombstoneCursor(cursor),
+              resolveTenant: resolveTombstoneTenant,
+              eraseTenant: (tenantId) => repository.deleteTenantData(tenantId),
+            },
+            {
+              listTombstones: async (since) => {
+                const feed = await provider.listTombstones!({ since });
+                return {
+                  cursor: feed.cursor,
+                  tombstones: feed.tombstones.map((tombstone) => ({
+                    id: tombstone.id,
+                    seq: tombstone.seq,
+                    accountId: tombstone.account_id,
+                    spaceId: tombstone.space_id,
+                    targetType: tombstone.target_type,
+                    targetRef: tombstone.target_ref,
+                  })),
+                };
+              },
+              ackTombstone: async (id) => {
+                await provider.ackTombstone!(id);
+              },
+            },
+            {
+              eraseEnabled: ONEBRAIN_TOMBSTONE_ERASE_ENABLED,
+              log: (message) =>
+                console.log(`[onebrain.tombstone-consume] ${message}`),
+            },
+          );
+          return { status: "ok", ...result };
+        } catch (error) {
+          console.error(
+            `[onebrain.tombstone-consume] run failed (job ${job.id})`,
+            error,
+          );
+          throw error;
+        }
+      }
     }
   },
   {
@@ -524,9 +613,20 @@ async function scheduleMaintenanceJobs() {
     console.log(
       `Scheduled onebrain.delete-drain every ${ONEBRAIN_DELETE_DRAIN_INTERVAL_MS}ms`,
     );
+    await queue.upsertJobScheduler(
+      "onebrain-tombstone-consume",
+      { every: ONEBRAIN_TOMBSTONE_CONSUME_INTERVAL_MS },
+      { name: "onebrain.tombstone-consume", data: {} },
+    );
+    console.log(
+      `Scheduled onebrain.tombstone-consume every ${ONEBRAIN_TOMBSTONE_CONSUME_INTERVAL_MS}ms`,
+    );
   } else {
     await queue.removeJobScheduler("onebrain-sync").catch(() => {});
     await queue.removeJobScheduler("onebrain-delete-drain").catch(() => {});
+    await queue
+      .removeJobScheduler("onebrain-tombstone-consume")
+      .catch(() => {});
     console.log(
       ONEBRAIN_SYNC_ENABLED
         ? "OneBrain sync not scheduled: provider credentials or ONEBRAIN_SPACE_ID are missing."
