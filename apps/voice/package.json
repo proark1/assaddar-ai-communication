@@ -15,9 +15,9 @@
     "@assaddar/db": "workspace:*",
     "@fastify/formbody": "^8.0.2",
     "@fastify/rate-limit": "^11.1.0",
-    "@sentry/node": "^10.63.0",
+    "@sentry/node": "^10.65.0",
     "dotenv": "^17.4.2",
-    "fastify": "^5.9.0",
+    "fastify": "^5.10.0",
     "tsx": "^4.23.0",
     "zod": "^4.4.3"
   },
