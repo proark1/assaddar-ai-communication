@@ -6,6 +6,14 @@ export const metadata: Metadata = {
   description: "Tenant operations dashboard",
 };
 
+// One published image must serve any host, so pages that consume APP_CONFIG
+// URLs must render at REQUEST time. Without this, `next build` statically
+// prerenders them with the build environment's config (in the GHCR image:
+// the hardcoded production defaults), and on a host whose runtime env differs
+// the server HTML disagrees with the runtime-injected client values —
+// a React hydration mismatch plus a visible flash of the wrong URLs.
+export const dynamic = "force-dynamic";
+
 export default function RootLayout({
   children,
 }: {

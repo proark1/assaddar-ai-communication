@@ -70,6 +70,37 @@ const service = normalizeServiceName(
 
 const url = process.env.HEALTHCHECK_URL || defaultHealthUrl(service);
 
+// The workers liveness listener is deliberately fail-open: if it cannot bind
+// its port (apps/workers/src/health.ts) the worker keeps processing jobs and
+// only the probe endpoint is missing. Mirror that policy here, where it is
+// actually enforced: connection-refused for the workers service means "no
+// listener", not "worker dead", so the container must NOT go unhealthy (an
+// autoheal/restart-on-unhealthy loop would restart a worker that is fine).
+// A reachable listener answering 503 (worker stopped) or a timeout still
+// fails the probe.
+function isConnectionRefused(error) {
+  const cause = error?.cause;
+  if (!cause) {
+    return false;
+  }
+  if (cause.code === "ECONNREFUSED") {
+    return true;
+  }
+  return (
+    Array.isArray(cause.errors) &&
+    cause.errors.some((entry) => entry?.code === "ECONNREFUSED")
+  );
+}
+
 fetch(url)
   .then((response) => process.exit(response.ok ? 0 : 1))
-  .catch(() => process.exit(1));
+  .catch((error) => {
+    if (service === "workers" && isConnectionRefused(error)) {
+      console.warn(
+        `[healthcheck] workers liveness listener unreachable at ${url}; ` +
+          "treating as degraded, not unhealthy (fail-open listener).",
+      );
+      process.exit(0);
+    }
+    process.exit(1);
+  });

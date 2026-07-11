@@ -4,18 +4,35 @@ name: Publish Images
 # runtime via SERVICE / scripts/start-service.mjs) and pushes it to GHCR so a
 # release manifest can pin it by digest. Railway keeps building from the repo
 # Dockerfile independently; this workflow does not affect Railway deploys.
+#
+# Publishing is CI-gated: there is no `push` trigger here. ci.yml calls this
+# workflow (workflow_call) from its `publish-images` job only after every CI
+# job passes on a push to main, so a red commit never publishes an image or
+# moves `latest`. workflow_dispatch remains as a manual escape hatch.
+#
+# Digest retrieval contract: authoritative digests are resolved from the
+# immutable tag via
+#   docker buildx imagetools inspect ghcr.io/proark1/communication:sha-<full-git-sha>
+# The workflow_call outputs below are only available to the caller within the
+# SAME workflow run; no API exposes job outputs after a run completes.
 
 on:
-  push:
-    branches: ["main"]
   workflow_dispatch:
+  workflow_call:
+    outputs:
+      communication-image:
+        description: "Image ref of the pushed communication image"
+        value: ${{ jobs.communication.outputs.image }}
+      communication-digest:
+        description: "Content digest of the pushed communication image"
+        value: ${{ jobs.communication.outputs.digest }}
 
 permissions:
   contents: read
   packages: write
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: publish-images-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
