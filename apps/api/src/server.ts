@@ -24,6 +24,7 @@ import {
 } from "@assaddar/core";
 import {
   ChannelAccountConflictError,
+  TenantLegalHoldError,
   type OneBrainSyncSummary,
 } from "@assaddar/db";
 import cors from "@fastify/cors";
@@ -810,6 +811,8 @@ export type PlatformStore = AnswerDataStore &
     getWhatsappCompliance(tenantId: string): Promise<unknown>;
     exportTenantData(tenantId: string): Promise<unknown>;
     deleteTenantData(tenantId: string): Promise<void>;
+    setTenantLegalHold(tenantId: string, reason: string): Promise<void>;
+    releaseTenantLegalHold(tenantId: string): Promise<void>;
     recordAuditEvent(
       tenantId: string,
       entry: {
@@ -3998,6 +4001,45 @@ export async function buildServer(
     },
   );
 
+  app.put(
+    "/admin/tenants/:tenantId/legal-hold",
+    { preHandler: requireTenantAccess(options, "tenant_owner") },
+    async (request) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      const body = z
+        .object({ reason: z.string().trim().min(1).max(500) })
+        .parse(request.body);
+      await options.store.setTenantLegalHold(tenantId, body.reason);
+      await recordPiiAccess(
+        options,
+        request,
+        tenantId,
+        "tenant.legal_hold.set",
+        "tenant",
+        tenantId,
+      );
+      return { tenantId, legalHold: true };
+    },
+  );
+
+  app.delete(
+    "/admin/tenants/:tenantId/legal-hold",
+    { preHandler: requireTenantAccess(options, "tenant_owner") },
+    async (request) => {
+      const { tenantId } = ParamsTenantSchema.parse(request.params);
+      await options.store.releaseTenantLegalHold(tenantId);
+      await recordPiiAccess(
+        options,
+        request,
+        tenantId,
+        "tenant.legal_hold.released",
+        "tenant",
+        tenantId,
+      );
+      return { tenantId, legalHold: false };
+    },
+  );
+
   app.post(
     "/admin/tenants/:tenantId/install-check",
     { preHandler: requireTenantAccess(options, "tenant_admin") },
@@ -4982,7 +5024,10 @@ export async function buildServer(
       });
     }
 
-    if (error instanceof ChannelAccountConflictError) {
+    if (
+      error instanceof ChannelAccountConflictError ||
+      error instanceof TenantLegalHoldError
+    ) {
       return reply.code(409).send({ error: error.message });
     }
 

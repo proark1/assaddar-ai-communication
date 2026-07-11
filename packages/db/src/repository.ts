@@ -24,7 +24,11 @@ import {
   sql,
   type SQL,
 } from "drizzle-orm";
-import { ChannelAccountConflictError, isUniqueViolation } from "./errors";
+import {
+  ChannelAccountConflictError,
+  isUniqueViolation,
+  TenantLegalHoldError,
+} from "./errors";
 import type { Database, DbExecutor, Transaction } from "./client";
 import {
   allowedIntents,
@@ -6319,12 +6323,51 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
     };
   }
 
+  async isTenantOnLegalHold(tenantId: string): Promise<boolean> {
+    const [row] = await this.db
+      .select({ legalHoldAt: tenants.legalHoldAt })
+      .from(tenants)
+      .where(eq(tenants.id, tenantId))
+      .limit(1);
+    return Boolean(row?.legalHoldAt);
+  }
+
+  async setTenantLegalHold(tenantId: string, reason: string): Promise<void> {
+    assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<void>(tenantId, (repo) =>
+        repo.setTenantLegalHold(tenantId, reason),
+      );
+    }
+    await this.db
+      .update(tenants)
+      .set({ legalHoldAt: new Date(), legalHoldReason: reason })
+      .where(eq(tenants.id, tenantId));
+  }
+
+  async releaseTenantLegalHold(tenantId: string): Promise<void> {
+    assertTenantId(tenantId);
+    if (this.needsTenantScope(tenantId)) {
+      return this.withTenantScope<void>(tenantId, (repo) =>
+        repo.releaseTenantLegalHold(tenantId),
+      );
+    }
+    await this.db
+      .update(tenants)
+      .set({ legalHoldAt: null, legalHoldReason: null })
+      .where(eq(tenants.id, tenantId));
+  }
+
   async deleteTenantData(tenantId: string): Promise<void> {
     assertTenantId(tenantId);
     if (this.needsTenantScope(tenantId)) {
       return this.withTenantScope<void>(tenantId, (repo) =>
         repo.deleteTenantData(tenantId),
       );
+    }
+    // Legal hold beats erasure: refuse rather than delete held data.
+    if (await this.isTenantOnLegalHold(tenantId)) {
+      throw new TenantLegalHoldError();
     }
     // this.db is the tenant-scoped transaction opened by withTenantScope. Capture
     // the OneBrain records this tenant synced BEFORE deleting it — otherwise the
@@ -6402,6 +6445,10 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       return this.withTenantScope(tenantId, (repo) =>
         repo.deleteContact(tenantId, contactId, options),
       );
+    }
+    // Legal hold beats subject erasure too: a held tenant's contacts are preserved.
+    if (await this.isTenantOnLegalHold(tenantId)) {
+      throw new TenantLegalHoldError();
     }
     return this.withTransaction(async (repo) => {
       // Capture linked conversations BEFORE deleting the contact — the link
@@ -6559,9 +6606,12 @@ export class TenantRepository implements AnswerDataStore, HandoffStore {
       throw new Error("Tenant not found.");
     }
 
+    // Legal hold beats retention: a held tenant is never pruned.
     const retentionDays = options.retentionDays ?? tenant.retentionDays;
-    const cutoff = retentionCutoff(retentionDays, options.now ?? new Date());
-    // No valid retention window configured: do not delete anything.
+    const cutoff = tenant.legalHoldAt
+      ? null
+      : retentionCutoff(retentionDays, options.now ?? new Date());
+    // No valid retention window configured, or the tenant is held: delete nothing.
     if (!cutoff) {
       return {
         cutoff: null,

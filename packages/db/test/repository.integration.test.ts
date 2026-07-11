@@ -7,6 +7,7 @@ import {
   createDbClient,
   onebrainDeleteOutbox,
   stripeWebhookEvents,
+  TenantLegalHoldError,
   TenantRepository,
   tenants,
   type DatabaseClient,
@@ -332,6 +333,51 @@ describe.skipIf(!runIntegrationTests)("TenantRepository integration", () => {
     await client.db
       .delete(onebrainDeleteOutbox)
       .where(eq(onebrainDeleteOutbox.tenantId, tenant.id));
+  });
+
+  it("preserves a tenant under legal hold against erasure and retention", async () => {
+    const tenant = await createTestTenant("legal-hold");
+    const conv = await repo.findOrCreateConversation({
+      tenantId: tenant.id,
+      publicConversationId: `conv-${crypto.randomUUID()}`,
+      channel: "website",
+      externalUserId: "visitor",
+    });
+    // Backdate it well past any retention window.
+    await client.db
+      .update(conversations)
+      .set({
+        createdAt: new Date("2020-01-01T00:00:00.000Z"),
+        updatedAt: new Date("2020-01-01T00:00:00.000Z"),
+      })
+      .where(eq(conversations.id, conv.id));
+
+    await repo.setTenantLegalHold(tenant.id, "litigation matter 42");
+    expect(await repo.isTenantOnLegalHold(tenant.id)).toBe(true);
+
+    // Erasure refuses under the hold...
+    await expect(repo.deleteTenantData(tenant.id)).rejects.toBeInstanceOf(
+      TenantLegalHoldError,
+    );
+    // ...and retention prunes nothing, even for aged data.
+    const pruned = await repo.deleteTenantDataOlderThanRetention(tenant.id, {
+      now: new Date("2026-07-06T00:00:00.000Z"),
+      retentionDays: 30,
+    });
+    expect(pruned).toMatchObject({ cutoff: null, deletedConversations: 0 });
+    expect(
+      (await repo.listConversations(tenant.id)).map((c) => c.id),
+    ).toContain(conv.id);
+
+    // Release, then erasure succeeds.
+    await repo.releaseTenantLegalHold(tenant.id);
+    expect(await repo.isTenantOnLegalHold(tenant.id)).toBe(false);
+    await repo.deleteTenantData(tenant.id);
+    const idx = tenantIds.indexOf(tenant.id);
+    if (idx >= 0) {
+      tenantIds.splice(idx, 1);
+    }
+    expect(await repo.getTenant(tenant.id)).toBeNull();
   });
 
   it("prevents two tenants from claiming the same provider account", async () => {

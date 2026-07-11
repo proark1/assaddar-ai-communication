@@ -91,6 +91,11 @@ export const tenants = pgTable("tenants", {
     .default("0.180"),
   maxMessageLength: integer("max_message_length").notNull().default(1200),
   retentionDays: integer("retention_days").notNull().default(365),
+  // Legal hold: while legalHoldAt is set, the tenant's data must be preserved —
+  // retention pruning and erasure (GDPR / account closure / a remote tombstone)
+  // all refuse. Precedence: legal hold > erasure > retention expiry.
+  legalHoldAt: timestamp("legal_hold_at", { withTimezone: true }),
+  legalHoldReason: text("legal_hold_reason"),
   theme: jsonb("theme")
     .$type<WidgetTheme>()
     .notNull()

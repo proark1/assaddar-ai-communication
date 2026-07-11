@@ -2879,6 +2879,16 @@ class MemoryPlatformStore
     );
   }
 
+  legalHolds = new Map<string, string>();
+
+  async setTenantLegalHold(tenantId: string, reason: string) {
+    this.legalHolds.set(tenantId, reason);
+  }
+
+  async releaseTenantLegalHold(tenantId: string) {
+    this.legalHolds.delete(tenantId);
+  }
+
   private upsertContact(
     tenantId: string,
     input: {
@@ -3066,6 +3076,48 @@ describe("parseTrustProxy", () => {
     expect(parseTrustProxy("2")).toBe(2);
     expect(parseTrustProxy("true")).toBe(true);
     expect(parseTrustProxy("10.0.0.0/8")).toBe("10.0.0.0/8");
+  });
+});
+
+describe("tenant legal hold", () => {
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it("lets an owner set and release a legal hold and denies a viewer", async () => {
+    const store = new MemoryPlatformStore();
+    const tenant = await store.createTenant({
+      name: "Held Co",
+      slug: "held-co",
+    });
+
+    const owner = await buildServerWithMember(store, tenant.id, "tenant_owner");
+    const set = await owner.app.inject({
+      method: "PUT",
+      url: `/admin/tenants/${tenant.id}/legal-hold`,
+      headers: owner.memberHeaders,
+      payload: { reason: "litigation matter 42" },
+    });
+    expect(set.statusCode).toBe(200);
+    expect(store.legalHolds.get(tenant.id)).toBe("litigation matter 42");
+
+    const release = await owner.app.inject({
+      method: "DELETE",
+      url: `/admin/tenants/${tenant.id}/legal-hold`,
+      headers: owner.memberHeaders,
+    });
+    expect(release.statusCode).toBe(200);
+    expect(store.legalHolds.has(tenant.id)).toBe(false);
+
+    const viewer = await buildServerWithMember(store, tenant.id, "viewer");
+    const denied = await viewer.app.inject({
+      method: "PUT",
+      url: `/admin/tenants/${tenant.id}/legal-hold`,
+      headers: viewer.memberHeaders,
+      payload: { reason: "nope" },
+    });
+    expect(denied.statusCode).toBe(403);
   });
 });
 

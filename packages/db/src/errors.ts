@@ -17,6 +17,23 @@ export class ChannelAccountConflictError extends Error {
 }
 
 /**
+ * Thrown when an erasure (GDPR / account closure / a remote tombstone) is
+ * attempted on a tenant that is under a legal hold. Legal hold beats erasure, so
+ * the operation is refused rather than silently partially applied. The API
+ * surfaces this as a 409.
+ */
+export class TenantLegalHoldError extends Error {
+  readonly code = "tenant_legal_hold";
+
+  constructor(
+    message = "This workspace is under a legal hold and cannot be erased. Release the hold first.",
+  ) {
+    super(message);
+    this.name = "TenantLegalHoldError";
+  }
+}
+
+/**
  * Detect a Postgres unique-violation (SQLSTATE 23505) on a specific constraint,
  * across driver error shapes. Used to turn a raced/duplicate insert into a
  * meaningful domain error instead of an opaque 500.
