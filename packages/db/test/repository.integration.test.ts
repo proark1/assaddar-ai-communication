@@ -5,6 +5,7 @@ import {
   channelWebhookEvents,
   conversations,
   createDbClient,
+  stripeWebhookEvents,
   TenantRepository,
   tenants,
   type DatabaseClient,
@@ -259,6 +260,45 @@ describe.skipIf(!runIntegrationTests)("TenantRepository integration", () => {
     expect(remainingEvents.map((item) => item.id)).toEqual([
       recentEvent.event.id,
     ]);
+  });
+
+  it("erases raw webhook payloads when the tenant is deleted (cascade, not orphan)", async () => {
+    const tenant = await createTestTenant("erase-webhooks");
+
+    const channelEvent = await repo.recordChannelWebhookEvent({
+      tenantId: tenant.id,
+      channel: "whatsapp",
+      providerEventId: `evt-${crypto.randomUUID()}`,
+      eventType: "message.inbound",
+      payload: { raw: "+49 170 0000000 personal message body" },
+    });
+    const [stripeRow] = await client.db
+      .insert(stripeWebhookEvents)
+      .values({
+        stripeEventId: `evt_${crypto.randomUUID()}`,
+        eventType: "customer.created",
+        tenantId: tenant.id,
+        payload: { customer: "personal data" },
+      })
+      .returning({ id: stripeWebhookEvents.id });
+    expect(stripeRow).toBeDefined();
+    const stripeRowId = stripeRow!.id;
+
+    await repo.deleteTenantData(tenant.id);
+
+    // Query by row id, not tenant_id: an orphaned (set-null) row would still
+    // exist with tenant_id = NULL and pass a tenant_id filter. Both must be gone.
+    const channelRows = await client.db
+      .select({ id: channelWebhookEvents.id })
+      .from(channelWebhookEvents)
+      .where(eq(channelWebhookEvents.id, channelEvent.event.id));
+    expect(channelRows).toEqual([]);
+
+    const stripeRows = await client.db
+      .select({ id: stripeWebhookEvents.id })
+      .from(stripeWebhookEvents)
+      .where(eq(stripeWebhookEvents.id, stripeRowId));
+    expect(stripeRows).toEqual([]);
   });
 
   it("prevents two tenants from claiming the same provider account", async () => {

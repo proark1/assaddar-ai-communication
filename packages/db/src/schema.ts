@@ -376,8 +376,11 @@ export const stripeWebhookEvents = pgTable(
     id: uuid("id").defaultRandom().primaryKey(),
     stripeEventId: text("stripe_event_id").notNull(),
     eventType: text("event_type").notNull(),
+    // Cascade, not set-null: the Stripe payload carries customer personal data,
+    // and Stripe remains the authoritative financial record of processing. See
+    // migration 0024.
     tenantId: uuid("tenant_id").references(() => tenants.id, {
-      onDelete: "set null",
+      onDelete: "cascade",
     }),
     status: text("status").notNull().default("received"),
     payload: jsonb("payload")
@@ -491,8 +494,11 @@ export const channelWebhookEvents = pgTable(
   "channel_webhook_events",
   {
     id: uuid("id").defaultRandom().primaryKey(),
+    // Cascade, not set-null: these rows hold the RAW inbound provider payload
+    // (personal data). Detaching them on tenant deletion orphaned that PII and
+    // put it beyond reach of erasure and retention. See migration 0024.
     tenantId: uuid("tenant_id").references(() => tenants.id, {
-      onDelete: "set null",
+      onDelete: "cascade",
     }),
     channel: text("channel").notNull(),
     providerEventId: text("provider_event_id"),
