@@ -13,6 +13,7 @@ import {
   TenantRepository,
 } from "@assaddar/db";
 import { backfillMissingEmbeddings } from "./backfill-embeddings";
+import { startHealthServer } from "./health";
 import { retryFailedDeliveries } from "./retry-deliveries";
 import { jobSchemas, type WorkerJobName } from "./jobs";
 import { syncApprovedKnowledgeToOneBrain } from "./onebrain-sync";
@@ -565,6 +566,13 @@ worker.on("error", (error) => {
   console.error("Worker error", error);
 });
 
+// Liveness endpoint for the container healthcheck (this service has no other
+// HTTP surface). Reports 200 while the BullMQ worker is running.
+const healthServer = startHealthServer({
+  isHealthy: () => worker.isRunning(),
+  port: parsePositiveIntEnv(process.env.WORKERS_HEALTH_PORT, 4200),
+});
+
 /**
  * Register the repeatable maintenance jobs. `upsertJobScheduler` is idempotent
  * by scheduler id, so restarts simply update the schedule rather than stacking
@@ -658,6 +666,7 @@ scheduleMaintenanceJobs().catch((error) => {
 });
 
 process.on("SIGTERM", async () => {
+  healthServer.close();
   await worker.close();
   await queue.close();
   await dbClient.close();
