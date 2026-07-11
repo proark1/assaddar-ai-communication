@@ -1430,6 +1430,9 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (selectedTenant?.id) {
+      // Clear the previous tenant's data synchronously BEFORE the async refresh,
+      // so a slow or failing load can never render it under the new tenant.
+      resetWorkspaceData();
       void refreshWorkspace(selectedTenant.id);
     }
   }, [selectedTenant?.id]);
@@ -1743,6 +1746,8 @@ export default function DashboardPage() {
       setSelectedTenantId("");
       setConnectionAttempted(false);
       setAdminToken("");
+      // Purge tenant PII so the next user on this browser never sees it.
+      resetWorkspaceData();
       window.sessionStorage.removeItem("assaddar_admin_token");
       window.localStorage.removeItem("assaddar_admin_token");
       setBusy(false);
@@ -1849,24 +1854,42 @@ export default function DashboardPage() {
     }
   }
 
+  // Drop every array/object derived from a specific tenant's workspace. Called
+  // on the identity/tenant boundaries (logout, tenant switch, failed refresh) so
+  // one user's or tenant's PII can never render under another. Mirrors the set
+  // hydrated in refreshWorkspace's success path — keep the two in sync.
+  function resetWorkspaceData() {
+    setKnowledge([]);
+    setKnowledgeSuggestions([]);
+    setKnowledgeIngestionJobs([]);
+    setAnalytics(null);
+    setConversations([]);
+    setUnifiedInbox([]);
+    setContacts([]);
+    setSelectedConversationId("");
+    setConversationMessages([]);
+    setHandoffs([]);
+    setChannelConnections([]);
+    setChannelAccountDrafts({});
+    setWhatsappTemplates([]);
+    setWhatsappCompliance(null);
+    setOneBrainSync(null);
+    setUnansweredQuestions([]);
+    setWorkflowSuggestions(null);
+    setProductionReadiness(null);
+    setTenantUsers([]);
+    setTenantInvites([]);
+    setKnowledgeHasMore(false);
+    setInboxHasMore(false);
+    setContactsHasMore(false);
+    setHandoffsHasMore(false);
+    setPersonalDataAccessDenied(false);
+  }
+
   async function refreshWorkspace(tenantId = selectedTenant?.id) {
     if (!tenantId) {
-      setKnowledge([]);
-      setAnalytics(null);
-      setConversations([]);
-      setUnifiedInbox([]);
-      setContacts([]);
-      setHandoffs([]);
-      setChannelConnections([]);
-      setWhatsappTemplates([]);
-      setWhatsappCompliance(null);
-      setOneBrainSync(null);
-      setWorkflowSuggestions(null);
-      setTenantUsers([]);
-      setTenantInvites([]);
-      setChannelAccountDrafts({});
+      resetWorkspaceData();
       setWorkspaceLoading(false);
-      setPersonalDataAccessDenied(false);
       return;
     }
 
@@ -1957,7 +1980,9 @@ export default function DashboardPage() {
             // The access notice is more useful here than a second aggregate error.
           }
         } else {
-          setPersonalDataAccessDenied(false);
+          // A generic refresh failure must not leave the previous tenant's data
+          // on screen indefinitely — drop it and show the error.
+          resetWorkspaceData();
           setStatus(readableError(error));
         }
       }
