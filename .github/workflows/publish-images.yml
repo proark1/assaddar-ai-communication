@@ -61,7 +61,7 @@ jobs:
 
       - name: Docker metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ghcr.io/proark1/communication
           # sha-<full git sha> (immutable, every push) + latest (main only).
